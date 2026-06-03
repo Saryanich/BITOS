@@ -1,0 +1,731 @@
+# BITOS.py — BIT Operating System v04V6 SM (2026)
+# ОБЛЕГЧЕННАЯ ВЕРСИЯ - БЕЗ ШИФРОВАНИЯ, ИНТЕРНЕТА, ЛОГОВ, ЛИЦЕНЗИЙ
+
+import time
+import sys
+import os
+import subprocess
+import shutil
+import platform
+import math
+import json
+from datetime import datetime
+from pathlib import Path
+
+
+class BITOS:
+    def __init__(self):
+        self.version = "04V6 SM"
+        self.build = "2026.02"
+        self.running = True
+        self.start_time = time.time()
+        self.current_user = "User1"
+        
+        # ========== БАЗОВАЯ СТРУКТУРА ==========
+        # Пути создаются ТАМ, ГДЕ НАХОДИТСЯ КОД
+        self.base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        # Системные пути
+        self.system_paths = {
+            "system": os.path.join(self.base_path, "System"),
+            "users": os.path.join(self.base_path, "User")
+        }
+        
+        # Пользовательские пути
+        self.user_paths = {
+            "home": os.path.join(self.base_path, "User", self.current_user),
+            "file": os.path.join(self.base_path, "User", self.current_user, "File"),
+            "secure": os.path.join(self.base_path, "User", self.current_user, "Secure")
+        }
+        
+        # Основные пути
+        self.documents_path = self.user_paths["file"]
+        self.secure_path = self.user_paths["secure"]
+        self.temp_path = os.path.join(self.base_path, "System", "Temp")
+        
+        # Запрещенные пути (диск C и выход за пределы BITOS)
+        self.forbidden_paths = [
+            "C:\\",
+            "C:/",
+            "/Windows",
+            "/System32",
+            "C:\\Windows",
+            "C:\\System32"
+        ]
+        
+        self.initialize_system()
+
+    # ========== ПРОВЕРКА ПУТИ ==========
+    
+    def is_path_safe(self, path):
+        """Проверяет, что путь не выходит за пределы папки BITOS и не ведет на диск C"""
+        try:
+            # Нормализуем путь
+            real_path = os.path.realpath(os.path.abspath(path))
+            base_real = os.path.realpath(os.path.abspath(self.base_path))
+            
+            # Проверяем, что путь внутри BITOS
+            if not real_path.startswith(base_real):
+                return False
+            
+            # Проверяем, что не пытаемся попасть на диск C
+            if real_path.upper().startswith("C:"):
+                # Разрешаем только если это внутри нашей папки
+                if not real_path.upper().startswith(base_real.upper()):
+                    return False
+            
+            return True
+        except:
+            return False
+
+    # ========== СОЗДАНИЕ ДИРЕКТОРИЙ ==========
+    
+    def ensure_directories(self):
+        """Создает все необходимые директории"""
+        for path in self.system_paths.values():
+            os.makedirs(path, exist_ok=True)
+        for path in self.user_paths.values():
+            os.makedirs(path, exist_ok=True)
+        os.makedirs(self.temp_path, exist_ok=True)
+
+    # ========== ЗАГРУЗКА ==========
+    
+    def boot_animation(self, duration=3):
+        """Анимация загрузки с точками"""
+        base_text = f"BITOS v{self.version} is booting"
+        sys.stdout.write(base_text)
+        sys.stdout.flush()
+        dots = ["", ".", "..", "..."]
+        end_time = time.time() + duration
+        i = 0
+        last_dots = ""
+        
+        while time.time() < end_time:
+            d = dots[i % len(dots)]
+            # Удаляем предыдущие точки
+            for _ in range(len(last_dots)):
+                sys.stdout.write('\b \b')
+            sys.stdout.write(d)
+            sys.stdout.flush()
+            last_dots = d
+            time.sleep(0.5)
+            i += 1
+        
+        # Очищаем точки и показываем галочку
+        for _ in range(len(last_dots)):
+            sys.stdout.write('\b \b')
+        sys.stdout.write("... ✓\n")
+        sys.stdout.flush()
+
+    def background_check(self):
+        """Проверка системы при загрузке"""
+        results = []
+        main_dirs = [
+            self.system_paths["system"],
+            self.documents_path,
+            self.secure_path,
+            self.temp_path
+        ]
+        
+        for path in main_dirs:
+            exists = os.path.exists(path)
+            status = "OK" if exists else "Created"
+            results.append((path, exists, status))
+            if not exists:
+                os.makedirs(path, exist_ok=True)
+        
+        return results
+
+    def show_diagnostics(self):
+        """Показывает результаты диагностики"""
+        self.check_results = self.background_check()
+        all_ok = all(exists for _, exists, _ in self.check_results)
+        
+        if all_ok:
+            print("✓ All systems OK. Command line started.")
+        else:
+            print("⚠ Some systems recovered. Command line started.")
+
+    def initialize_system(self):
+        """Инициализация системы"""
+        print(f"\n🚀 BITOS v{self.version} инициализация...")
+        self.ensure_directories()
+        print("✓ Система готова")
+
+    # ========== ФАЙЛОВЫЕ ОПЕРАЦИИ ==========
+    
+    def list_directory(self, path=None, detailed=False):
+        """Список файлов и папок"""
+        if path is None:
+            path = self.documents_path
+        elif not os.path.isabs(path):
+            # Относительный путь
+            path = os.path.join(self.documents_path, path)
+        
+        if not self.is_path_safe(path):
+            print("❌ Доступ запрещен: выход за пределы BITOS")
+            return
+        
+        if not os.path.exists(path):
+            print(f"❌ Путь не существует: {path}")
+            return
+        
+        items = os.listdir(path)
+        if not items:
+            print("(пусто)")
+            return
+        
+        print(f"\n📁 {path}")
+        print("=" * 50)
+        
+        for item in sorted(items):
+            full_path = os.path.join(path, item)
+            if os.path.isdir(full_path):
+                print(f"  📁 {item}/")
+            else:
+                size = os.path.getsize(full_path)
+                mtime = datetime.fromtimestamp(os.path.getmtime(full_path))
+                if detailed:
+                    print(f"  📄 {item:<30} {size:>8} байт  {mtime.strftime('%Y-%m-%d %H:%M')}")
+                else:
+                    print(f"  📄 {item} ({size} байт)")
+
+    def change_directory(self, path):
+        """Смена директории"""
+        if path == "..":
+            # Переход на уровень выше
+            new_path = os.path.dirname(self.documents_path)
+            if not self.is_path_safe(new_path):
+                print("❌ Доступ запрещен: нельзя выйти за пределы BITOS")
+                return
+            self.documents_path = new_path
+            print(f"📁 {self.documents_path}")
+            return
+        
+        # Абсолютный или относительный путь
+        if os.path.isabs(path):
+            new_path = path
+        else:
+            new_path = os.path.join(self.documents_path, path)
+        
+        if not self.is_path_safe(new_path):
+            print("❌ Доступ запрещен: выход за пределы BITOS")
+            return
+        
+        if not os.path.exists(new_path):
+            print(f"❌ Папка не существует: {path}")
+            return
+        
+        if not os.path.isdir(new_path):
+            print(f"❌ Это не папка: {path}")
+            return
+        
+        self.documents_path = new_path
+        print(f"📁 {self.documents_path}")
+
+    def show_current_path(self):
+        """Показать текущий путь"""
+        print(f"📁 {self.documents_path}")
+
+    def create_directory(self, dirname):
+        """Создание папки"""
+        path = os.path.join(self.documents_path, dirname)
+        
+        if not self.is_path_safe(path):
+            print("❌ Доступ запрещен")
+            return
+        
+        if os.path.exists(path):
+            print(f"❌ Папка уже существует: {dirname}")
+            return
+        
+        os.makedirs(path, exist_ok=True)
+        print(f"✅ Создана папка: {dirname}")
+
+    def create_document(self, filename):
+        """Создание текстового документа"""
+        if not filename.endswith('.txt'):
+            filename += '.txt'
+        
+        path = os.path.join(self.documents_path, filename)
+        
+        if not self.is_path_safe(path):
+            print("❌ Доступ запрещен")
+            return
+        
+        if os.path.exists(path):
+            if input("Перезаписать? (y/n): ").lower() != 'y':
+                return
+        
+        print("Введите текст (Ctrl+Z для сохранения):")
+        lines = []
+        try:
+            while True:
+                lines.append(input())
+        except EOFError:
+            pass
+        
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        
+        print(f"✅ Создан: {filename}")
+
+    def read_document(self, filename):
+        """Чтение документа"""
+        if not filename.endswith('.txt'):
+            filename += '.txt'
+        
+        path = os.path.join(self.documents_path, filename)
+        
+        if not os.path.exists(path):
+            print(f"❌ Файл не найден: {filename}")
+            return
+        
+        if not self.is_path_safe(path):
+            print("❌ Доступ запрещен")
+            return
+        
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        print(f"\n{'='*50}")
+        print(f"📄 {filename}")
+        print(f"{'='*50}")
+        print(content)
+        print(f"{'='*50}")
+
+    def edit_document(self, filename):
+        """Редактирование документа"""
+        if not filename.endswith('.txt'):
+            filename += '.txt'
+        
+        path = os.path.join(self.documents_path, filename)
+        
+        if not os.path.exists(path):
+            print(f"❌ Файл не найден: {filename}")
+            return
+        
+        if not self.is_path_safe(path):
+            print("❌ Доступ запрещен")
+            return
+        
+        # Показываем текущее содержимое
+        with open(path, 'r', encoding='utf-8') as f:
+            print(f"\nТекущий текст {filename}:")
+            print(f.read())
+        
+        print("\nВведите новый текст (Ctrl+Z для сохранения):")
+        lines = []
+        try:
+            while True:
+                lines.append(input())
+        except EOFError:
+            pass
+        
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        
+        print(f"✅ Обновлен: {filename}")
+
+    def delete_file(self, filename):
+        """Удаление файла или папки"""
+        path = os.path.join(self.documents_path, filename)
+        
+        if not os.path.exists(path):
+            print(f"❌ Не найден: {filename}")
+            return
+        
+        if not self.is_path_safe(path):
+            print("❌ Доступ запрещен")
+            return
+        
+        if input(f"Удалить {filename}? (y/n): ").lower() == 'y':
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+                print(f"✅ Папка удалена: {filename}")
+            else:
+                os.remove(path)
+                print(f"✅ Файл удален: {filename}")
+
+    def copy_file(self, source, destination):
+        """Копирование файла"""
+        src_path = os.path.join(self.documents_path, source)
+        
+        if not os.path.exists(src_path):
+            print(f"❌ Источник не найден: {source}")
+            return
+        
+        if not self.is_path_safe(src_path):
+            print("❌ Доступ запрещен")
+            return
+        
+        # Определяем путь назначения
+        if os.path.isabs(destination):
+            dst_path = destination
+        else:
+            dst_path = os.path.join(self.documents_path, destination)
+        
+        if not self.is_path_safe(dst_path):
+            print("❌ Доступ запрещен: выход за пределы BITOS")
+            return
+        
+        try:
+            if os.path.isdir(src_path):
+                shutil.copytree(src_path, dst_path)
+            else:
+                shutil.copy2(src_path, dst_path)
+            print(f"✅ Скопировано: {source} -> {destination}")
+        except Exception as e:
+            print(f"❌ Ошибка копирования: {e}")
+
+    def move_file(self, source, destination):
+        """Перемещение файла"""
+        src_path = os.path.join(self.documents_path, source)
+        
+        if not os.path.exists(src_path):
+            print(f"❌ Источник не найден: {source}")
+            return
+        
+        if not self.is_path_safe(src_path):
+            print("❌ Доступ запрещен")
+            return
+        
+        if os.path.isabs(destination):
+            dst_path = destination
+        else:
+            dst_path = os.path.join(self.documents_path, destination)
+        
+        if not self.is_path_safe(dst_path):
+            print("❌ Доступ запрещен: выход за пределы BITOS")
+            return
+        
+        try:
+            shutil.move(src_path, dst_path)
+            print(f"✅ Перемещено: {source} -> {destination}")
+        except Exception as e:
+            print(f"❌ Ошибка перемещения: {e}")
+
+    def tree_view(self, path=None, prefix="", is_last=True, show_files=True):
+        """Текстовый проводник в виде дерева"""
+        if path is None:
+            path = self.base_path
+        
+        if not self.is_path_safe(path):
+            return
+        
+        if not os.path.exists(path):
+            print(f"❌ Путь не существует: {path}")
+            return
+        
+        # Показываем корневую папку
+        if prefix == "":
+            print(f"\n🌳 ДЕРЕВО BITOS")
+            print("=" * 50)
+            print(f"📁 {os.path.basename(path)}/")
+        
+        try:
+            items = sorted(os.listdir(path))
+        except PermissionError:
+            print(f"{prefix}🚫 Доступ запрещен")
+            return
+        
+        # Фильтруем: сначала папки, потом файлы
+        dirs = []
+        files = []
+        
+        for item in items:
+            full_path = os.path.join(path, item)
+            if os.path.isdir(full_path):
+                dirs.append(item)
+            elif show_files:
+                files.append(item)
+        
+        # Обрабатываем папки
+        for i, item in enumerate(dirs):
+            is_last_item = (i == len(dirs) - 1) and (len(files) == 0)
+            connector = "└── " if is_last_item else "├── "
+            print(f"{prefix}{connector}📁 {item}/")
+            
+            # Рекурсивно показываем содержимое
+            extension = "    " if is_last_item else "│   "
+            full_path = os.path.join(path, item)
+            self.tree_view(full_path, prefix + extension, is_last_item, show_files)
+        
+        # Обрабатываем файлы
+        if show_files:
+            for i, item in enumerate(files):
+                is_last_file = (i == len(files) - 1)
+                connector = "└── " if is_last_file else "├── "
+                full_path = os.path.join(path, item)
+                size = os.path.getsize(full_path)
+                print(f"{prefix}{connector}📄 {item} ({size} байт)")
+
+    # ========== СИСТЕМНЫЕ УТИЛИТЫ ==========
+    
+    def system_info(self):
+        """Информация о системе"""
+        print("\n" + "="*50)
+        print(f"BITOS v{self.version}")
+        print("="*50)
+        print(f"Версия: {self.version}")
+        print(f"Сборка: {self.build}")
+        print(f"Пользователь: {self.current_user}")
+        print(f"Время работы: {time.time()-self.start_time:.1f} сек")
+        print(f"Путь системы: {self.base_path}")
+        print(f"Python: {sys.version}")
+        print(f"ОС: {platform.system()} {platform.release()}")
+
+    def show_time_date(self):
+        """Показать дату и время"""
+        now = datetime.now()
+        print(f"\n📅 {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"День недели: {now.strftime('%A')}")
+
+    def disk_usage(self, path=None):
+        """Информация о диске"""
+        if path is None:
+            path = self.base_path
+        
+        if not os.path.exists(path):
+            print(f"❌ Путь не существует: {path}")
+            return
+        
+        try:
+            usage = shutil.disk_usage(path)
+            print(f"\n💿 {path}")
+            print(f"Всего: {usage.total/1024**3:.1f} GB")
+            print(f"Свободно: {usage.free/1024**3:.1f} GB")
+            print(f"Использовано: {usage.used/1024**3:.1f} GB")
+            print(f"Использование: {(usage.used/usage.total)*100:.1f}%")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+
+    def calculator(self, expr=None):
+        """Калькулятор"""
+        if expr is None:
+            expr = input("Выражение: ")
+        
+        if not expr:
+            return
+        
+        try:
+            # Безопасное вычисление
+            safe_dict = {
+                'abs': abs, 'round': round, 'int': int, 'float': float,
+                'pi': math.pi, 'e': math.e, 'sqrt': math.sqrt,
+                'sin': math.sin, 'cos': math.cos, 'tan': math.tan,
+                'log': math.log, 'log10': math.log10,
+                'pow': math.pow, 'exp': math.exp
+            }
+            result = eval(expr, {"__builtins__": {}}, safe_dict)
+            print(f"= {result}")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+
+    def temp_cleanup(self):
+        """Очистка временных файлов"""
+        if not os.path.exists(self.temp_path):
+            print("Нет временных файлов")
+            return
+        
+        total = 0
+        count = 0
+        
+        for item in os.listdir(self.temp_path):
+            item_path = os.path.join(self.temp_path, item)
+            try:
+                if os.path.isfile(item_path):
+                    total += os.path.getsize(item_path)
+                    os.remove(item_path)
+                    count += 1
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+                    count += 1
+            except Exception as e:
+                print(f"⚠ Ошибка при удалении {item}: {e}")
+        
+        print(f"✅ Удалено {count} объектов, освобождено {total} байт")
+
+    def clear_screen(self):
+        """Очистка экрана"""
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    # ========== КОМАНДНАЯ ОБОЛОЧКА ==========
+    
+    def show_help(self):
+        """Показать справку"""
+        print("\n" + "="*70)
+        print("📋 КОМАНДЫ BITOS v" + self.version)
+        print("="*70)
+        print("\n📁 ФАЙЛЫ И ПАПКИ:")
+        print("  ls, dir                   - список файлов")
+        print("  tree, древо               - дерево папок")
+        print("  cd, перейти <путь>        - сменить папку")
+        print("  pwd, где                  - текущая папка")
+        print("  mkdir, создать_папку <имя> - создать папку")
+        print("  rm, удалить <имя>         - удалить файл/папку")
+        print("  create, создать <имя>     - создать документ")
+        print("  read, прочитать <имя>     - прочитать документ")
+        print("  edit, редактировать <имя> - редактировать")
+        print("  copy, копировать <откуда> <куда> - копировать")
+        print("  move, переместить <откуда> <куда> - переместить")
+        print("\n🛠 СИСТЕМА:")
+        print("  sysinfo, система          - информация о системе")
+        print("  time, дата                - дата и время")
+        print("  disk, диск [путь]         - использование диска")
+        print("  calc, калькулятор [выр]   - калькулятор")
+        print("  cleanup, очистка          - очистка временных")
+        print("  clear, очистить           - очистить экран")
+        print("  reboot, перезагрузка      - перезагрузка")
+        print("  exit, выход               - выход")
+        print("  help, помощь              - эта справка")
+        print("="*70)
+
+    def reboot(self):
+        """Перезагрузка системы"""
+        print("🔄 Перезагрузка...")
+        time.sleep(1)
+        self.running = False
+        # Перезапускаем скрипт
+        python = sys.executable
+        script = os.path.abspath(__file__)
+        subprocess.Popen([python, script])
+        sys.exit(0)
+
+    # ========== ОСНОВНОЙ ЦИКЛ ==========
+    
+    def shell(self):
+        """Командная оболочка"""
+        while self.running:
+            try:
+                cmd = input("\nbitos> ").strip()
+                
+                if not cmd:
+                    continue
+                
+                parts = cmd.split()
+                main = parts[0].lower()
+                
+                # ===== ФАЙЛОВЫЕ КОМАНДЫ =====
+                
+                if main in ["ls", "dir"]:
+                    detailed = len(parts) > 1 and parts[1] == "detail"
+                    self.list_directory(None, detailed)
+                
+                elif main in ["tree", "древо"]:
+                    show_files = True
+                    if len(parts) > 1 and parts[1] == "folders":
+                        show_files = False
+                    self.tree_view(show_files=show_files)
+                
+                elif main in ["cd", "перейти"]:
+                    if len(parts) > 1:
+                        self.change_directory(parts[1])
+                    else:
+                        self.documents_path = self.user_paths["file"]
+                        print(f"📁 {self.documents_path}")
+                
+                elif main in ["pwd", "где"]:
+                    self.show_current_path()
+                
+                elif main in ["mkdir", "создать_папку"]:
+                    if len(parts) > 1:
+                        self.create_directory(parts[1])
+                    else:
+                        print("❌ Укажите имя папки")
+                
+                elif main in ["rm", "удалить"]:
+                    if len(parts) > 1:
+                        self.delete_file(parts[1])
+                    else:
+                        print("❌ Укажите имя файла/папки")
+                
+                elif main in ["create", "создать"]:
+                    if len(parts) > 1:
+                        self.create_document(parts[1])
+                    else:
+                        print("❌ Укажите имя файла")
+                
+                elif main in ["read", "прочитать"]:
+                    if len(parts) > 1:
+                        self.read_document(parts[1])
+                    else:
+                        print("❌ Укажите имя файла")
+                
+                elif main in ["edit", "редактировать"]:
+                    if len(parts) > 1:
+                        self.edit_document(parts[1])
+                    else:
+                        print("❌ Укажите имя файла")
+                
+                elif main in ["copy", "копировать"]:
+                    if len(parts) >= 3:
+                        self.copy_file(parts[1], parts[2])
+                    else:
+                        print("❌ Укажите источник и назначение")
+                
+                elif main in ["move", "переместить"]:
+                    if len(parts) >= 3:
+                        self.move_file(parts[1], parts[2])
+                    else:
+                        print("❌ Укажите источник и назначение")
+                
+                # ===== СИСТЕМНЫЕ КОМАНДЫ =====
+                
+                elif main in ["sysinfo", "система"]:
+                    self.system_info()
+                
+                elif main in ["time", "дата"]:
+                    self.show_time_date()
+                
+                elif main in ["disk", "диск"]:
+                    path = parts[1] if len(parts) > 1 else None
+                    self.disk_usage(path)
+                
+                elif main in ["calc", "калькулятор"]:
+                    expr = ' '.join(parts[1:]) if len(parts) > 1 else None
+                    self.calculator(expr)
+                
+                elif main in ["cleanup", "очистка"]:
+                    self.temp_cleanup()
+                
+                elif main in ["clear", "очистить"]:
+                    self.clear_screen()
+                
+                elif main in ["reboot", "перезагрузка"]:
+                    self.reboot()
+                
+                elif main in ["exit", "выход"]:
+                    print("👋 До свидания!")
+                    self.running = False
+                
+                elif main in ["help", "помощь"]:
+                    self.show_help()
+                
+                else:
+                    print(f"❌ Неизвестная команда: {main}")
+                    print("Введите 'help' для списка команд")
+            
+            except KeyboardInterrupt:
+                print("\n⚠ Для выхода введите 'exit'")
+            except EOFError:
+                break
+            except Exception as e:
+                print(f"❌ Ошибка: {e}")
+
+    def run(self):
+        """Запуск системы"""
+        # Установка полноэкранного режима
+        if os.name == 'nt':
+            os.system('mode con: cols=120 lines=40')
+        
+        self.boot_animation(3)
+        self.show_diagnostics()
+        print(f"\n📁 Система установлена в: {self.base_path}")
+        print("Введите 'help' для списка команд\n")
+        self.shell()
+
+
+if __name__ == "__main__":
+    bitos = BITOS()
+    bitos.run()
