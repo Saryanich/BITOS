@@ -6033,7 +6033,7 @@ class WallpaperManager:
             return False
 
 class NotificationCenter:
-    """Центр уведомлений с историей и всплывающими сообщениями"""
+    """Центр уведомлений с историей, всплывающими сообщениями и звуковым оповещением"""
     
     def __init__(self, parent, bitos):
         self.parent = parent
@@ -6043,8 +6043,95 @@ class NotificationCenter:
         self.active_popups = []
         self.popup_spacing = 110
         
+        # Настройки звука
+        self.sound_enabled = True
+        self.sound_path = os.path.join(bitos.base_path, "System", "Sounds", "notific_base.wav")
+        
+        # Создаём папку для звуков если её нет
+        self.sounds_dir = os.path.join(bitos.base_path, "System", "Sounds")
+        os.makedirs(self.sounds_dir, exist_ok=True)
+        
+        # Проверяем наличие звукового файла
+        if not os.path.exists(self.sound_path):
+            self._create_default_sound()
+        
+        # Флаг для предотвращения наложения звуков
+        self.last_sound_time = 0
+        self.sound_cooldown = 500  # миллисекунд между звуками
+        
         self.history_file = os.path.join(bitos.system_paths["config"], "notifications.json")
         self.load_history()
+    
+    def _create_default_sound(self):
+        """Создаёт простой WAV файл если его нет"""
+        try:
+            import wave
+            import struct
+            
+            # Параметры звука
+            duration = 0.3  # секунд
+            frequency = 880  # Гц (нота A5)
+            sample_rate = 44100
+            amplitude = 16000
+            
+            samples = int(duration * sample_rate)
+            
+            with wave.open(self.sound_path, 'w') as wav:
+                wav.setnchannels(1)  # моно
+                wav.setsampwidth(2)  # 2 байта на сэмпл
+                wav.setframerate(sample_rate)
+                
+                for i in range(samples):
+                    # Генерация синусоиды с затуханием в конце
+                    t = i / sample_rate
+                    envelope = 1.0 - (t / duration) if t < duration else 0
+                    value = int(amplitude * envelope * math.sin(2 * math.pi * frequency * t))
+                    # Упаковка в 2 байта
+                    data = struct.pack('<h', value)
+                    wav.writeframes(data)
+        except Exception as e:
+            print(f"⚠️ Не удалось создать звуковой файл: {e}")
+    
+    def play_sound(self):
+        """Воспроизводит звук уведомления"""
+        if not self.sound_enabled:
+            return
+        
+        # Проверяем задержку между звуками
+        current_time = time.time() * 1000
+        if current_time - self.last_sound_time < self.sound_cooldown:
+            return
+        
+        if not os.path.exists(self.sound_path):
+            return
+        
+        try:
+            # Используем winsound на Windows
+            if platform.system() == "Windows":
+                import winsound
+                winsound.PlaySound(self.sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                # На других платформах используем простой beep
+                import sys
+                if sys.platform == 'linux':
+                    # Linux: используем beep или играем через pygame если есть
+                    try:
+                        import subprocess
+                        subprocess.Popen(['paplay', self.sound_path], 
+                                        stdout=subprocess.DEVNULL, 
+                                        stderr=subprocess.DEVNULL)
+                    except:
+                        print('\a', end='', flush=True)  # терминальный beep
+                else:
+                    print('\a', end='', flush=True)
+            
+            self.last_sound_time = current_time
+        except Exception as e:
+            # Если не удалось воспроизвести файл, делаем системный beep
+            try:
+                print('\a', end='', flush=True)
+            except:
+                pass
     
     def load_history(self):
         if os.path.exists(self.history_file):
@@ -6061,7 +6148,8 @@ class NotificationCenter:
         except:
             pass
     
-    def add_notification(self, title, message, icon="🔔", category="system", duration=5000):
+    def add_notification(self, title, message, icon="🔔", category="system", duration=5000, play_sound=True):
+        """Добавляет новое уведомление с возможностью звукового оповещения"""
         notification = {
             'id': len(self.notifications) + 1,
             'title': title,
@@ -6074,9 +6162,15 @@ class NotificationCenter:
         
         self.notifications.append(notification)
         self.save_history()
+        
+        # Воспроизводим звук
+        if play_sound:
+            self.play_sound()
+        
         self.show_popup(notification, duration)
     
     def show_popup(self, notification, duration=5000):
+        """Показывает всплывающее уведомление"""
         popup = tk.Toplevel(self.parent)
         popup.overrideredirect(True)
         popup.attributes('-topmost', True)
@@ -6093,6 +6187,10 @@ class NotificationCenter:
         y = screen_height - popup_height - 20 - y_offset
         
         popup.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+        
+        # Анимация появления
+        popup.attributes('-alpha', 0)
+        self._fade_in(popup)
         
         frame = tk.Frame(popup, bg='#34495E', relief=tk.RAISED, bd=2)
         frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
@@ -6114,7 +6212,12 @@ class NotificationCenter:
         msg_frame = tk.Frame(frame, bg='#34495E')
         msg_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        tk.Label(msg_frame, text=notification['message'][:100], font=('Segoe UI', 9),
+        # Ограничиваем длину сообщения
+        display_message = notification['message'][:100]
+        if len(notification['message']) > 100:
+            display_message += "..."
+        
+        tk.Label(msg_frame, text=display_message, font=('Segoe UI', 9),
                 bg='#34495E', fg='#BDC3C7', wraplength=300, justify='left').pack(anchor='w')
         
         progress = ttk.Progressbar(frame, mode='determinate', length=popup_width-20)
@@ -6133,17 +6236,34 @@ class NotificationCenter:
         self.active_popups.append(popup)
         popup.after(duration, lambda: self.close_popup(popup))
     
+    def _fade_in(self, window, alpha=0):
+        """Анимация появления окна"""
+        if alpha < 1.0 and window.winfo_exists():
+            alpha += 0.1
+            window.attributes('-alpha', alpha)
+            window.after(20, lambda: self._fade_in(window, alpha))
+    
     def close_popup(self, popup):
-        if popup in self.active_popups:
-            self.active_popups.remove(popup)
-        try:
-            if popup.winfo_exists():
-                popup.destroy()
-        except:
-            pass
-        self.reposition_popups()
+        """Закрывает всплывающее уведомление с анимацией"""
+        def fade_out(alpha=1.0):
+            if alpha > 0 and popup.winfo_exists():
+                alpha -= 0.1
+                popup.attributes('-alpha', alpha)
+                popup.after(20, lambda: fade_out(alpha))
+            else:
+                if popup in self.active_popups:
+                    self.active_popups.remove(popup)
+                try:
+                    if popup.winfo_exists():
+                        popup.destroy()
+                except:
+                    pass
+                self.reposition_popups()
+        
+        fade_out()
     
     def reposition_popups(self):
+        """Перемещает все активные уведомления вверх"""
         for i, popup in enumerate(self.active_popups):
             try:
                 if popup.winfo_exists():
@@ -6157,7 +6277,33 @@ class NotificationCenter:
                     popup.geometry(f"+{x}+{y}")
             except:
                 pass
-
+    
+    def toggle_sound(self):
+        """Включить/выключить звук уведомлений"""
+        self.sound_enabled = not self.sound_enabled
+        status = "включены" if self.sound_enabled else "выключены"
+        
+        # Показываем уведомление об изменении настроек
+        self.add_notification(
+            "🔊 Звук уведомлений",
+            f"Звуковые оповещения {status}",
+            icon="🔊",
+            duration=2000,
+            play_sound=False
+        )
+        return self.sound_enabled
+    
+    def test_sound(self):
+        """Тест звука уведомления"""
+        self.play_sound()
+        self.add_notification(
+            "🔊 Тест звука",
+            "Если вы слышите этот звук, уведомления работают корректно",
+            icon="🔊",
+            duration=3000,
+            play_sound=False
+        )
+        
 class ClockWidget:
     """Виджет часов"""
     
