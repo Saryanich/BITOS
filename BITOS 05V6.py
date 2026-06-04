@@ -942,12 +942,26 @@ class TrashWindow:
 class ModernFileExplorer:
     """Современный файловый проводник с поиском файлов и уведомлениями о флешках"""
     
-    FORBIDDEN_PATHS = ["C:\\"]
+    # ЗАПРЕЩЁННЫЕ ПУТИ - ТОЛЬКО ВНУТРЕННИЕ СИСТЕМНЫЕ ПАПКИ
+    FORBIDDEN_PATHS = []
+    
+    # СИСТЕМНЫЕ ПАПКИ, КОТОРЫЕ НУЖНО СКРЫТЬ/ЗАБЛОКИРОВАТЬ
+    SYSTEM_FOLDERS = ["System", "System32", "Windows", "Program Files", "Program Files (x86)"]
     
     def __init__(self, parent, bitos, start_path=None):
         self.parent = parent
         self.bitos = bitos
-        self.current_path = start_path or bitos.user_paths["home"]
+        # Сохраняем базовый путь для проверки системных папок
+        self.base_path = os.path.abspath(bitos.base_path)
+        self.system_folder_path = os.path.join(self.base_path, "System")
+        
+        # Определяем, какой путь показывать
+        if start_path:
+            self.current_path = start_path
+        else:
+            # Начинаем с домашней папки пользователя, но можем перейти на флешку
+            self.current_path = bitos.user_paths["home"]
+        
         self.history = []
         self.history_index = -1
         self.clipboard = None
@@ -1174,9 +1188,50 @@ class ModernFileExplorer:
         results = []
         query_lower = query.lower()
         
+        # Не ищем в системной папке
+        if self.current_path == self.system_folder_path:
+            self.search_results = []
+            self.window.after(0, self._display_search_results)
+            return
+        
         try:
             if self.search_in_subfolders.get():
+                # Рекурсивный поиск, но не заходим в системные папки
+                def safe_walk(root_dir):
+                    try:
+                        # Проверяем, не является ли папка системной
+                        for sys_folder in self.SYSTEM_FOLDERS:
+                            if root_dir.endswith(sys_folder) or root_dir.endswith(sys_folder + os.sep):
+                                return
+                        # Если это системная папка BITOS
+                        if os.path.abspath(root_dir) == self.system_folder_path:
+                            return
+                        
+                        for item in os.listdir(root_dir):
+                            item_path = os.path.join(root_dir, item)
+                            # Пропускаем системные папки
+                            if item in self.SYSTEM_FOLDERS:
+                                continue
+                            if os.path.isdir(item_path):
+                                yield from safe_walk(item_path)
+                            else:
+                                yield root_dir, [], [item]
+                    except (PermissionError, OSError):
+                        pass
+                
                 for root, dirs, files in os.walk(self.current_path):
+                    # Пропускаем системную папку
+                    if root == self.system_folder_path or self.system_folder_path in root:
+                        continue
+                    # Пропускаем системные папки
+                    skip = False
+                    for sys_folder in self.SYSTEM_FOLDERS:
+                        if sys_folder in root:
+                            skip = True
+                            break
+                    if skip:
+                        continue
+                    
                     for file in files:
                         if self._match_file(file, query_lower, os.path.join(root, file)):
                             results.append({
@@ -1188,14 +1243,21 @@ class ModernFileExplorer:
                     
                     for dir in dirs:
                         if query_lower in dir.lower():
+                            dir_path = os.path.join(root, dir)
+                            # Пропускаем системную папку
+                            if dir_path == self.system_folder_path:
+                                continue
                             results.append({
                                 'name': dir,
-                                'path': os.path.join(root, dir),
+                                'path': dir_path,
                                 'is_dir': True,
                                 'size': 0
                             })
             else:
                 for item in os.listdir(self.current_path):
+                    # Пропускаем системную папку
+                    if item == "System" and self.current_path == self.base_path:
+                        continue
                     item_path = os.path.join(self.current_path, item)
                     if self._match_file(item, query_lower, item_path):
                         is_dir = os.path.isdir(item_path)
@@ -1413,9 +1475,9 @@ class ModernFileExplorer:
                 for drive in drives:
                     try:
                         if win32file.GetDriveType(drive) == win32file.DRIVE_REMOVABLE:
-                            if drive not in self.FORBIDDEN_PATHS:
-                                current_drives.add(drive)
-                                self.add_drive_button(drive)
+                            # Флешки доступны всегда
+                            current_drives.add(drive)
+                            self.add_drive_button(drive)
                     except:
                         continue
             except:
@@ -1542,33 +1604,33 @@ class ModernFileExplorer:
         self.window.after(5000, self.check_drives_timer)
     
     def is_path_allowed(self, path):
-        path = os.path.abspath(path)
-        for forbidden in self.FORBIDDEN_PATHS:
-            if path.startswith(forbidden):
-                return False
-        if path.startswith(self.bitos.base_path):
-            if (path.startswith(self.bitos.user_paths["home"]) or path.startswith(self.bitos.downloads_path)):
-                return True
+        """Проверка доступа к пути - блокируем только системную папку BITOS"""
+        # Приводим к абсолютному пути для корректного сравнения
+        abs_path = os.path.abspath(path)
+        abs_system_folder = os.path.abspath(self.system_folder_path)
+        
+        # Блокируем только системную папку BITOS
+        if abs_path == abs_system_folder:
             return False
-        if platform.system() == "Windows":
-            try:
-                if WIN32_AVAILABLE:
-                    drive = os.path.splitdrive(path)[0] + '\\'
-                    if win32file.GetDriveType(drive) == win32file.DRIVE_REMOVABLE:
-                        return True
-            except:
-                pass
-        else:
-            if path.startswith(("/media", "/mnt", "/run/media")):
-                return True
-        return False
+        
+        # Если путь находится внутри системной папки - тоже блокируем
+        if abs_path.startswith(abs_system_folder + os.sep):
+            return False
+        
+        # Также блокируем любую папку с именем "System" в корне BITOS
+        # (на случай, если пользователь попытается создать папку с таким именем)
+        if os.path.basename(abs_path) == "System" and os.path.dirname(abs_path) == self.base_path:
+            return False
+        
+        # Все остальные пути разрешены (включая флешки)
+        return True
     
     def navigate_to(self, path):
         if not os.path.exists(path):
             messagebox.showerror("Ошибка", "Путь не существует")
             return
         if not self.is_path_allowed(path):
-            messagebox.showerror("Доступ запрещён", "Нет доступа к системным дискам")
+            messagebox.showerror("Доступ запрещён", "Нет доступа к системной папке BITOS")
             return
         if self.current_path and self.current_path != path:
             if self.history_index == -1 or self.history[self.history_index] != self.current_path:
@@ -1584,10 +1646,24 @@ class ModernFileExplorer:
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         try:
-            items = os.listdir(self.current_path)
+            # Получаем список элементов, фильтруя системную папку
+            all_items = os.listdir(self.current_path)
+            
+            # Фильтруем: скрываем системную папку BITOS в корне
+            filtered_items = []
+            for item in all_items:
+                item_path = os.path.join(self.current_path, item)
+                # Если это системная папка BITOS - не показываем
+                if os.path.abspath(item_path) == os.path.abspath(self.system_folder_path):
+                    continue
+                # Если это папка "System" в корне BITOS - не показываем
+                if item == "System" and self.current_path == self.base_path:
+                    continue
+                filtered_items.append(item)
+            
             folders = []
             files = []
-            for item in items:
+            for item in filtered_items:
                 item_path = os.path.join(self.current_path, item)
                 if os.path.isdir(item_path):
                     folders.append(item)
@@ -1774,6 +1850,11 @@ class ModernFileExplorer:
         def create():
             name = name_entry.get().strip()
             if name:
+                # Проверяем, не пытается ли пользователь создать папку с именем "System" в корне BITOS
+                if name == "System" and self.current_path == self.base_path:
+                    messagebox.showerror("Ошибка", "Невозможно создать папку с именем 'System'")
+                    dialog.destroy()
+                    return
                 path = os.path.join(self.current_path, name)
                 try:
                     os.makedirs(path, exist_ok=True)
@@ -1911,6 +1992,7 @@ class ModernFileExplorer:
         if not self.selected_items:
             return
         item = self.selected_items[0]
+        # Проверяем, не пытается ли пользователь переименовать в "System" в корне
         dialog = tk.Toplevel(self.window)
         dialog.title("Переименовать")
         dialog.geometry("400x150")
@@ -1925,6 +2007,11 @@ class ModernFileExplorer:
         def rename():
             new_name = name_entry.get().strip()
             if new_name and new_name != item['name']:
+                # Проверяем запрещённые имена
+                if new_name == "System" and self.current_path == self.base_path:
+                    messagebox.showerror("Ошибка", "Невозможно переименовать в 'System'")
+                    dialog.destroy()
+                    return
                 src = item['path']
                 dst = os.path.join(self.current_path, new_name)
                 try:
@@ -1996,7 +2083,7 @@ class ModernFileExplorer:
     def on_close(self):
         self.canvas.unbind_all("<MouseWheel>")
         self.window.destroy()
-
+        
 # ==================== КЛАСС 7: Gallery ====================
 class Gallery:
     """Галерея изображений"""
