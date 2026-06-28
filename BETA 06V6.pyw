@@ -16,6 +16,13 @@ from tkinter import ttk, messagebox, scrolledtext, filedialog
 import threading
 
 try:
+    import ctypes
+    from ctypes import wintypes
+    WIN32_AVAILABLE = True
+except ImportError:
+    WIN32_AVAILABLE = False
+
+try:
     import keyboard
     KEYBOARD_AVAILABLE = True
 except ImportError:
@@ -68,114 +75,306 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
-
-# ==================== КЛАСС 1: SplashScreen ====================
+# ==================== КЛАСС 1: SplashScreen (ИСПРАВЛЕННЫЙ) ====================
 class SplashScreen:
-    """Экран загрузки с анимацией"""
+    """Экран загрузки с современным дизайном и синхронизацией цветов"""
     
     def __init__(self):
         self.root = tk.Tk()
         self.root.overrideredirect(True)
         self.root.state('zoomed')
-        self.root.configure(bg='#2C3E50')
         
         self.width = self.root.winfo_screenwidth()
         self.height = self.root.winfo_screenheight()
+        self.version = "06V6"
         
+        # ТЕКУЩАЯ ТЕМА ДЛЯ СИНХРОНИЗАЦИИ
+        self.current_theme = self._load_theme()
+        self.theme_colors = self._get_theme_colors(self.current_theme)
+        
+        # Создаем canvas
         self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                highlightthickness=0, bg='#2C3E50')
+                                highlightthickness=0, bg=self.theme_colors['canvas_bg'])
         self.canvas.pack()
         
-        self.create_gradient()
+        # Рисуем градиентный фон с цветами темы
+        self._draw_gradient_background()
         
-        self.canvas.create_text(self.width//2, self.height//2 - 100,
-                               text="BITOS",
-                               font=('Segoe UI', 80, 'bold'),
-                               fill='white')
-        
-        self.canvas.create_text(self.width//2, self.height//2 - 20,
-                               text="Version 05V6",
-                               font=('Segoe UI', 24),
-                               fill='#ECF0F1')
-        
-        bar_width = 600
-        self.progress_bg = self.canvas.create_rectangle(
-            self.width//2 - bar_width//2, self.height//2 + 50,
-            self.width//2 + bar_width//2, self.height//2 + 80,
-            fill='#34495E', outline=''
-        )
-        
-        self.progress_bar = self.canvas.create_rectangle(
-            self.width//2 - bar_width//2, self.height//2 + 50,
-            self.width//2 - bar_width//2, self.height//2 + 80,
-            fill='#3498DB', outline=''
-        )
-        
-        self.status_text = self.canvas.create_text(
-            self.width//2, self.height//2 + 100,
-            text="Загрузка системы...",
-            font=('Segoe UI', 14),
-            fill='#ECF0F1'
-        )
-        
-        self.details_text = self.canvas.create_text(
-            self.width//2, self.height//2 + 130,
-            text="",
-            font=('Segoe UI', 11),
-            fill='#BDC3C7'
-        )
-        
-        self.particles = []
-        for _ in range(50):
+        # Звезды
+        self.stars = []
+        for _ in range(200):
             x = random.randint(0, self.width)
             y = random.randint(0, self.height)
-            speed = random.uniform(0.5, 3)
-            size = random.randint(1, 4)
-            self.particles.append([x, y, speed, size])
+            size = random.randint(1, 3)
+            brightness = random.randint(80, 255)
+            self.stars.append([x, y, size, brightness])
         
-        self.animate_particles()
+        self.animate_stars()
+        
+        # Основной цвет для текста (из темы)
+        main_color = self.theme_colors.get('fg', '#00D4FF')
+        accent_color = self.theme_colors.get('fg', '#00D4FF')
+        sub_color = self.theme_colors.get('widget_fg', '#A8D8EA')
+        
+        # Главный заголовок
+        self.canvas.create_text(self.width//2, self.height//2 - 120,
+                               text="BITOS",
+                               font=('Segoe UI', 100, 'bold'),
+                               fill=accent_color,
+                               tags='text')
+        
+        # Тень заголовка
+        self.canvas.create_text(self.width//2 + 3, self.height//2 - 117,
+                               text="BITOS",
+                               font=('Segoe UI', 100, 'bold'),
+                               fill='#0a0a2a',
+                               tags='text')
+        
+        # Подзаголовок
+        self.canvas.create_text(self.width//2, self.height//2 - 30,
+                               text="Операционная система будущего",
+                               font=('Segoe UI', 20, 'italic'),
+                               fill=sub_color,
+                               tags='text')
+        
+        # Декоративная линия
+        self.canvas.create_line(self.width//2 - 200, self.height//2 + 10,
+                               self.width//2 + 200, self.height//2 + 10,
+                               fill=accent_color, width=2, tags='text')
+        
+        # Версия
+        self.canvas.create_text(self.width//2, self.height//2 + 35,
+                               text=f"Версия {self.version}",
+                               font=('Segoe UI', 12, 'bold'),
+                               fill=accent_color,
+                               tags='text')
+        
+        # Полоса загрузки
+        self.bar_width = 500
+        self.bar_height = 6
+        self.bar_x = self.width//2 - self.bar_width//2
+        self.bar_y = self.height//2 + 80
+        
+        # Фон полосы (цвет из темы с прозрачностью)
+        self.canvas.create_rectangle(self.bar_x, self.bar_y, 
+                                     self.bar_x + self.bar_width, 
+                                     self.bar_y + self.bar_height,
+                                     fill='#1a1a4e', outline='', tags='progress')
+        
+        # Полоса прогресса
+        self.progress_rect = self.canvas.create_rectangle(self.bar_x, self.bar_y,
+                                                         self.bar_x, 
+                                                         self.bar_y + self.bar_height,
+                                                         fill=accent_color, outline='', 
+                                                         tags='progress')
+        
+        # Текст статуса
+        self.status_text = self.canvas.create_text(
+            self.width//2, self.height//2 + 115,
+            text="Загрузка системы...",
+            font=('Segoe UI', 13, 'bold'),
+            fill=sub_color,
+            tags='text'
+        )
+        
+        # Детали загрузки
+        self.details_text = self.canvas.create_text(
+            self.width//2, self.height//2 + 145,
+            text="",
+            font=('Segoe UI', 10),
+            fill=sub_color,
+            tags='text'
+        )
+        
+        # Процент
+        self.percent_label = self.canvas.create_text(
+            self.width//2 + 260, self.height//2 + 80,
+            text="0%",
+            font=('Segoe UI', 11, 'bold'),
+            fill=accent_color,
+            tags='text'
+        )
+        
         self.root.update()
     
-    def create_gradient(self):
-        for i in range(self.height):
-            r = int(41 + i/self.height * 30)
-            g = int(128 + i/self.height * 30)
-            b = int(185 + i/self.height * 30)
-            color = f'#{r:02x}{g:02x}{b:02x}'
-            self.canvas.create_line(0, i, self.width, i, fill=color, tags='gradient')
+    def _load_theme(self):
+        """Загрузка сохранённой темы"""
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        theme_file = os.path.join(base_path, "System", "Config", "theme.cfg")
+        
+        if os.path.exists(theme_file):
+            try:
+                with open(theme_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('theme', 'Базовая')
+            except:
+                pass
+        return "Базовая"
     
-    def animate_particles(self):
-        self.canvas.delete('particle')
-        for particle in self.particles:
-            particle[1] += particle[2]
-            if particle[1] > self.height:
-                particle[1] = 0
-                particle[0] = random.randint(0, self.width)
-            x, y, _, size = particle
+    def _get_theme_colors(self, theme_name):
+        """Получение цветов темы"""
+        # Стандартные темы
+        themes = {
+            "Базовая": {
+                'name': 'Базовая', 
+                'bg': '#2980B9', 
+                'fg': '#00D4FF', 
+                'taskbar_bg': '#1A5276', 
+                'taskbar_fg': 'white', 
+                'canvas_bg': '#0a0a2a', 
+                'icon_fg': 'white',
+                'widget_bg': '#1F618D', 
+                'widget_fg': '#A8D8EA',
+                'wallpaper': 'System\\Config\\Wallpaper\\buinw1'
+            },
+            "Техно": {
+                'name': 'Техно', 
+                'bg': '#1B5E20', 
+                'fg': '#00FF00', 
+                'taskbar_bg': '#0D3B0D', 
+                'taskbar_fg': '#00FF00', 
+                'canvas_bg': '#0a0a1a', 
+                'icon_fg': '#00FF00',
+                'widget_bg': '#0D3B0D', 
+                'widget_fg': '#00FF00',
+                'wallpaper': 'System\\Config\\Wallpaper\\buinw2'
+            },
+            "Эко": {
+                'name': 'Эко', 
+                'bg': '#27AE60', 
+                'fg': '#2ECC71', 
+                'taskbar_bg': '#1E8449', 
+                'taskbar_fg': '#FFFFFF', 
+                'canvas_bg': '#0a2a1a', 
+                'icon_fg': '#FFFFFF',
+                'widget_bg': '#1E8449', 
+                'widget_fg': '#FFFFFF',
+                'wallpaper': 'System\\Config\\Wallpaper\\buinw3'
+            },
+            "Космо": {
+                'name': 'Космо', 
+                'bg': '#0B1B3D', 
+                'fg': '#87CEEB', 
+                'taskbar_bg': '#060D1A', 
+                'taskbar_fg': '#87CEEB', 
+                'canvas_bg': '#050a1a', 
+                'icon_fg': '#87CEEB',
+                'widget_bg': '#060D1A', 
+                'widget_fg': '#87CEEB',
+                'wallpaper': 'System\\Config\\Wallpaper\\buinw4'
+            },
+        }
+        
+        # Пытаемся загрузить пользовательские темы
+        user_themes = {}
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        themes_file = os.path.join(base_path, "System", "Config", "user_themes.json")
+        
+        if os.path.exists(themes_file):
+            try:
+                with open(themes_file, 'r', encoding='utf-8') as f:
+                    user_themes = json.load(f)
+            except:
+                pass
+        
+        all_themes = {**themes, **user_themes}
+        return all_themes.get(theme_name, themes["Базовая"])
+    
+    def _draw_gradient_background(self):
+        """Рисует градиентный фон с цветами темы"""
+        # Получаем цвета из темы
+        canvas_bg = self.theme_colors.get('canvas_bg', '#0a0a2a')
+        
+        # Преобразуем в RGB
+        try:
+            r, g, b = self._hex_to_rgb(canvas_bg)
+        except:
+            r, g, b = 10, 10, 42
+        
+        for i in range(self.height):
+            t = i / self.height
+            # Создаём градиент от темного к светлому
+            new_r = min(255, int(r + (255 - r) * t * 0.15))
+            new_g = min(255, int(g + (255 - g) * t * 0.15))
+            new_b = min(255, int(b + (255 - b) * t * 0.15))
+            color = f'#{new_r:02x}{new_g:02x}{new_b:02x}'
+            self.canvas.create_line(0, i, self.width, i, fill=color, tags='bg')
+    
+    def _hex_to_rgb(self, hex_color):
+        """Преобразование HEX в RGB"""
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    
+    def animate_stars(self):
+        """Анимация звезд"""
+        self.canvas.delete('star')
+        for star in self.stars:
+            star[3] += random.randint(-15, 15)
+            star[3] = max(50, min(255, star[3]))
+            
+            star[1] += random.uniform(-0.1, 0.1)
+            if star[1] > self.height:
+                star[1] = 0
+                star[0] = random.randint(0, self.width)
+            if star[1] < 0:
+                star[1] = self.height
+            if star[0] > self.width:
+                star[0] = 0
+            if star[0] < 0:
+                star[0] = self.width
+                
+            x, y, size, brightness = star
+            brightness = min(255, max(0, brightness))
+            color = f'#{brightness:02x}{brightness:02x}{brightness:02x}'
             self.canvas.create_oval(x-size, y-size, x+size, y+size,
-                                   fill='white', outline='', tags='particle')
-        self.root.after(50, self.animate_particles)
+                                   fill=color, outline='', tags='star')
+        self.root.after(80, self.animate_stars)
     
     def update_progress(self, value, status="", details=""):
-        bar_width = 600
-        x = self.width//2 - bar_width//2 + (bar_width * value // 100)
-        self.canvas.coords(self.progress_bar, 
-                          self.width//2 - bar_width//2, self.height//2 + 50,
-                          x, self.height//2 + 80)
-        self.canvas.itemconfig(self.status_text, text=status)
-        self.canvas.itemconfig(self.details_text, text=details)
-        self.root.update()
+        """Обновление прогресса загрузки"""
+        try:
+            # Вычисляем ширину полосы
+            progress_width = (value / 100) * self.bar_width
+            
+            # Обновляем полосу
+            self.canvas.coords(self.progress_rect,
+                              self.bar_x, self.bar_y,
+                              self.bar_x + progress_width, 
+                              self.bar_y + self.bar_height)
+            
+            # Обновляем процент
+            self.canvas.itemconfig(self.percent_label, text=f"{int(value)}%")
+            
+            # Обновляем статус
+            if status:
+                self.canvas.itemconfig(self.status_text, text=status)
+            if details:
+                self.canvas.itemconfig(self.details_text, text=details)
+            
+            # Меняем цвет полосы для эффекта
+            if value < 100:
+                main_color = self.theme_colors.get('fg', '#00D4FF')
+                self.canvas.itemconfig(self.progress_rect, fill=main_color)
+            
+            self.root.update()
+        except Exception as e:
+            pass
     
     def close(self):
+        """Закрытие экрана загрузки"""
         for i in range(10, 0, -1):
-            self.root.attributes('-alpha', i/10)
-            self.root.update()
-            time.sleep(0.03)
+            try:
+                self.root.attributes('-alpha', i/10)
+                self.root.update()
+                time.sleep(0.02)
+            except:
+                pass
         self.root.destroy()
 
-# ==================== КЛАСС 2: LoginScreen (ПОЛНОСТЬЮ) ====================
+
+# ==================== КЛАСС 2: LoginScreen (ИСПРАВЛЕННЫЙ) ====================
 class LoginScreen:
-    """Экран входа в систему с защитой от брутфорса"""
+    """Экран входа в систему с синхронизацией цветов темы"""
     
     def __init__(self, on_login, bitos_instance=None):
         self.on_login = on_login
@@ -186,7 +385,10 @@ class LoginScreen:
         self.root.state('zoomed')
         self.width = self.root.winfo_screenwidth()
         self.height = self.root.winfo_screenheight()
-        self.root.configure(bg='#2C3E50')
+        
+        # ТЕКУЩАЯ ТЕМА ДЛЯ СИНХРОНИЗАЦИИ
+        self.current_theme = self._load_theme()
+        self.theme_colors = self._get_theme_colors(self.current_theme)
         
         # Защита от брутфорса
         self.failed_attempts = 0
@@ -194,16 +396,17 @@ class LoginScreen:
         self.lock_time = 0
         self.lock_duration = 60
         
+        # Фон
         self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                               highlightthickness=0, bg='#2C3E50')
+                               highlightthickness=0, bg=self.theme_colors['canvas_bg'])
         self.canvas.place(x=0, y=0, width=self.width, height=self.height)
         
-        for i in range(self.height):
-            color = f'#{int(44 + i/self.height * 30):02x}{int(62 + i/self.height * 30):02x}{int(80 + i/self.height * 30):02x}'
-            self.canvas.create_line(0, i, self.width, i, fill=color, tags='gradient')
+        # Градиентный фон с цветами темы
+        self._draw_gradient_background()
         
+        # Звезды
         self.stars = []
-        for _ in range(100):
+        for _ in range(150):
             x = random.randint(0, self.width)
             y = random.randint(0, self.height)
             size = random.randint(1, 3)
@@ -212,96 +415,339 @@ class LoginScreen:
             self.stars.append([x, y, size, speed, brightness])
         
         self.animate_stars()
-        self.create_ui()
-        self.create_power_buttons()
+        
+        # Панель входа
+        self._create_login_panel()
+        
+        # Кнопки питания
+        self._create_power_buttons()
     
-    def create_ui(self):
-        panel_width, panel_height = 500, 480
-        panel_x = (self.width - panel_width) // 2
-        panel_y = (self.height - panel_height) // 2
+    def _load_theme(self):
+        """Загрузка сохранённой темы"""
+        if self.bitos and hasattr(self.bitos, 'system_paths'):
+            theme_file = os.path.join(self.bitos.system_paths["config"], "theme.cfg")
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            theme_file = os.path.join(base_path, "System", "Config", "theme.cfg")
         
-        self.canvas.create_rectangle(panel_x, panel_y, panel_x + panel_width, panel_y + panel_height,
-                                     fill='#FFFFFF', outline='#3498DB', width=2, tags='ui')
-        
-        self.canvas.create_text(panel_x + panel_width//2, panel_y + 80,
-                               text="BITOS", font=('Segoe UI', 48, 'bold'), fill='#2C3E50', tags='ui')
-        self.canvas.create_text(panel_x + panel_width//2, panel_y + 130,
-                               text="Вход в систему", font=('Segoe UI', 14), fill='#7F8C8D', tags='ui')
-        
-        self.canvas.create_text(panel_x + 80, panel_y + 180,
-                               text="👤 Пользователь:", font=('Segoe UI', 12), fill='#34495E', anchor='w', tags='ui')
-        self.canvas.create_text(panel_x + 80, panel_y + 260,
-                               text="🔒 PIN-код:", font=('Segoe UI', 12), fill='#34495E', anchor='w', tags='ui')
-        
-        self.username_entry = tk.Entry(self.root, bg='#ECF0F1', fg='#2C3E50',
-                                       font=('Segoe UI', 12), bd=0, highlightthickness=2,
-                                       highlightcolor='#3498DB', highlightbackground='#BDC3C7')
-        self.username_entry.place(x=panel_x + 80, y=panel_y + 210, width=340, height=40)
-        self.username_entry.insert(0, "User")
-        
-        self.pin_entry = tk.Entry(self.root, bg='#ECF0F1', fg='#2C3E50',
-                                 font=('Segoe UI', 12), bd=0, highlightthickness=2,
-                                 highlightcolor='#3498DB', highlightbackground='#BDC3C7', show='•')
-        self.pin_entry.place(x=panel_x + 80, y=panel_y + 290, width=340, height=40)
-        self.pin_entry.bind('<Return>', lambda e: self.do_login())
-        
-        self.login_btn = tk.Button(self.root, text="Войти в систему", bg='#3498DB', fg='white',
-                                  font=('Segoe UI', 12, 'bold'), bd=0, cursor='hand2', command=self.do_login)
-        self.login_btn.place(x=panel_x + 80, y=panel_y + 350, width=340, height=45)
-        self.login_btn.bind('<Enter>', lambda e: self.login_btn.config(bg='#2980B9'))
-        self.login_btn.bind('<Leave>', lambda e: self.login_btn.config(bg='#3498DB'))
-        
-        self.status_label = tk.Label(self.root, text='', bg='white', fg='#E74C3C', font=('Segoe UI', 11))
-        self.status_label.place(x=panel_x + 80, y=panel_y + 400, width=340)
-        
-        self.change_pin_btn = tk.Button(self.root, text="Изменить PIN-код", bg='#95A5A6', fg='white',
-                                        font=('Segoe UI', 10), bd=0, cursor='hand2', command=self.change_pin_dialog)
-        self.change_pin_btn.place(x=panel_x + 80, y=panel_y + 435, width=340, height=30)
-        self.change_pin_btn.bind('<Enter>', lambda e: self.change_pin_btn.config(bg='#7F8C8D'))
-        self.change_pin_btn.bind('<Leave>', lambda e: self.change_pin_btn.config(bg='#95A5A6'))
-        
-        for widget in [self.username_entry, self.pin_entry, self.login_btn, self.status_label, self.change_pin_btn]:
-            widget.lift()
+        if os.path.exists(theme_file):
+            try:
+                with open(theme_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('theme', 'Базовая')
+            except:
+                pass
+        return "Базовая"
     
-    def create_power_buttons(self):
-        """Создает кнопки выключения и перезагрузки в нижнем правом углу"""
-        # Кнопка выключения
-        shutdown_btn = tk.Button(self.root, text='⏻ Выключить', bg='#E74C3C', fg='white',
-                                 font=('Segoe UI', 11, 'bold'), bd=0, padx=20, pady=10,
-                                 command=self.shutdown_system)
-        shutdown_btn.place(x=self.width - 200, y=self.height - 80)
-        shutdown_btn.lift()
-        shutdown_btn.bind('<Enter>', lambda e: shutdown_btn.config(bg='#C0392B'))
-        shutdown_btn.bind('<Leave>', lambda e: shutdown_btn.config(bg='#E74C3C'))
+    def _get_theme_colors(self, theme_name):
+        """Получение цветов темы"""
+        themes = {
+            "Базовая": {
+                'name': 'Базовая', 
+                'bg': '#2980B9', 
+                'fg': '#00D4FF', 
+                'taskbar_bg': '#1A5276', 
+                'taskbar_fg': 'white', 
+                'canvas_bg': '#0a0a2a', 
+                'icon_fg': 'white',
+                'widget_bg': '#1F618D', 
+                'widget_fg': '#A8D8EA',
+                'panel_bg': '#0a0a2a',
+                'panel_outline': '#2a2a5e',
+                'input_bg': '#1a1a3e',
+                'input_fg': '#A8D8EA',
+                'button_bg': '#00D4FF',
+                'button_fg': '#0a0a2a',
+            },
+            "Техно": {
+                'name': 'Техно', 
+                'bg': '#1B5E20', 
+                'fg': '#00FF00', 
+                'taskbar_bg': '#0D3B0D', 
+                'taskbar_fg': '#00FF00', 
+                'canvas_bg': '#0a0a1a', 
+                'icon_fg': '#00FF00',
+                'widget_bg': '#0D3B0D', 
+                'widget_fg': '#00FF00',
+                'panel_bg': '#0a0a1a',
+                'panel_outline': '#1a5a1a',
+                'input_bg': '#0D2B0D',
+                'input_fg': '#00FF00',
+                'button_bg': '#00FF00',
+                'button_fg': '#0a0a1a',
+            },
+            "Эко": {
+                'name': 'Эко', 
+                'bg': '#27AE60', 
+                'fg': '#2ECC71', 
+                'taskbar_bg': '#1E8449', 
+                'taskbar_fg': '#FFFFFF', 
+                'canvas_bg': '#0a2a1a', 
+                'icon_fg': '#FFFFFF',
+                'widget_bg': '#1E8449', 
+                'widget_fg': '#FFFFFF',
+                'panel_bg': '#0a2a1a',
+                'panel_outline': '#1a5a3a',
+                'input_bg': '#0D3B1D',
+                'input_fg': '#FFFFFF',
+                'button_bg': '#2ECC71',
+                'button_fg': '#0a2a1a',
+            },
+            "Космо": {
+                'name': 'Космо', 
+                'bg': '#0B1B3D', 
+                'fg': '#87CEEB', 
+                'taskbar_bg': '#060D1A', 
+                'taskbar_fg': '#87CEEB', 
+                'canvas_bg': '#050a1a', 
+                'icon_fg': '#87CEEB',
+                'widget_bg': '#060D1A', 
+                'widget_fg': '#87CEEB',
+                'panel_bg': '#050a1a',
+                'panel_outline': '#1a2a5a',
+                'input_bg': '#0a1a3a',
+                'input_fg': '#87CEEB',
+                'button_bg': '#87CEEB',
+                'button_fg': '#050a1a',
+            },
+        }
         
-        # Кнопка перезагрузки
-        restart_btn = tk.Button(self.root, text='🔄 Перезагрузить', bg='#E67E22', fg='white',
-                                font=('Segoe UI', 11, 'bold'), bd=0, padx=20, pady=10,
-                                command=self.restart_system)
-        restart_btn.place(x=self.width - 400, y=self.height - 80)
-        restart_btn.lift()
-        restart_btn.bind('<Enter>', lambda e: restart_btn.config(bg='#D35400'))
-        restart_btn.bind('<Leave>', lambda e: restart_btn.config(bg='#E67E22'))
+        # Пытаемся загрузить пользовательские темы
+        user_themes = {}
+        if self.bitos and hasattr(self.bitos, 'system_paths'):
+            themes_file = os.path.join(self.bitos.system_paths["config"], "user_themes.json")
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            themes_file = os.path.join(base_path, "System", "Config", "user_themes.json")
+        
+        if os.path.exists(themes_file):
+            try:
+                with open(themes_file, 'r', encoding='utf-8') as f:
+                    user_themes = json.load(f)
+            except:
+                pass
+        
+        all_themes = {**themes, **user_themes}
+        return all_themes.get(theme_name, themes["Базовая"])
+    
+    def _draw_gradient_background(self):
+        """Рисует градиентный фон с цветами темы"""
+        canvas_bg = self.theme_colors.get('canvas_bg', '#0a0a2a')
+        
+        try:
+            r, g, b = self._hex_to_rgb(canvas_bg)
+        except:
+            r, g, b = 10, 10, 42
+        
+        for i in range(self.height):
+            t = i / self.height
+            new_r = min(255, int(r + (255 - r) * t * 0.15))
+            new_g = min(255, int(g + (255 - g) * t * 0.15))
+            new_b = min(255, int(b + (255 - b) * t * 0.15))
+            color = f'#{new_r:02x}{new_g:02x}{new_b:02x}'
+            self.canvas.create_line(0, i, self.width, i, fill=color, tags='bg')
+    
+    def _hex_to_rgb(self, hex_color):
+        """Преобразование HEX в RGB"""
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     
     def animate_stars(self):
+        """Анимация звезд"""
         self.canvas.delete('star')
         for star in self.stars:
-            star[4] += random.randint(-5, 5)
+            star[4] += random.randint(-10, 10)
             star[4] = max(50, min(255, star[4]))
+            
             star[1] += star[3]
             if star[1] > self.height:
                 star[1] = 0
                 star[0] = random.randint(0, self.width)
+            
             x, y, size, _, brightness = star
+            brightness = min(255, max(0, brightness))
             color = f'#{brightness:02x}{brightness:02x}{brightness:02x}'
-            self.canvas.create_oval(x-size, y-size, x+size, y+size, fill=color, outline='', tags='star')
-        self.root.after(50, self.animate_stars)
+            self.canvas.create_oval(x-size, y-size, x+size, y+size,
+                                   fill=color, outline='', tags='star')
+        self.root.after(100, self.animate_stars)
+    
+    def _create_login_panel(self):
+        """Создает панель входа с цветами темы"""
+        panel_width, panel_height = 480, 480
+        panel_x = (self.width - panel_width) // 2
+        panel_y = (self.height - panel_height) // 2 - 30
+        
+        # Получаем цвета темы
+        panel_bg = self.theme_colors.get('panel_bg', '#0a0a2a')
+        panel_outline = self.theme_colors.get('panel_outline', '#2a2a5e')
+        main_color = self.theme_colors.get('fg', '#00D4FF')
+        sub_color = self.theme_colors.get('widget_fg', '#A8D8EA')
+        input_bg = self.theme_colors.get('input_bg', '#1a1a3e')
+        input_fg = self.theme_colors.get('input_fg', '#A8D8EA')
+        button_bg = self.theme_colors.get('button_bg', '#00D4FF')
+        button_fg = self.theme_colors.get('button_fg', '#0a0a2a')
+        
+        # Фон панели
+        self.canvas.create_rectangle(panel_x, panel_y, 
+                                     panel_x + panel_width, panel_y + panel_height,
+                                     fill=panel_bg, outline=panel_outline, width=2,
+                                     tags='panel')
+        
+        # Внутренний градиент панели
+        for i in range(panel_height):
+            alpha = int(20 * (panel_height - i) / panel_height)
+            alpha = min(20, max(0, alpha))
+            color = f'#{alpha:02x}{alpha:02x}{min(255, alpha+25):02x}'
+            self.canvas.create_line(panel_x, panel_y + i, 
+                                   panel_x + panel_width, panel_y + i,
+                                   fill=color, tags='panel')
+        
+        # Внешняя подсветка
+        self.canvas.create_rectangle(panel_x - 1, panel_y - 1, 
+                                     panel_x + panel_width + 1, 
+                                     panel_y + panel_height + 1,
+                                     outline=main_color, width=1, tags='panel')
+        
+        # Заголовок
+        self.canvas.create_text(panel_x + panel_width//2, panel_y + 60,
+                               text="BITOS",
+                               font=('Segoe UI', 52, 'bold'),
+                               fill=main_color, tags='panel')
+        
+        # Подзаголовок
+        self.canvas.create_text(panel_x + panel_width//2, panel_y + 110,
+                               text="Вход в систему",
+                               font=('Segoe UI', 14, 'bold'),
+                               fill=sub_color, tags='panel')
+        
+        self.canvas.create_text(panel_x + panel_width//2, panel_y + 135,
+                               text="Введите свои учетные данные",
+                               font=('Segoe UI', 10),
+                               fill=sub_color, tags='panel')
+        
+        # Разделитель
+        self.canvas.create_line(panel_x + 50, panel_y + 160,
+                               panel_x + panel_width - 50, panel_y + 160,
+                               fill=panel_outline, width=1, tags='panel')
+        
+        # Поля ввода
+        fields_y = panel_y + 185
+        
+        # Поле пользователя
+        self._create_input_field(panel_x + 50, fields_y, 380, 42, "👤 Имя пользователя")
+        
+        # Используем Entry с цветами темы
+        self.username_entry = tk.Entry(self.root, bg=input_bg, fg=input_fg,
+                                       font=('Segoe UI', 12),
+                                       bd=0, highlightthickness=2,
+                                       highlightcolor=main_color,
+                                       highlightbackground=panel_outline,
+                                       insertbackground=main_color)
+        self.username_entry.place(x=panel_x + 65, y=fields_y + 10, width=350, height=26)
+        self.username_entry.insert(0, "User")
+        self.username_entry.bind('<FocusIn>', lambda e: self._on_entry_focus(self.username_entry, 'User'))
+        
+        # Поле PIN
+        pin_y = fields_y + 72
+        self._create_input_field(panel_x + 50, pin_y, 380, 42, "🔒 PIN-код")
+        
+        self.pin_entry = tk.Entry(self.root, bg=input_bg, fg=input_fg,
+                                 font=('Segoe UI', 12),
+                                 bd=0, highlightthickness=2,
+                                 highlightcolor=main_color,
+                                 highlightbackground=panel_outline,
+                                 show='●',
+                                 insertbackground=main_color)
+        self.pin_entry.place(x=panel_x + 65, y=pin_y + 10, width=350, height=26)
+        self.pin_entry.bind('<Return>', lambda e: self.do_login())
+        
+        # Кнопка входа
+        login_btn_x = panel_x + 50
+        login_btn_y = pin_y + 90
+        
+        self.login_btn = tk.Button(self.root, text="➜ Войти в систему",
+                                  bg=button_bg, fg=button_fg,
+                                  font=('Segoe UI', 12, 'bold'),
+                                  bd=0, cursor='hand2',
+                                  activebackground=main_color,
+                                  activeforeground=button_fg,
+                                  command=self.do_login)
+        self.login_btn.place(x=login_btn_x, y=login_btn_y, width=380, height=45)
+        
+        # Статус
+        self.status_label = tk.Label(self.root, text='',
+                                    bg=panel_bg, fg='#FF6B6B',
+                                    font=('Segoe UI', 10, 'bold'))
+        self.status_label.place(x=login_btn_x, y=login_btn_y + 53, width=380, height=22)
+        
+        # Кнопка смены PIN
+        self.change_pin_btn = tk.Button(self.root, text="🔑 Изменить PIN-код",
+                                       bg=panel_outline, fg=sub_color,
+                                       font=('Segoe UI', 9),
+                                       bd=0, cursor='hand2',
+                                       activebackground=main_color,
+                                       activeforeground='#FFFFFF',
+                                       command=self.change_pin_dialog)
+        self.change_pin_btn.place(x=login_btn_x, y=login_btn_y + 85, width=380, height=32)
+    
+    def _create_input_field(self, x, y, width, height, label):
+        """Создает поле ввода с цветами темы"""
+        panel_bg = self.theme_colors.get('panel_bg', '#0a0a2a')
+        panel_outline = self.theme_colors.get('panel_outline', '#2a2a5e')
+        sub_color = self.theme_colors.get('widget_fg', '#A8D8EA')
+        
+        self.canvas.create_rectangle(x, y, x + width, y + height,
+                                    fill=panel_bg, outline=panel_outline, width=2,
+                                    tags='panel')
+        
+        self.canvas.create_rectangle(x + 2, y + 2, x + width - 2, y + height - 2,
+                                    fill=panel_bg, outline='', tags='panel')
+        
+        self.canvas.create_text(x + 12, y + height//2,
+                               text=label,
+                               font=('Segoe UI', 10),
+                               fill=sub_color, anchor='w',
+                               tags='panel')
+    
+    def _on_entry_focus(self, entry, default_text):
+        if entry.get() == default_text:
+            entry.delete(0, tk.END)
+            entry.config(fg=self.theme_colors.get('input_fg', '#A8D8EA'))
+    
+    def _create_power_buttons(self):
+        """Создает кнопки питания"""
+        panel_bg = self.theme_colors.get('panel_bg', '#0a0a2a')
+        
+        btn_frame = tk.Frame(self.root, bg=panel_bg, bd=0)
+        btn_frame.place(x=self.width - 250, y=self.height - 65, width=230, height=45)
+        
+        shutdown_btn = tk.Button(btn_frame, text='⏻ Выключить',
+                                bg='#E74C3C', fg='white',
+                                font=('Segoe UI', 10, 'bold'),
+                                bd=0, cursor='hand2', padx=12, pady=6,
+                                activebackground='#C0392B',
+                                activeforeground='white',
+                                command=self.shutdown_system)
+        shutdown_btn.pack(side=tk.RIGHT, padx=4)
+        
+        restart_btn = tk.Button(btn_frame, text='🔄 Перезагрузить',
+                               bg='#E67E22', fg='white',
+                               font=('Segoe UI', 10, 'bold'),
+                               bd=0, cursor='hand2', padx=12, pady=6,
+                               activebackground='#D35400',
+                               activeforeground='white',
+                               command=self.restart_system)
+        restart_btn.pack(side=tk.RIGHT, padx=4)
     
     def get_pin_hash(self, pin):
         return hashlib.sha256(pin.encode()).hexdigest()
     
     def load_pin(self):
-        pin_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System", "Security", "pin.hash")
+        if self.bitos and hasattr(self.bitos, 'system_paths'):
+            pin_file = os.path.join(self.bitos.system_paths["security"], "pin.hash")
+        else:
+            pin_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System", "Security", "pin.hash")
+        
         default_pin = "1234"
         if os.path.exists(pin_file):
             try:
@@ -315,7 +761,11 @@ class LoginScreen:
         return self.get_pin_hash(default_pin)
     
     def save_pin(self, new_pin):
-        pin_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System", "Security", "pin.hash")
+        if self.bitos and hasattr(self.bitos, 'system_paths'):
+            pin_file = os.path.join(self.bitos.system_paths["security"], "pin.hash")
+        else:
+            pin_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System", "Security", "pin.hash")
+        
         os.makedirs(os.path.dirname(pin_file), exist_ok=True)
         try:
             with open(pin_file, 'w') as f:
@@ -325,69 +775,93 @@ class LoginScreen:
             return False
     
     def change_pin_dialog(self):
+        """Диалог смены PIN-кода с цветами темы"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Изменить PIN-код")
-        dialog.geometry("400x300")
+        dialog.geometry("400x320")
         dialog.transient(self.root)
         dialog.grab_set()
-        dialog.configure(bg='#F5F7FA')
+        dialog.configure(bg=self.theme_colors.get('panel_bg', '#0a0a2a'))
         dialog.resizable(False, False)
         
         x = (dialog.winfo_screenwidth() - 400) // 2
-        y = (dialog.winfo_screenheight() - 300) // 2
+        y = (dialog.winfo_screenheight() - 320) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        tk.Label(dialog, text="Изменение PIN-кода", font=('Segoe UI', 16, 'bold'),
-                bg='#F5F7FA', fg='#2C3E50').pack(pady=15)
+        main_color = self.theme_colors.get('fg', '#00D4FF')
+        sub_color = self.theme_colors.get('widget_fg', '#A8D8EA')
+        panel_bg = self.theme_colors.get('panel_bg', '#0a0a2a')
+        panel_outline = self.theme_colors.get('panel_outline', '#2a2a5e')
+        input_bg = self.theme_colors.get('input_bg', '#1a1a3e')
+        input_fg = self.theme_colors.get('input_fg', '#A8D8EA')
         
-        tk.Label(dialog, text="Текущий PIN-код:", bg='#F5F7FA', fg='#2C3E50', font=('Segoe UI', 11)).pack(pady=5)
-        old_pin_entry = tk.Entry(dialog, font=('Segoe UI', 12), show='•', width=20)
-        old_pin_entry.pack(pady=5)
+        tk.Label(dialog, text="🔑 Изменение PIN-кода",
+                font=('Segoe UI', 16, 'bold'),
+                bg=panel_bg, fg=main_color).pack(pady=15)
         
-        tk.Label(dialog, text="Новый PIN-код (4-8 цифр):", bg='#F5F7FA', fg='#2C3E50', font=('Segoe UI', 11)).pack(pady=5)
-        new_pin_entry = tk.Entry(dialog, font=('Segoe UI', 12), show='•', width=20)
-        new_pin_entry.pack(pady=5)
+        fields = [
+            ("Текущий PIN-код:", 'old'),
+            ("Новый PIN-код (4-8 цифр):", 'new'),
+            ("Подтвердите новый PIN-код:", 'confirm')
+        ]
         
-        tk.Label(dialog, text="Подтвердите новый PIN-код:", bg='#F5F7FA', fg='#2C3E50', font=('Segoe UI', 11)).pack(pady=5)
-        confirm_pin_entry = tk.Entry(dialog, font=('Segoe UI', 12), show='•', width=20)
-        confirm_pin_entry.pack(pady=5)
+        entries = {}
+        for label, key in fields:
+            tk.Label(dialog, text=label, bg=panel_bg, fg=sub_color,
+                    font=('Segoe UI', 10)).pack(pady=(8, 3))
+            entry = tk.Entry(dialog, font=('Segoe UI', 12),
+                            bg=input_bg, fg=input_fg,
+                            bd=0, highlightthickness=2,
+                            highlightcolor=main_color,
+                            highlightbackground=panel_outline,
+                            show='●', width=25)
+            entry.pack(pady=(0, 5))
+            entries[key] = entry
         
-        status_label = tk.Label(dialog, text="", bg='#F5F7FA', fg='#E74C3C', font=('Segoe UI', 10))
+        status_label = tk.Label(dialog, text="", bg=panel_bg, fg='#E74C3C',
+                               font=('Segoe UI', 10))
         status_label.pack(pady=5)
         
         def do_change():
-            old_pin = old_pin_entry.get().strip()
-            new_pin = new_pin_entry.get().strip()
-            confirm_pin = confirm_pin_entry.get().strip()
+            old_pin = entries['old'].get().strip()
+            new_pin = entries['new'].get().strip()
+            confirm_pin = entries['confirm'].get().strip()
             saved_hash = self.load_pin()
             
             if self.get_pin_hash(old_pin) != saved_hash:
-                status_label.config(text="❌ Неверный текущий PIN-код")
+                status_label.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
                 return
             if not new_pin.isdigit():
-                status_label.config(text="❌ PIN-код должен состоять только из цифр")
+                status_label.config(text="❌ Только цифры", fg='#E74C3C')
                 return
             if len(new_pin) < 4 or len(new_pin) > 8:
-                status_label.config(text="❌ PIN-код должен быть от 4 до 8 цифр")
+                status_label.config(text="❌ 4-8 цифр", fg='#E74C3C')
                 return
             if new_pin != confirm_pin:
-                status_label.config(text="❌ PIN-коды не совпадают")
+                status_label.config(text="❌ PIN-коды не совпадают", fg='#E74C3C')
                 return
             if self.save_pin(new_pin):
-                status_label.config(text="✅ PIN-код успешно изменён!", fg='#27AE60')
+                status_label.config(text="✅ PIN-код изменён!", fg='#27AE60')
                 if self.bitos and hasattr(self.bitos, 'security'):
                     self.bitos.security.log_pin_change("User")
                 dialog.after(1500, dialog.destroy)
             else:
-                status_label.config(text="❌ Ошибка сохранения PIN-кода")
+                status_label.config(text="❌ Ошибка сохранения", fg='#E74C3C')
         
-        tk.Button(dialog, text="Изменить PIN", bg='#3498DB', fg='white',
-                 font=('Segoe UI', 11), bd=0, padx=20, pady=8, command=do_change).pack(pady=10)
-        tk.Button(dialog, text="Отмена", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=dialog.destroy).pack()
+        btn_frame = tk.Frame(dialog, bg=panel_bg)
+        btn_frame.pack(pady=10)
+        
+        tk.Button(btn_frame, text="Изменить PIN",
+                 bg=main_color, fg=panel_bg,
+                 font=('Segoe UI', 11, 'bold'),
+                 bd=0, padx=30, pady=8,
+                 cursor='hand2', command=do_change).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Отмена",
+                 bg=panel_outline, fg=sub_color,
+                 font=('Segoe UI', 10), bd=0,
+                 padx=30, pady=8, command=dialog.destroy).pack(side=tk.LEFT, padx=5)
     
     def shutdown_system(self):
-        """Выключение компьютера"""
         if messagebox.askyesno("Выключение", "Вы действительно хотите выключить компьютер?"):
             if self.bitos and hasattr(self.bitos, 'security'):
                 self.bitos.security.log_access("System", "SHUTDOWN", "SUCCESS")
@@ -395,7 +869,6 @@ class LoginScreen:
             shutdown_windows()
     
     def restart_system(self):
-        """Перезагрузка компьютера"""
         if messagebox.askyesno("Перезагрузка", "Вы действительно хотите перезагрузить компьютер?"):
             if self.bitos and hasattr(self.bitos, 'security'):
                 self.bitos.security.log_access("System", "RESTART", "SUCCESS")
@@ -403,10 +876,9 @@ class LoginScreen:
             restart_windows()
     
     def do_login(self):
-        # Проверка блокировки
         if self.lock_time > time.time():
             remaining = int(self.lock_time - time.time())
-            self.status_label.config(text=f'⏰ Система заблокирована на {remaining} секунд')
+            self.status_label.config(text=f'⏰ Блокировка на {remaining} сек')
             return
         
         username = self.username_entry.get().strip()
@@ -426,17 +898,16 @@ class LoginScreen:
             
             if self.failed_attempts >= self.max_attempts:
                 self.lock_time = time.time() + self.lock_duration
-                self.status_label.config(text=f'❌ Превышено количество попыток! Блокировка на {self.lock_duration} сек')
+                self.status_label.config(text=f'❌ Блокировка на {self.lock_duration} сек')
                 if self.bitos and hasattr(self.bitos, 'security'):
                     self.bitos.security.log_security_event("BRUTE_FORCE_ATTEMPT", f"User: {username}")
                 self.pin_entry.delete(0, tk.END)
                 self.failed_attempts = 0
             else:
-                self.status_label.config(text=f'❌ Неверный PIN-код! Осталось попыток: {remaining}')
+                self.status_label.config(text=f'❌ Неверный PIN! Осталось: {remaining}')
                 self.pin_entry.delete(0, tk.END)
             return
         
-        # Успешный вход
         self.failed_attempts = 0
         self.status_label.config(text='✅ Вход выполнен...', fg='#27AE60')
         self.root.update()
@@ -2309,6 +2780,11 @@ class DesktopIcon:
         self.hover = False
         self.is_trash = (text == "Корзина")
         
+        # Оптимальные размеры для отображения
+        self.icon_size = 36
+        self.text_font_size = 9
+        self.max_text_width = 80
+        
         self.update_position()
         self.create()
     
@@ -2319,37 +2795,47 @@ class DesktopIcon:
         self.x = self.START_X + self.grid_x * self.GRID_SIZE
         self.y = self.START_Y + self.grid_y * self.GRID_SIZE
     
+    def _truncate_text(self, text, max_width=80):
+        """Обрезает текст, если он не помещается в заданную ширину"""
+        max_chars = 12
+        if len(text) > max_chars:
+            return text[:max_chars - 3] + "..."
+        return text
+    
     def create(self):
-        # Создаем невидимый хитбокс (прямоугольник вокруг иконки)
-        hitbox_width = 90
+        # Хитбокс - область клика
+        hitbox_width = 88
         hitbox_height = 90
         x1 = self.x - hitbox_width // 2
         y1 = self.y - 30
         x2 = self.x + hitbox_width // 2
-        y2 = self.y + 45
+        y2 = self.y + 40
         
-        # Прозрачный хитбокс
+        # Прозрачный хитбокс для кликов
         self.hitbox_id = self.canvas.create_rectangle(
             x1, y1, x2, y2,
-            fill='', outline='',  # Полностью прозрачный
+            fill='', outline='',
             tags=('icon', f'hitbox_{self.icon_id}')
         )
         
-        # Текст иконки
+        # Иконка (эмодзи)
         self.icon_id_obj = self.canvas.create_text(
-            self.x, self.y-15, 
+            self.x, self.y - 12,
             text=self.icon,
-            font=('Segoe UI', 36), 
+            font=('Segoe UI', self.icon_size),
             fill='white',
             tags=('icon', f'icon_{self.icon_id}')
         )
         
-        # Текст названия
+        # Текст названия с обрезкой
+        display_text = self._truncate_text(self.text, self.max_text_width)
         self.text_id = self.canvas.create_text(
-            self.x, self.y+25, 
-            text=self.text,
-            font=('Segoe UI', 10), 
+            self.x, self.y + 28,
+            text=display_text,
+            font=('Segoe UI', self.text_font_size),
             fill='white',
+            width=self.max_text_width,
+            justify='center',
             tags=('icon', f'text_{self.icon_id}')
         )
         
@@ -2360,14 +2846,14 @@ class DesktopIcon:
         self.canvas.tag_bind(f'hitbox_{self.icon_id}', '<Enter>', self.on_enter)
         self.canvas.tag_bind(f'hitbox_{self.icon_id}', '<Leave>', self.on_leave)
         
-        # Привязка событий к тексту иконки
+        # Привязка событий к иконке
         self.canvas.tag_bind(f'icon_{self.icon_id}', '<Button-1>', self.on_click)
         self.canvas.tag_bind(f'icon_{self.icon_id}', '<Double-1>', self.on_double_click)
         self.canvas.tag_bind(f'icon_{self.icon_id}', '<Button-3>', self.on_right_click)
         self.canvas.tag_bind(f'icon_{self.icon_id}', '<Enter>', self.on_enter)
         self.canvas.tag_bind(f'icon_{self.icon_id}', '<Leave>', self.on_leave)
         
-        # Привязка событий к тексту названия
+        # Привязка событий к тексту
         self.canvas.tag_bind(f'text_{self.icon_id}', '<Button-1>', self.on_click)
         self.canvas.tag_bind(f'text_{self.icon_id}', '<Double-1>', self.on_double_click)
         self.canvas.tag_bind(f'text_{self.icon_id}', '<Button-3>', self.on_right_click)
@@ -2376,33 +2862,51 @@ class DesktopIcon:
     
     def on_enter(self, event):
         self.hover = True
-        self.canvas.itemconfig(self.icon_id_obj, fill='#3498DB')
-        self.canvas.itemconfig(self.text_id, fill='#3498DB')
+        try:
+            self.canvas.itemconfig(self.icon_id_obj, fill='#3498DB')
+            self.canvas.itemconfig(self.text_id, fill='#3498DB')
+        except tk.TclError:
+            pass
     
     def on_leave(self, event):
         self.hover = False
         if not self.selected:
-            self.canvas.itemconfig(self.icon_id_obj, fill='white')
-            self.canvas.itemconfig(self.text_id, fill='white')
+            try:
+                self.canvas.itemconfig(self.icon_id_obj, fill='white')
+                self.canvas.itemconfig(self.text_id, fill='white')
+            except tk.TclError:
+                pass
     
     def on_click(self, event):
         # Снимаем выделение со всех иконок
-        for icon in self.canvas.desktop_icons:
-            icon.selected = False
-            if not icon.hover:
-                icon.canvas.itemconfig(icon.icon_id_obj, fill='white')
-                icon.canvas.itemconfig(icon.text_id, fill='white')
+        if hasattr(self.canvas, 'desktop_icons'):
+            for icon in self.canvas.desktop_icons:
+                if icon is not self:
+                    icon.selected = False
+                    if not icon.hover:
+                        try:
+                            icon.canvas.itemconfig(icon.icon_id_obj, fill='white')
+                            icon.canvas.itemconfig(icon.text_id, fill='white')
+                        except tk.TclError:
+                            pass
         
         self.selected = True
-        self.canvas.itemconfig(self.icon_id_obj, fill='#3498DB')
-        self.canvas.itemconfig(self.text_id, fill='#3498DB')
+        try:
+            self.canvas.itemconfig(self.icon_id_obj, fill='#3498DB')
+            self.canvas.itemconfig(self.text_id, fill='#3498DB')
+        except tk.TclError:
+            pass
     
     def on_double_click(self, event):
         if self.command:
-            self.command()
+            try:
+                self.command()
+            except Exception:
+                pass
     
     def on_right_click(self, event):
         self.on_click(event)
+        
         menu = tk.Menu(self.canvas, tearoff=0, bg='#2C3E50', fg='white', activebackground='#3498DB')
         menu.add_command(label="Открыть", command=self.command if self.command else lambda: None)
         menu.add_separator()
@@ -2424,12 +2928,14 @@ class DesktopIcon:
             return
         
         if messagebox.askyesno("Удаление", f"Удалить ярлык '{self.text}' с рабочего стола?"):
-            # Удаляем все элементы с канваса
-            self.canvas.delete(f'hitbox_{self.icon_id}')
-            self.canvas.delete(f'icon_{self.icon_id}')
-            self.canvas.delete(f'text_{self.icon_id}')
+            try:
+                self.canvas.delete(f'hitbox_{self.icon_id}')
+                self.canvas.delete(f'icon_{self.icon_id}')
+                self.canvas.delete(f'text_{self.icon_id}')
+            except tk.TclError:
+                pass
             
-            if self in self.canvas.desktop_icons:
+            if hasattr(self.canvas, 'desktop_icons') and self in self.canvas.desktop_icons:
                 self.canvas.desktop_icons.remove(self)
             
             if hasattr(self.canvas, 'rearrange_icons'):
@@ -2441,8 +2947,7 @@ class DesktopIcon:
         info = [
             f"Название: {self.text}",
             f"Иконка: {self.icon}",
-            f"Позиция в сетке: ({self.grid_x}, {self.grid_y})",
-            f"Координаты: ({self.x}, {self.y})"
+            f"Позиция в сетке: ({self.grid_x}, {self.grid_y})"
         ]
         messagebox.showinfo("Свойства ярлыка", "\n".join(info))
     
@@ -2452,22 +2957,27 @@ class DesktopIcon:
         self.update_position()
         
         # Обновляем позицию хитбокса
-        hitbox_width = 90
+        hitbox_width = 88
         hitbox_height = 90
         x1 = self.x - hitbox_width // 2
         y1 = self.y - 30
         x2 = self.x + hitbox_width // 2
-        y2 = self.y + 45
-        self.canvas.coords(self.hitbox_id, x1, y1, x2, y2)
+        y2 = self.y + 40
         
-        # Обновляем позицию иконки и текста
-        self.canvas.coords(self.icon_id_obj, self.x, self.y-15)
-        self.canvas.coords(self.text_id, self.x, self.y+25)
+        try:
+            self.canvas.coords(self.hitbox_id, x1, y1, x2, y2)
+            self.canvas.coords(self.icon_id_obj, self.x, self.y - 12)
+            self.canvas.coords(self.text_id, self.x, self.y + 28)
+        except tk.TclError:
+            pass
     
     def update_theme(self, fg_color):
         if not self.selected and not self.hover:
-            self.canvas.itemconfig(self.icon_id_obj, fill=fg_color)
-            self.canvas.itemconfig(self.text_id, fill=fg_color)
+            try:
+                self.canvas.itemconfig(self.icon_id_obj, fill=fg_color)
+                self.canvas.itemconfig(self.text_id, fill=fg_color)
+            except tk.TclError:
+                pass
     
     def to_dict(self):
         command_name = None
@@ -2484,15 +2994,19 @@ class DesktopIcon:
                 'open_terminal': 'terminal',
                 'open_bip_installer': 'bip_installer',
                 'open_it_global_catalog': 'it_global_catalog',
+                'open_app_store': 'app_store',
             }
             for key, value in command_map.items():
                 if key in str(self.command) or value in str(self.command):
                     command_name = value
                     break
         
-        # Проверяем BIP приложения
         if not command_name and 'bip:' in str(self.command):
-            command_name = str(self.command).split('bip:')[1].split(')')[0] if ')' in str(self.command) else str(self.command).split('bip:')[1]
+            cmd_str = str(self.command)
+            if ')' in cmd_str:
+                command_name = cmd_str.split('bip:')[1].split(')')[0]
+            else:
+                command_name = cmd_str.split('bip:')[1]
             command_name = f"bip:{command_name}"
         
         return {
@@ -2503,7 +3017,7 @@ class DesktopIcon:
             'icon_id': self.icon_id,
             'command': command_name
         }
-
+    
 class Taskbar:
     """Панель задач с микшером звука, батареей, языком, центром уведомлений и отслеживанием окон"""
     
@@ -2517,9 +3031,9 @@ class Taskbar:
         self.desktop_icons_list = desktop_icons_list
         self.desktop = desktop
         
-        # ===== НОВОЕ: Список открытых окон =====
-        self.open_windows = []  # Список словарей с информацией об окнах
-        self.window_buttons = {}  # Словарь {window_id: button_frame}
+        # Список открытых окон
+        self.open_windows = []
+        self.window_buttons = {}
         self.window_counter = 0
         
         # Старые атрибуты
@@ -2560,7 +3074,7 @@ class Taskbar:
         # Разделитель
         tk.Frame(self.taskbar, width=2, bg='#34495E').pack(side=tk.LEFT, fill=tk.Y, padx=5)
         
-        # ===== НОВОЕ: Контейнер для кнопок открытых окон =====
+        # Контейнер для кнопок открытых окон
         self.windows_container = tk.Frame(self.taskbar, bg=theme_colors['taskbar_bg'])
         self.windows_container.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
@@ -2649,12 +3163,12 @@ class Taskbar:
         self.update_battery()
         self.check_notifications()
         
-        # ===== НОВОЕ: Система отслеживания окон =====
-        self.setup_window_tracking()
+        # Система отслеживания окон
+        self._setup_window_tracking()
 
-    # ==================== НОВЫЕ МЕТОДЫ ДЛЯ ОТСЛЕЖИВАНИЯ ОКОН ====================
+    # ==================== МЕТОДЫ ДЛЯ ОТСЛЕЖИВАНИЯ ОКОН ====================
     
-    def setup_window_tracking(self):
+    def _setup_window_tracking(self):
         """Настройка отслеживания открытых окон"""
         # Сохраняем оригинальные конструкторы
         self._original_tk_toplevel = tk.Toplevel
@@ -2671,19 +3185,20 @@ class Taskbar:
             self._track_window(window)
             return window
         
-        tk.Toplevel = patched_toplevel
-        tk.Tk = patched_tk
+        try:
+            tk.Toplevel = patched_toplevel
+            tk.Tk = patched_tk
+        except:
+            pass
 
     def _track_window(self, window):
         """Отслеживание окна"""
         try:
-            # Получаем заголовок окна
             try:
                 title = window.title() or "Окно"
             except:
                 title = "Окно"
             
-            # Создаем запись об окне
             window_id = f"win_{self.window_counter}"
             self.window_counter += 1
             
@@ -2696,43 +3211,31 @@ class Taskbar:
             }
             
             self.open_windows.append(window_info)
-            
-            # Создаем кнопку в панели задач
             self._create_window_button(window_info)
             
-            # Перехватываем закрытие окна
             original_destroy = window.destroy
             
             def patched_destroy():
                 self._remove_window(window_id)
-                original_destroy()
+                try:
+                    original_destroy()
+                except:
+                    pass
             
             window.destroy = patched_destroy
             
-            # Обновляем заголовок при изменении
-            original_title = window.title
-            
-            def patched_title(*args):
-                if args:
-                    new_title = args[0]
-                    result = original_title(new_title)
-                    self._update_window_title(window_id, new_title)
-                    return result
-                return original_title()
-            
-            window.title = patched_title
-            
-            # При активации окна
             def on_focus_in(event):
                 self._set_active_window(window_id)
             
-            window.bind('<FocusIn>', on_focus_in)
+            try:
+                window.bind('<FocusIn>', on_focus_in)
+            except:
+                pass
             
-            # Обновляем отображение
             self._update_windows_container()
             
         except Exception as e:
-            print(f"Ошибка отслеживания окна: {e}")
+            pass
 
     def _get_window_icon(self, title):
         """Получить иконку для окна по заголовку"""
@@ -2777,25 +3280,27 @@ class Taskbar:
         """Создание кнопки окна в панели задач"""
         window_id = window_info['id']
         
-        # Создаем кнопку
+        # Ограничиваем длину текста
+        title = window_info['title'][:25]
+        if len(window_info['title']) > 25:
+            title += "..."
+        
         button = tk.Button(
             self.windows_container,
-            text=f"{window_info['icon']} {window_info['title'][:20]}",
+            text=f"{window_info['icon']} {title}",
             bg=self.theme_colors['taskbar_bg'],
             fg=self.theme_colors['taskbar_fg'],
             font=('Segoe UI', 9),
             bd=0,
-            padx=10,
+            padx=8,
             pady=3,
             cursor='hand2',
             relief=tk.FLAT,
             anchor='w'
         )
         
-        # Сохраняем ссылку
         self.window_buttons[window_id] = button
         
-        # Привязываем событие клика
         button.bind('<Button-1>', lambda e, wid=window_id: self._activate_window(wid))
         button.bind('<Button-3>', lambda e, wid=window_id: self._show_window_context_menu(e, wid))
         button.bind('<Enter>', lambda e, btn=button: btn.config(bg='#34495E'))
@@ -2803,19 +3308,15 @@ class Taskbar:
             bg=self.theme_colors['taskbar_bg'] if not window_info.get('is_active', False) else '#3498DB'
         ))
         
-        # Создаем тултип
         self.create_tooltip(button, f"{window_info['title']}\nНажмите для активации")
         
-        # Упаковываем
         button.pack(side=tk.LEFT, padx=2, pady=2)
         
-        # Если окно активно, выделяем его
         if window_info.get('is_active', False):
             button.config(bg='#3498DB', fg='white')
 
     def _remove_window(self, window_id):
         """Удаление окна из панели задач"""
-        # Удаляем кнопку
         if window_id in self.window_buttons:
             try:
                 self.window_buttons[window_id].destroy()
@@ -2823,10 +3324,7 @@ class Taskbar:
                 pass
             del self.window_buttons[window_id]
         
-        # Удаляем из списка
         self.open_windows = [w for w in self.open_windows if w['id'] != window_id]
-        
-        # Обновляем отображение
         self._update_windows_container()
 
     def _update_window_title(self, window_id, new_title):
@@ -2852,23 +3350,13 @@ class Taskbar:
             if window_info['id'] == window_id:
                 try:
                     window = window_info['window']
-                    
-                    # Проверяем, существует ли окно
-                    if not window.winfo_exists():
-                        self._remove_window(window_id)
-                        return
-                    
-                    # Показываем окно
-                    window.deiconify()
-                    window.lift()
-                    window.focus_force()
-                    
-                    # Устанавливаем как активное
-                    self._set_active_window(window_id)
-                    
-                except Exception as e:
-                    print(f"Ошибка активации окна: {e}")
-                    self._remove_window(window_id)
+                    if window.winfo_exists():
+                        window.deiconify()
+                        window.lift()
+                        window.focus_force()
+                        self._set_active_window(window_id)
+                except:
+                    pass
                 break
 
     def _show_window_context_menu(self, event, window_id):
@@ -2902,25 +3390,36 @@ class Taskbar:
 
     def _update_windows_container(self):
         """Обновление контейнера с кнопками окон"""
-        # Обновляем существующие кнопки
-        for window_info in self.open_windows:
-            window_id = window_info['id']
-            if window_id in self.window_buttons:
-                button = self.window_buttons[window_id]
+        for window_id, button in self.window_buttons.items():
+            try:
+                window_info = None
+                for w in self.open_windows:
+                    if w['id'] == window_id:
+                        window_info = w
+                        break
                 
-                # Обновляем текст
-                button.config(
-                    text=f"{window_info['icon']} {window_info['title'][:20]}"
-                )
-                
-                # Обновляем цвет в зависимости от активности
-                if window_info.get('is_active', False):
-                    button.config(bg='#3498DB', fg='white')
-                else:
-                    button.config(bg=self.theme_colors['taskbar_bg'], fg=self.theme_colors['taskbar_fg'])
-                
-                # Обновляем тултип
-                self.create_tooltip(button, f"{window_info['title']}\nНажмите для активации")
+                if window_info:
+                    title = window_info['title'][:25]
+                    if len(window_info['title']) > 25:
+                        title += "..."
+                    
+                    try:
+                        button.config(text=f"{window_info['icon']} {title}")
+                    except:
+                        pass
+                    
+                    if window_info.get('is_active', False):
+                        try:
+                            button.config(bg='#3498DB', fg='white')
+                        except:
+                            pass
+                    else:
+                        try:
+                            button.config(bg=self.theme_colors['taskbar_bg'], fg=self.theme_colors['taskbar_fg'])
+                        except:
+                            pass
+            except:
+                pass
         
         # Проверяем, все ли окна существуют
         windows_to_remove = []
@@ -2945,81 +3444,94 @@ class Taskbar:
         self._track_window(window)
         return self.window_counter - 1
 
-    # ==================== СТАРЫЕ МЕТОДЫ (без изменений) ====================
-    
-    # ===== УВЕДОМЛЕНИЯ =====
+    # ==================== УВЕДОМЛЕНИЯ ====================
     
     def toggle_notification_panel(self, event=None):
         """Открыть/закрыть панель уведомлений"""
         if self.notification_panel and self.notification_panel.winfo_exists():
-            self.notification_panel.destroy()
+            try:
+                self.notification_panel.destroy()
+            except:
+                pass
             self.notification_panel = None
             return
         
-        self.notification_panel = tk.Toplevel(self.parent)
-        self.notification_panel.title("🔔 Центр уведомлений")
-        self.notification_panel.configure(bg='#2C3E50')
-        self.notification_panel.overrideredirect(True)
-        self.notification_panel.attributes('-topmost', True)
-        
-        panel_w, panel_h = 380, 500
-        x = self.notify_btn.winfo_rootx() - panel_w + 30
-        y = self.notify_btn.winfo_rooty() - panel_h - 5
-        if y < 0:
-            y = self.notify_btn.winfo_rooty() + 40
-        
-        self.notification_panel.geometry(f"{panel_w}x{panel_h}+{x}+{y}")
-        
-        header = tk.Frame(self.notification_panel, bg='#3498DB', height=50)
-        header.pack(fill=tk.X)
-        tk.Label(header, text="🔔 Центр уведомлений", bg='#3498DB', fg='white',
-                font=('Segoe UI', 12, 'bold')).pack(side=tk.LEFT, padx=15, pady=12)
-        
-        clear_btn = tk.Label(header, text="Очистить всё", bg='#3498DB', fg='white',
-                            font=('Segoe UI', 9), cursor='hand2')
-        clear_btn.pack(side=tk.RIGHT, padx=15)
-        clear_btn.bind('<Button-1>', lambda e: self.clear_all_notifications())
-        
-        self.notify_canvas = tk.Canvas(self.notification_panel, bg='#2C3E50', 
-                                       highlightthickness=0)
-        scrollbar = tk.Scrollbar(self.notification_panel, orient=tk.VERTICAL, 
-                                command=self.notify_canvas.yview)
-        self.notify_frame = tk.Frame(self.notify_canvas, bg='#2C3E50')
-        
-        self.notify_frame.bind("<Configure>", 
-            lambda e: self.notify_canvas.configure(
-                scrollregion=self.notify_canvas.bbox("all"))
-        )
-        
-        self.notify_canvas.create_window((0, 0), window=self.notify_frame, anchor="nw")
-        self.notify_canvas.configure(yscrollcommand=scrollbar.set)
-        
-        self.notify_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.load_notifications()
-        
-        self.notification_panel.bind('<FocusOut>', lambda e: self.close_notification_panel())
-        self.notification_panel.focus_set()
+        try:
+            self.notification_panel = tk.Toplevel(self.parent)
+            self.notification_panel.title("🔔 Центр уведомлений")
+            self.notification_panel.configure(bg='#2C3E50')
+            self.notification_panel.overrideredirect(True)
+            self.notification_panel.attributes('-topmost', True)
+            
+            panel_w, panel_h = 380, 500
+            x = self.notify_btn.winfo_rootx() - panel_w + 30
+            y = self.notify_btn.winfo_rooty() - panel_h - 5
+            if y < 0:
+                y = self.notify_btn.winfo_rooty() + 40
+            
+            self.notification_panel.geometry(f"{panel_w}x{panel_h}+{x}+{y}")
+            
+            header = tk.Frame(self.notification_panel, bg='#3498DB', height=50)
+            header.pack(fill=tk.X)
+            tk.Label(header, text="🔔 Центр уведомлений", bg='#3498DB', fg='white',
+                    font=('Segoe UI', 12, 'bold')).pack(side=tk.LEFT, padx=15, pady=12)
+            
+            clear_btn = tk.Label(header, text="Очистить всё", bg='#3498DB', fg='white',
+                                font=('Segoe UI', 9), cursor='hand2')
+            clear_btn.pack(side=tk.RIGHT, padx=15)
+            clear_btn.bind('<Button-1>', lambda e: self.clear_all_notifications())
+            
+            self.notify_canvas = tk.Canvas(self.notification_panel, bg='#2C3E50', 
+                                           highlightthickness=0)
+            scrollbar = tk.Scrollbar(self.notification_panel, orient=tk.VERTICAL, 
+                                    command=self.notify_canvas.yview)
+            self.notify_frame = tk.Frame(self.notify_canvas, bg='#2C3E50')
+            
+            self.notify_frame.bind("<Configure>", 
+                lambda e: self.notify_canvas.configure(
+                    scrollregion=self.notify_canvas.bbox("all"))
+            )
+            
+            self.notify_canvas.create_window((0, 0), window=self.notify_frame, anchor="nw")
+            self.notify_canvas.configure(yscrollcommand=scrollbar.set)
+            
+            self.notify_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            self.load_notifications()
+            
+            self.notification_panel.bind('<FocusOut>', lambda e: self.close_notification_panel())
+            self.notification_panel.focus_set()
+        except:
+            pass
     
     def close_notification_panel(self):
         """Закрыть панель уведомлений"""
         if self.notification_panel and self.notification_panel.winfo_exists():
-            self.notification_panel.destroy()
+            try:
+                self.notification_panel.destroy()
+            except:
+                pass
         self.notification_panel = None
     
     def load_notifications(self):
         """Загрузка уведомлений в панель"""
-        for widget in self.notify_frame.winfo_children():
-            widget.destroy()
+        try:
+            for widget in self.notify_frame.winfo_children():
+                widget.destroy()
+        except:
+            return
         
         notifications = []
         if self.notification_center:
             notifications = self.notification_center.notifications
         
         if not notifications:
-            tk.Label(self.notify_frame, text="📭 Нет уведомлений", bg='#2C3E50', fg='#95A5A6',
-                    font=('Segoe UI', 12)).pack(pady=50)
+            try:
+                tk.Label(self.notify_frame, text="📭 Нет уведомлений", bg='#2C3E50', fg='#95A5A6',
+                        font=('Segoe UI', 12)).pack(pady=50)
+            except:
+                pass
             return
         
         for notif in reversed(notifications[-20:]):
@@ -3029,37 +3541,40 @@ class Taskbar:
         """Создание элемента уведомления"""
         bg_color = '#34495E' if not notification.get('read', False) else '#2C3E50'
         
-        item_frame = tk.Frame(self.notify_frame, bg=bg_color, relief=tk.RAISED, bd=1)
-        item_frame.pack(fill=tk.X, padx=5, pady=2)
-        
-        icon_label = tk.Label(item_frame, text=notification.get('icon', '🔔'), 
-                             bg=bg_color, fg='white', font=('Segoe UI', 16))
-        icon_label.pack(side=tk.LEFT, padx=10, pady=8)
-        
-        text_frame = tk.Frame(item_frame, bg=bg_color)
-        text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=5)
-        
-        tk.Label(text_frame, text=notification.get('title', ''), bg=bg_color, 
-                fg='#3498DB', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill=tk.X)
-        
-        tk.Label(text_frame, text=notification.get('message', ''), bg=bg_color, 
-                fg='#BDC3C7', font=('Segoe UI', 9), anchor='w', 
-                wraplength=250, justify='left').pack(fill=tk.X)
-        
-        timestamp = notification.get('timestamp', '')
-        if timestamp:
-            try:
-                dt = datetime.fromisoformat(timestamp)
-                time_str = dt.strftime('%H:%M')
-                tk.Label(text_frame, text=time_str, bg=bg_color, fg='#7F8C8D',
-                        font=('Segoe UI', 8)).pack(anchor='e')
-            except:
-                pass
-        
-        del_btn = tk.Label(item_frame, text="✕", bg=bg_color, fg='#E74C3C',
-                          font=('Segoe UI', 10), cursor='hand2')
-        del_btn.pack(side=tk.RIGHT, padx=5)
-        del_btn.bind('<Button-1>', lambda e, n=notification: self.delete_notification(n))
+        try:
+            item_frame = tk.Frame(self.notify_frame, bg=bg_color, relief=tk.RAISED, bd=1)
+            item_frame.pack(fill=tk.X, padx=5, pady=2)
+            
+            icon_label = tk.Label(item_frame, text=notification.get('icon', '🔔'), 
+                                 bg=bg_color, fg='white', font=('Segoe UI', 16))
+            icon_label.pack(side=tk.LEFT, padx=10, pady=8)
+            
+            text_frame = tk.Frame(item_frame, bg=bg_color)
+            text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=5)
+            
+            tk.Label(text_frame, text=notification.get('title', ''), bg=bg_color, 
+                    fg='#3498DB', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill=tk.X)
+            
+            tk.Label(text_frame, text=notification.get('message', ''), bg=bg_color, 
+                    fg='#BDC3C7', font=('Segoe UI', 9), anchor='w', 
+                    wraplength=250, justify='left').pack(fill=tk.X)
+            
+            timestamp = notification.get('timestamp', '')
+            if timestamp:
+                try:
+                    dt = datetime.fromisoformat(timestamp)
+                    time_str = dt.strftime('%H:%M')
+                    tk.Label(text_frame, text=time_str, bg=bg_color, fg='#7F8C8D',
+                            font=('Segoe UI', 8)).pack(anchor='e')
+                except:
+                    pass
+            
+            del_btn = tk.Label(item_frame, text="✕", bg=bg_color, fg='#E74C3C',
+                              font=('Segoe UI', 10), cursor='hand2')
+            del_btn.pack(side=tk.RIGHT, padx=5)
+            del_btn.bind('<Button-1>', lambda e, n=notification: self.delete_notification(n))
+        except:
+            pass
     
     def delete_notification(self, notification):
         """Удаление уведомления"""
@@ -3080,21 +3595,30 @@ class Taskbar:
         """Обновление счетчика уведомлений"""
         self.unread_count = count
         if count > 0:
-            self.notify_btn.config(text="🔴")
-            self.notify_badge.config(text=str(count))
-            self.notify_badge.place(x=self.notify_btn.winfo_x() + 15, y=0)
+            try:
+                self.notify_btn.config(text="🔴")
+                self.notify_badge.config(text=str(count))
+                self.notify_badge.place(x=self.notify_btn.winfo_x() + 15, y=0)
+            except:
+                pass
         else:
-            self.notify_btn.config(text="🔔")
-            self.notify_badge.place_forget()
+            try:
+                self.notify_btn.config(text="🔔")
+                self.notify_badge.place_forget()
+            except:
+                pass
     
     def check_notifications(self):
         """Периодическая проверка уведомлений"""
         if self.notification_center:
             unread = sum(1 for n in self.notification_center.notifications if not n.get('read', False))
             self.update_notification_badge(unread)
-        self.parent.after(5000, self.check_notifications)
+        try:
+            self.parent.after(5000, self.check_notifications)
+        except:
+            pass
 
-    # ===== ГРОМКОСТЬ =====
+    # ==================== ГРОМКОСТЬ ====================
     
     def _load_volume(self):
         """Загрузка громкости"""
@@ -3130,7 +3654,10 @@ class Taskbar:
 
     def _update_volume_icon(self):
         """Обновление иконки громкости"""
-        self.volume_btn.config(text=self._get_volume_icon())
+        try:
+            self.volume_btn.config(text=self._get_volume_icon())
+        except:
+            pass
         state = "ВЫКЛЮЧЕН" if self.is_muted else f"{self.current_volume}%"
         self.create_tooltip(self.volume_btn, 
                            f"Громкость BITOS: {state}\nНажмите для настройки")
@@ -3138,65 +3665,74 @@ class Taskbar:
     def toggle_mixer(self, event=None):
         """Открыть/закрыть микшер громкости"""
         if self.mixer_window and self.mixer_window.winfo_exists():
-            self.mixer_window.destroy()
+            try:
+                self.mixer_window.destroy()
+            except:
+                pass
             self.mixer_window = None
             return
         
-        self.mixer_window = tk.Toplevel(self.parent)
-        self.mixer_window.title("🔊 Микшер BITOS")
-        self.mixer_window.configure(bg='#2C3E50')
-        self.mixer_window.overrideredirect(True)
-        self.mixer_window.attributes('-topmost', True)
-        
-        mixer_w, mixer_h = 280, 180
-        x = self.volume_btn.winfo_rootx() - mixer_w + 30
-        y = self.volume_btn.winfo_rooty() - mixer_h - 5
-        if y < 0:
-            y = self.volume_btn.winfo_rooty() + 40
-        
-        self.mixer_window.geometry(f"{mixer_w}x{mixer_h}+{x}+{y}")
-        
-        tk.Label(self.mixer_window, text="🔊 Громкость BITOS", bg='#2C3E50', fg='white',
-                 font=('Segoe UI', 12, 'bold')).pack(pady=(15, 5))
-        
-        self.mixer_percent_label = tk.Label(self.mixer_window, 
-                                              text=f"{self.current_volume}%" if not self.is_muted else "ВЫКЛЮЧЕНО",
-                                             bg='#2C3E50', fg='#3498DB',
-                                             font=('Segoe UI', 20, 'bold'))
-        self.mixer_percent_label.pack(pady=5)
-        
-        self.volume_slider = tk.Scale(self.mixer_window, from_=0, to=100, orient=tk.HORIZONTAL,
-                                       bg='#2C3E50', fg='white', highlightthickness=0,
-                                       troughcolor='#34495E', sliderrelief=tk.FLAT,
-                                       activebackground='#3498DB', length=240,
-                                       showvalue=False, command=self._on_volume_change)
-        self.volume_slider.set(self.current_volume)
-        self.volume_slider.pack(pady=5)
-        
-        mute_text = "🔊 Включить звук" if self.is_muted else "🔇 Выключить звук"
-        self.mute_btn = tk.Button(self.mixer_window, text=mute_text, bg='#34495E', fg='white',
-                                   font=('Segoe UI', 10), bd=0, padx=15, pady=5,
-                                   cursor='hand2', command=self._toggle_mute)
-        self.mute_btn.pack(pady=10)
-        self.mute_btn.bind('<Enter>', lambda e: self.mute_btn.config(bg='#3498DB'))
-        self.mute_btn.bind('<Leave>', lambda e: self.mute_btn.config(bg='#34495E'))
-        
-        self.mixer_window.bind('<FocusOut>', lambda e: self._close_mixer())
-        self.mixer_window.focus_set()
+        try:
+            self.mixer_window = tk.Toplevel(self.parent)
+            self.mixer_window.title("🔊 Микшер BITOS")
+            self.mixer_window.configure(bg='#2C3E50')
+            self.mixer_window.overrideredirect(True)
+            self.mixer_window.attributes('-topmost', True)
+            
+            mixer_w, mixer_h = 280, 180
+            x = self.volume_btn.winfo_rootx() - mixer_w + 30
+            y = self.volume_btn.winfo_rooty() - mixer_h - 5
+            if y < 0:
+                y = self.volume_btn.winfo_rooty() + 40
+            
+            self.mixer_window.geometry(f"{mixer_w}x{mixer_h}+{x}+{y}")
+            
+            tk.Label(self.mixer_window, text="🔊 Громкость BITOS", bg='#2C3E50', fg='white',
+                     font=('Segoe UI', 12, 'bold')).pack(pady=(15, 5))
+            
+            self.mixer_percent_label = tk.Label(self.mixer_window, 
+                                                  text=f"{self.current_volume}%" if not self.is_muted else "ВЫКЛЮЧЕНО",
+                                                 bg='#2C3E50', fg='#3498DB',
+                                                 font=('Segoe UI', 20, 'bold'))
+            self.mixer_percent_label.pack(pady=5)
+            
+            self.volume_slider = tk.Scale(self.mixer_window, from_=0, to=100, orient=tk.HORIZONTAL,
+                                           bg='#2C3E50', fg='white', highlightthickness=0,
+                                           troughcolor='#34495E', sliderrelief=tk.FLAT,
+                                           activebackground='#3498DB', length=240,
+                                           showvalue=False, command=self._on_volume_change)
+            self.volume_slider.set(self.current_volume)
+            self.volume_slider.pack(pady=5)
+            
+            mute_text = "🔊 Включить звук" if self.is_muted else "🔇 Выключить звук"
+            self.mute_btn = tk.Button(self.mixer_window, text=mute_text, bg='#34495E', fg='white',
+                                       font=('Segoe UI', 10), bd=0, padx=15, pady=5,
+                                       cursor='hand2', command=self._toggle_mute)
+            self.mute_btn.pack(pady=10)
+            self.mute_btn.bind('<Enter>', lambda e: self.mute_btn.config(bg='#3498DB'))
+            self.mute_btn.bind('<Leave>', lambda e: self.mute_btn.config(bg='#34495E'))
+            
+            self.mixer_window.bind('<FocusOut>', lambda e: self._close_mixer())
+            self.mixer_window.focus_set()
+        except:
+            pass
 
     def _on_volume_change(self, value):
         """Изменение громкости"""
-        vol = int(float(value))
-        self.current_volume = vol
-        self.is_muted = vol == 0
-        self._save_volume()
-        self._update_volume_icon()
-        
-        if hasattr(self, 'mixer_percent_label') and self.mixer_percent_label.winfo_exists():
-            self.mixer_percent_label.config(text=f"{vol}%")
-        
-        if hasattr(self, 'mute_btn') and self.mute_btn.winfo_exists():
-            self.mute_btn.config(text="🔇 Выключить звук" if vol > 0 else "🔊 Включить звук")
+        try:
+            vol = int(float(value))
+            self.current_volume = vol
+            self.is_muted = vol == 0
+            self._save_volume()
+            self._update_volume_icon()
+            
+            if hasattr(self, 'mixer_percent_label') and self.mixer_percent_label.winfo_exists():
+                self.mixer_percent_label.config(text=f"{vol}%")
+            
+            if hasattr(self, 'mute_btn') and self.mute_btn.winfo_exists():
+                self.mute_btn.config(text="🔇 Выключить звук" if vol > 0 else "🔊 Включить звук")
+        except:
+            pass
 
     def _toggle_mute(self):
         """Включить/выключить звук"""
@@ -3209,19 +3745,25 @@ class Taskbar:
         self._save_volume()
         self._update_volume_icon()
         
-        if hasattr(self, 'volume_slider') and self.volume_slider.winfo_exists():
-            self.volume_slider.set(self.current_volume if not self.is_muted else 0)
-        if hasattr(self, 'mixer_percent_label') and self.mixer_percent_label.winfo_exists():
-            self.mixer_percent_label.config(
-                text=f"{self.current_volume}%" if not self.is_muted else "ВЫКЛЮЧЕНО")
-        if hasattr(self, 'mute_btn') and self.mute_btn.winfo_exists():
-            self.mute_btn.config(
-                text="🔊 Включить звук" if self.is_muted else "🔇 Выключить звук")
+        try:
+            if hasattr(self, 'volume_slider') and self.volume_slider.winfo_exists():
+                self.volume_slider.set(self.current_volume if not self.is_muted else 0)
+            if hasattr(self, 'mixer_percent_label') and self.mixer_percent_label.winfo_exists():
+                self.mixer_percent_label.config(
+                    text=f"{self.current_volume}%" if not self.is_muted else "ВЫКЛЮЧЕНО")
+            if hasattr(self, 'mute_btn') and self.mute_btn.winfo_exists():
+                self.mute_btn.config(
+                    text="🔊 Включить звук" if self.is_muted else "🔇 Выключить звук")
+        except:
+            pass
 
     def _close_mixer(self):
         """Закрыть микшер"""
         if self.mixer_window and self.mixer_window.winfo_exists():
-            self.mixer_window.destroy()
+            try:
+                self.mixer_window.destroy()
+            except:
+                pass
         self.mixer_window = None
 
     def get_volume(self):
@@ -3230,17 +3772,23 @@ class Taskbar:
             return 0
         return self.current_volume
 
-    # ===== ЯЗЫК =====
+    # ==================== ЯЗЫК ====================
     
     def toggle_language(self, event=None):
         """Переключение языка"""
         if self.current_lang == "RU":
             self.current_lang = "EN"
-            self.lang_label.config(text="EN", fg='#3498DB')
+            try:
+                self.lang_label.config(text="EN", fg='#3498DB')
+            except:
+                pass
             self.switch_keyboard_layout("EN")
         else:
             self.current_lang = "RU"
-            self.lang_label.config(text="RU", fg=self.theme_colors['taskbar_fg'])
+            try:
+                self.lang_label.config(text="RU", fg=self.theme_colors['taskbar_fg'])
+            except:
+                pass
             self.switch_keyboard_layout("RU")
         
         lang_name = "Английский (EN)" if self.current_lang == "EN" else "Русский (RU)"
@@ -3256,10 +3804,10 @@ class Taskbar:
                     ctypes.windll.user32.LoadKeyboardLayoutW("00000409", 1)
                 else:
                     ctypes.windll.user32.LoadKeyboardLayoutW("00000419", 1)
-        except Exception as e:
-            print(f"Не удалось переключить раскладку: {e}")
+        except:
+            pass
 
-    # ===== БАТАРЕЯ =====
+    # ==================== БАТАРЕЯ ====================
     
     def get_battery_info(self):
         """Получение информации о батарее"""
@@ -3309,32 +3857,47 @@ class Taskbar:
                 else:
                     icon = "🪫"
                 
-                self.battery_label.config(text=f"{icon} {percent}%")
-                if percent <= 20 and not plugged:
-                    self.battery_label.config(fg='#E74C3C')
-                else:
-                    self.battery_label.config(fg=self.theme_colors['taskbar_fg'])
+                try:
+                    self.battery_label.config(text=f"{icon} {percent}%")
+                    if percent <= 20 and not plugged:
+                        self.battery_label.config(fg='#E74C3C')
+                    else:
+                        self.battery_label.config(fg=self.theme_colors['taskbar_fg'])
+                except:
+                    pass
                 
                 self.create_tooltip(self.battery_label, 
                     f"Батарея: {percent}%\n{'Заряжается' if plugged else 'От батареи'}")
             else:
-                self.battery_label.config(text="🔌 ПК", fg=self.theme_colors['taskbar_fg'])
+                try:
+                    self.battery_label.config(text="🔌 ПК", fg=self.theme_colors['taskbar_fg'])
+                except:
+                    pass
                 self.create_tooltip(self.battery_label, "Питание от сети")
         except:
-            self.battery_label.config(text="🔋 ---%", fg=self.theme_colors['taskbar_fg'])
+            try:
+                self.battery_label.config(text="🔋 ---%", fg=self.theme_colors['taskbar_fg'])
+            except:
+                pass
         
-        self.parent.after(10000, self.update_battery)
+        try:
+            self.parent.after(10000, self.update_battery)
+        except:
+            pass
 
-    # ===== ВРЕМЯ =====
+    # ==================== ВРЕМЯ ====================
     
     def update_time(self):
         """Обновление времени и даты"""
-        now = datetime.now()
-        self.time_label.config(text=now.strftime("%H:%M"))
-        self.date_label.config(text=now.strftime("%d.%m.%Y"))
-        self.parent.after(1000, self.update_time)
+        try:
+            now = datetime.now()
+            self.time_label.config(text=now.strftime("%H:%M"))
+            self.date_label.config(text=now.strftime("%d.%m.%Y"))
+            self.parent.after(1000, self.update_time)
+        except:
+            pass
 
-    # ===== МЕНЮ ПУСК =====
+    # ==================== МЕНЮ ПУСК ====================
     
     def load_installed_apps_for_menu(self):
         """Загрузка установленных приложений для меню Пуск"""
@@ -3354,168 +3917,186 @@ class Taskbar:
     def show_start_menu(self):
         """Показать меню Пуск"""
         if self.start_menu and self.start_menu.winfo_exists():
-            self.start_menu.destroy()
+            try:
+                self.start_menu.destroy()
+            except:
+                pass
             self.start_menu = None
             return
         
-        self.start_menu = tk.Toplevel(self.parent)
-        self.start_menu.title("Меню Пуск")
-        self.start_menu.configure(bg='#2C3E50')
-        self.start_menu.overrideredirect(True)
-        
-        menu_width = 800
-        menu_height = 600
-        
-        x = self.start_btn.winfo_rootx()
-        y = self.start_btn.winfo_rooty() - menu_height
-        if y < 0:
-            y = self.start_btn.winfo_rooty() + 50
-        self.start_menu.geometry(f"{menu_width}x{menu_height}+{x}+{y}")
-        
-        header = tk.Frame(self.start_menu, bg='#3498DB', height=80)
-        header.pack(fill=tk.X)
-        tk.Label(header, text=f"👤 {self.username}", bg='#3498DB', fg='white',
-                font=('Segoe UI', 18, 'bold')).pack(pady=20)
-        
-        main_frame = tk.Frame(self.start_menu, bg='#2C3E50')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        canvas = tk.Canvas(main_frame, bg='#2C3E50', highlightthickness=0)
-        scrollbar = tk.Scrollbar(main_frame, orient=tk.VERTICAL, command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg='#2C3E50')
-        
-        scrollable_frame.bind("<Configure>", 
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        all_apps = [
-            ('📁', 'Проводник', 'explorer', 'Системные'),
-            ('⚙', 'Настройки', 'settings', 'Системные'),
-            ('🗑', 'Корзина', 'trash', 'Системные'),
-            ('📡', 'Терминал', 'terminal', 'Системные'),
-            ('📦', 'Установщик BIP', 'bip_installer', 'Системные'),
-            ('🛒', 'Магазин приложений', 'app_store', 'Системные'),
-            ('🌐', 'Интернет', 'network', 'Сеть'),
-            ('🖼', 'Галерея', 'gallery', 'Графика'),
-            ('🎨', 'Paint', 'paint', 'Графика'),
-            ('📝', 'Заметки', 'notes', 'Офис'),
-            ('🧮', 'Калькулятор', 'calc', 'Офис'),
-            ('🌐', 'Каталог IT Global', 'it_global_catalog', 'Прочее'),
-        ]
-        
-        installed_bip_apps = self.load_installed_apps_for_menu()
-        if installed_bip_apps:
-            for app in installed_bip_apps:
-                all_apps.append((
-                    app.get('icon', '📦'), 
-                    app.get('name', 'App'), 
-                    f"bip:{app.get('id')}", 
-                    'Установленные приложения'
-                ))
-        
-        categories = {}
-        for icon, name, cmd, category in all_apps:
-            if category not in categories:
-                categories[category] = []
-            categories[category].append((icon, name, cmd))
-        
-        for category, apps in categories.items():
-            cat_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
-            cat_frame.pack(fill=tk.X, pady=(10, 5))
-            tk.Label(cat_frame, text=f"── {category} ──", bg='#2C3E50', fg='#3498DB',
-                    font=('Segoe UI', 12, 'bold')).pack(anchor='w')
+        try:
+            self.start_menu = tk.Toplevel(self.parent)
+            self.start_menu.title("Меню Пуск")
+            self.start_menu.configure(bg='#2C3E50')
+            self.start_menu.overrideredirect(True)
             
-            apps_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
-            apps_frame.pack(fill=tk.X, pady=5)
+            menu_width = 800
+            menu_height = 600
             
-            for i, (icon, name, cmd) in enumerate(apps):
-                row = i // 4
-                col = i % 4
-                
-                app_frame = tk.Frame(apps_frame, bg='#34495E', relief=tk.RAISED, bd=1)
-                app_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
-                app_frame.configure(width=180, height=70)
-                app_frame.grid_propagate(False)
-                
-                icon_label = tk.Label(app_frame, text=icon, bg='#34495E', fg='white',
-                                     font=('Segoe UI', 24))
-                icon_label.pack(pady=(5, 0))
-                
-                name_label = tk.Label(app_frame, text=name, bg='#34495E', fg='white',
-                                     font=('Segoe UI', 9))
-                name_label.pack()
-                
-                app_frame.app_data = {'icon': icon, 'name': name, 'command': cmd}
-                
-                def on_enter(e, f=app_frame):
-                    f.config(bg='#3498DB')
-                    for child in f.winfo_children():
-                        child.config(bg='#3498DB')
-                
-                def on_leave(e, f=app_frame):
-                    f.config(bg='#34495E')
-                    for child in f.winfo_children():
-                        child.config(bg='#34495E')
-                
-                app_frame.bind('<Enter>', on_enter)
-                app_frame.bind('<Leave>', on_leave)
-                app_frame.bind('<Button-1>', self.start_drag)
-                app_frame.bind('<B1-Motion>', self.drag)
-                app_frame.bind('<ButtonRelease-1>', 
-                              lambda e, f=app_frame: self.drop_on_desktop(e, f))
-                app_frame.bind('<Double-Button-1>', 
-                              lambda e, c=cmd: self.launch_app(c, self.start_menu))
-                
-                icon_label.bind('<Button-1>', self.start_drag)
-                icon_label.bind('<B1-Motion>', self.drag)
-                icon_label.bind('<ButtonRelease-1>', 
-                               lambda e, f=app_frame: self.drop_on_desktop(e, f))
-                
-                name_label.bind('<Button-1>', self.start_drag)
-                name_label.bind('<B1-Motion>', self.drag)
-                name_label.bind('<ButtonRelease-1>', 
-                               lambda e, f=app_frame: self.drop_on_desktop(e, f))
+            x = self.start_btn.winfo_rootx()
+            y = self.start_btn.winfo_rooty() - menu_height
+            if y < 0:
+                y = self.start_btn.winfo_rooty() + 50
+            self.start_menu.geometry(f"{menu_width}x{menu_height}+{x}+{y}")
             
-            for col in range(4):
-                apps_frame.grid_columnconfigure(col, weight=1)
-        
-        exit_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
-        exit_frame.pack(fill=tk.X, pady=(20, 10))
-        exit_btn = tk.Button(exit_frame, text="🚪 Выйти из системы", bg='#E74C3C', fg='white',
-                            font=('Segoe UI', 12, 'bold'), bd=0, padx=20, pady=10, 
-                            cursor='hand2',
-                            command=lambda: self.launch_app('logout', self.start_menu))
-        exit_btn.pack(fill=tk.X, padx=50)
-        exit_btn.bind('<Enter>', lambda e: exit_btn.config(bg='#C0392B'))
-        exit_btn.bind('<Leave>', lambda e: exit_btn.config(bg='#E74C3C'))
-        
-        def on_focus_out(event):
-            if event.widget != self.start_menu and event.widget not in self.start_menu.winfo_children():
-                self.start_menu.destroy()
-                self.start_menu = None
-        
-        self.start_menu.bind('<FocusOut>', on_focus_out)
-        self.start_menu.focus_set()
+            header = tk.Frame(self.start_menu, bg='#3498DB', height=80)
+            header.pack(fill=tk.X)
+            tk.Label(header, text=f"👤 {self.username}", bg='#3498DB', fg='white',
+                    font=('Segoe UI', 18, 'bold')).pack(pady=20)
+            
+            main_frame = tk.Frame(self.start_menu, bg='#2C3E50')
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            canvas = tk.Canvas(main_frame, bg='#2C3E50', highlightthickness=0)
+            scrollbar = tk.Scrollbar(main_frame, orient=tk.VERTICAL, command=canvas.yview)
+            scrollable_frame = tk.Frame(canvas, bg='#2C3E50')
+            
+            scrollable_frame.bind("<Configure>", 
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            all_apps = [
+                ('📁', 'Проводник', 'explorer', 'Системные'),
+                ('⚙', 'Настройки', 'settings', 'Системные'),
+                ('🗑', 'Корзина', 'trash', 'Системные'),
+                ('📡', 'Терминал', 'terminal', 'Системные'),
+                ('📦', 'Установщик BIP', 'bip_installer', 'Системные'),
+                ('🛒', 'Магазин приложений', 'app_store', 'Системные'),
+                ('🌐', 'Интернет', 'network', 'Сеть'),
+                ('🖼', 'Галерея', 'gallery', 'Графика'),
+                ('🎨', 'Paint', 'paint', 'Графика'),
+                ('📝', 'Заметки', 'notes', 'Офис'),
+                ('🧮', 'Калькулятор', 'calc', 'Офис'),
+                ('🌐', 'Каталог IT Global', 'it_global_catalog', 'Прочее'),
+            ]
+            
+            installed_bip_apps = self.load_installed_apps_for_menu()
+            if installed_bip_apps:
+                for app in installed_bip_apps:
+                    all_apps.append((
+                        app.get('icon', '📦'), 
+                        app.get('name', 'App'), 
+                        f"bip:{app.get('id')}", 
+                        'Установленные приложения'
+                    ))
+            
+            categories = {}
+            for icon, name, cmd, category in all_apps:
+                if category not in categories:
+                    categories[category] = []
+                categories[category].append((icon, name, cmd))
+            
+            for category, apps in categories.items():
+                cat_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
+                cat_frame.pack(fill=tk.X, pady=(10, 5))
+                tk.Label(cat_frame, text=f"── {category} ──", bg='#2C3E50', fg='#3498DB',
+                        font=('Segoe UI', 12, 'bold')).pack(anchor='w')
+                
+                apps_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
+                apps_frame.pack(fill=tk.X, pady=5)
+                
+                for i, (icon, name, cmd) in enumerate(apps):
+                    row = i // 4
+                    col = i % 4
+                    
+                    app_frame = tk.Frame(apps_frame, bg='#34495E', relief=tk.RAISED, bd=1)
+                    app_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
+                    app_frame.configure(width=180, height=70)
+                    app_frame.grid_propagate(False)
+                    
+                    icon_label = tk.Label(app_frame, text=icon, bg='#34495E', fg='white',
+                                         font=('Segoe UI', 24))
+                    icon_label.pack(pady=(5, 0))
+                    
+                    name_label = tk.Label(app_frame, text=name, bg='#34495E', fg='white',
+                                         font=('Segoe UI', 9))
+                    name_label.pack()
+                    
+                    app_frame.app_data = {'icon': icon, 'name': name, 'command': cmd}
+                    
+                    def on_enter(e, f=app_frame):
+                        try:
+                            f.config(bg='#3498DB')
+                            for child in f.winfo_children():
+                                child.config(bg='#3498DB')
+                        except:
+                            pass
+                    
+                    def on_leave(e, f=app_frame):
+                        try:
+                            f.config(bg='#34495E')
+                            for child in f.winfo_children():
+                                child.config(bg='#34495E')
+                        except:
+                            pass
+                    
+                    app_frame.bind('<Enter>', on_enter)
+                    app_frame.bind('<Leave>', on_leave)
+                    app_frame.bind('<Button-1>', self.start_drag)
+                    app_frame.bind('<B1-Motion>', self.drag)
+                    app_frame.bind('<ButtonRelease-1>', 
+                                  lambda e, f=app_frame: self.drop_on_desktop(e, f))
+                    app_frame.bind('<Double-Button-1>', 
+                                  lambda e, c=cmd: self.launch_app(c, self.start_menu))
+                    
+                    icon_label.bind('<Button-1>', self.start_drag)
+                    icon_label.bind('<B1-Motion>', self.drag)
+                    icon_label.bind('<ButtonRelease-1>', 
+                                   lambda e, f=app_frame: self.drop_on_desktop(e, f))
+                    
+                    name_label.bind('<Button-1>', self.start_drag)
+                    name_label.bind('<B1-Motion>', self.drag)
+                    name_label.bind('<ButtonRelease-1>', 
+                                   lambda e, f=app_frame: self.drop_on_desktop(e, f))
+                
+                for col in range(4):
+                    apps_frame.grid_columnconfigure(col, weight=1)
+            
+            exit_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
+            exit_frame.pack(fill=tk.X, pady=(20, 10))
+            exit_btn = tk.Button(exit_frame, text="🚪 Выйти из системы", bg='#E74C3C', fg='white',
+                                font=('Segoe UI', 12, 'bold'), bd=0, padx=20, pady=10, 
+                                cursor='hand2',
+                                command=lambda: self.launch_app('logout', self.start_menu))
+            exit_btn.pack(fill=tk.X, padx=50)
+            exit_btn.bind('<Enter>', lambda e: exit_btn.config(bg='#C0392B'))
+            exit_btn.bind('<Leave>', lambda e: exit_btn.config(bg='#E74C3C'))
+            
+            def on_focus_out(event):
+                if event.widget != self.start_menu and event.widget not in self.start_menu.winfo_children():
+                    try:
+                        self.start_menu.destroy()
+                    except:
+                        pass
+                    self.start_menu = None
+            
+            self.start_menu.bind('<FocusOut>', on_focus_out)
+            self.start_menu.focus_set()
+        except:
+            pass
 
-    # ===== ПЕРЕТАСКИВАНИЕ =====
+    # ==================== ПЕРЕТАСКИВАНИЕ ====================
     
     drag_data = {"x": 0, "y": 0, "item": None, "icon": None, "name": None, "command": None}
 
     def start_drag(self, event):
-        widget = event.widget
-        while widget and not hasattr(widget, 'app_data'):
-            widget = widget.master
-        if widget and hasattr(widget, 'app_data'):
-            self.drag_data["item"] = widget
-            self.drag_data["icon"] = widget.app_data['icon']
-            self.drag_data["name"] = widget.app_data['name']
-            self.drag_data["command"] = widget.app_data['command']
-            self.drag_data["x"] = event.x_root
-            self.drag_data["y"] = event.y_root
+        try:
+            widget = event.widget
+            while widget and not hasattr(widget, 'app_data'):
+                widget = widget.master
+            if widget and hasattr(widget, 'app_data'):
+                self.drag_data["item"] = widget
+                self.drag_data["icon"] = widget.app_data['icon']
+                self.drag_data["name"] = widget.app_data['name']
+                self.drag_data["command"] = widget.app_data['command']
+                self.drag_data["x"] = event.x_root
+                self.drag_data["y"] = event.y_root
+        except:
+            pass
 
     def drag(self, event):
         pass
@@ -3534,105 +4115,132 @@ class Taskbar:
     def drop_on_desktop(self, event, app_frame):
         if not self.desktop_canvas or not self.desktop_icons_list:
             if event.widget and event.widget.winfo_toplevel() == self.start_menu:
-                self.launch_app(self.drag_data["command"], self.start_menu)
+                try:
+                    self.launch_app(self.drag_data["command"], self.start_menu)
+                except:
+                    pass
             self.drag_data = {"x": 0, "y": 0, "item": None, "icon": None, 
                             "name": None, "command": None}
             return
         
-        x_root = event.x_root
-        y_root = event.y_root
-        
-        desktop_x = self.desktop_canvas.winfo_rootx()
-        desktop_y = self.desktop_canvas.winfo_rooty()
-        desktop_width = self.desktop_canvas.winfo_width()
-        desktop_height = self.desktop_canvas.winfo_height()
-        
-        if (desktop_x <= x_root <= desktop_x + desktop_width and 
-            desktop_y <= y_root <= desktop_y + desktop_height):
+        try:
+            x_root = event.x_root
+            y_root = event.y_root
             
-            icon_text = self.drag_data["name"]
-            icon_symbol = self.drag_data["icon"]
-            command_name = self.drag_data["command"]
+            desktop_x = self.desktop_canvas.winfo_rootx()
+            desktop_y = self.desktop_canvas.winfo_rooty()
+            desktop_width = self.desktop_canvas.winfo_width()
+            desktop_height = self.desktop_canvas.winfo_height()
             
-            existing = False
-            for existing_icon in self.desktop_icons_list:
-                if existing_icon.text == icon_text:
-                    existing = True
-                    break
-            
-            if not existing and command_name:
-                new_grid_x, new_grid_y = self.find_next_grid_position(
-                    self.desktop_icons_list)
+            if (desktop_x <= x_root <= desktop_x + desktop_width and 
+                desktop_y <= y_root <= desktop_y + desktop_height):
                 
-                command = None
-                if self.desktop:
-                    command = self.desktop.get_command_by_name(command_name)
+                icon_text = self.drag_data["name"]
+                icon_symbol = self.drag_data["icon"]
+                command_name = self.drag_data["command"]
                 
-                if command:
-                    new_icon = DesktopIcon(self.desktop_canvas, new_grid_x, new_grid_y,
-                                          icon_symbol, icon_text, command)
-                    new_icon.update_theme(self.theme_colors['icon_fg'])
-                    self.desktop_icons_list.append(new_icon)
+                existing = False
+                for existing_icon in self.desktop_icons_list:
+                    if existing_icon.text == icon_text:
+                        existing = True
+                        break
+                
+                if not existing and command_name:
+                    new_grid_x, new_grid_y = self.find_next_grid_position(
+                        self.desktop_icons_list)
                     
+                    command = None
                     if self.desktop:
-                        self.desktop.save_desktop_shortcuts()
-                        if hasattr(self.desktop.bitos, 'security'):
-                            self.desktop.bitos.security.log_shortcut_create(
-                                self.username, icon_text, (new_grid_x, new_grid_y))
+                        command = self.desktop.get_command_by_name(command_name)
                     
-                    self.show_notification(f"Ярлык '{icon_text}' добавлен на рабочий стол")
+                    if command:
+                        new_icon = DesktopIcon(self.desktop_canvas, new_grid_x, new_grid_y,
+                                              icon_symbol, icon_text, command)
+                        new_icon.update_theme(self.theme_colors['icon_fg'])
+                        self.desktop_icons_list.append(new_icon)
+                        
+                        if self.desktop:
+                            self.desktop.save_desktop_shortcuts()
+                            if hasattr(self.desktop.bitos, 'security'):
+                                self.desktop.bitos.security.log_shortcut_create(
+                                    self.username, icon_text, (new_grid_x, new_grid_y))
+                        
+                        self.show_notification(f"Ярлык '{icon_text}' добавлен на рабочий стол")
+        except:
+            pass
         
         self.drag_data = {"x": 0, "y": 0, "item": None, "icon": None, 
                         "name": None, "command": None}
 
     def show_notification(self, message):
         if self.notification_center:
-            self.notification_center.add_notification(
-                "Рабочий стол",
-                message,
-                icon="📌",
-                duration=3000
-            )
+            try:
+                self.notification_center.add_notification(
+                    "Рабочий стол",
+                    message,
+                    icon="📌",
+                    duration=3000
+                )
+            except:
+                pass
 
     def launch_app(self, app_name, menu_window):
         if menu_window:
-            menu_window.destroy()
+            try:
+                menu_window.destroy()
+            except:
+                pass
             self.start_menu = None
         
-        if app_name.startswith("bip:"):
-            app_id = app_name.split(":", 1)[1]
-            installer = BipInstaller(self.parent, 
-                                    self.desktop.bitos if self.desktop else None)
-            success, msg = installer.launch_app(app_id)
-            if not success:
-                messagebox.showerror("Ошибка", msg)
-        elif app_name in self.commands:
-            if hasattr(self, 'desktop') and self.desktop and hasattr(self.desktop.bitos, 'security'):
-                self.desktop.bitos.security.log_app_launch(app_name, self.username)
-            self.commands[app_name]()
+        try:
+            if app_name.startswith("bip:"):
+                app_id = app_name.split(":", 1)[1]
+                if self.desktop:
+                    installer = BipInstaller(self.parent, self.desktop.bitos)
+                    success, msg = installer.launch_app(app_id)
+                    if not success:
+                        messagebox.showerror("Ошибка", msg)
+            elif app_name in self.commands:
+                if hasattr(self, 'desktop') and self.desktop and hasattr(self.desktop.bitos, 'security'):
+                    self.desktop.bitos.security.log_app_launch(app_name, self.username)
+                self.commands[app_name]()
+        except:
+            pass
 
-    # ===== МЕНЮ ПИТАНИЯ =====
+    # ==================== МЕНЮ ПИТАНИЯ ====================
     
     def show_power_menu(self):
-        power_menu = tk.Menu(self.parent, tearoff=0, bg='#2C3E50', fg='white', 
-                            activebackground='#3498DB')
-        power_menu.add_command(label="🔄 Перезагрузка", command=self.restart_system)
-        power_menu.add_separator()
-        power_menu.add_command(label="🚪 Выход", 
-                              command=lambda: self.commands.get('logout', lambda: None)())
-        power_menu.add_separator()
-        power_menu.add_command(label="⏻ Выключение", command=self.shutdown_system)
-        power_menu.post(self.power_btn.winfo_rootx(), 
-                       self.power_btn.winfo_rooty() - 100)
+        try:
+            power_menu = tk.Menu(self.parent, tearoff=0, bg='#2C3E50', fg='white', 
+                                activebackground='#3498DB')
+            power_menu.add_command(label="🔄 Перезагрузка", command=self.restart_system)
+            power_menu.add_separator()
+            power_menu.add_command(label="🚪 Выход", 
+                                  command=lambda: self.commands.get('logout', lambda: None)())
+            power_menu.add_separator()
+            power_menu.add_command(label="⏻ Выключение", command=self.shutdown_system)
+            power_menu.post(self.power_btn.winfo_rootx(), 
+                           self.power_btn.winfo_rooty() - 100)
+        except:
+            pass
 
     def shutdown_system(self):
         if messagebox.askyesno("Выключение", "Вы действительно хотите выключить компьютер?"):
             if hasattr(self, 'desktop') and self.desktop:
                 if hasattr(self.desktop.bitos, 'security'):
                     self.desktop.bitos.security.log_shutdown(self.username)
-                self.desktop.save_desktop_shortcuts()
-                self.desktop.save_widgets()
-            self.parent.destroy()
+                try:
+                    self.desktop.save_desktop_shortcuts()
+                except:
+                    pass
+                try:
+                    self.desktop.save_widgets()
+                except:
+                    pass
+            try:
+                self.parent.destroy()
+            except:
+                pass
             shutdown_windows()
 
     def restart_system(self):
@@ -3640,48 +4248,68 @@ class Taskbar:
             if hasattr(self, 'desktop') and self.desktop:
                 if hasattr(self.desktop.bitos, 'security'):
                     self.desktop.bitos.security.log_reboot(self.username)
-                self.desktop.save_desktop_shortcuts()
-                self.desktop.save_widgets()
-            self.parent.destroy()
+                try:
+                    self.desktop.save_desktop_shortcuts()
+                except:
+                    pass
+                try:
+                    self.desktop.save_widgets()
+                except:
+                    pass
+            try:
+                self.parent.destroy()
+            except:
+                pass
             restart_windows()
 
-    # ===== ТУЛТИПЫ =====
+    # ==================== ТУЛТИПЫ ====================
     
     def create_tooltip(self, widget, text):
         def enter(event):
-            x = widget.winfo_rootx() + 25
-            y = widget.winfo_rooty() - 30
-            self.tooltip = tk.Toplevel(widget)
-            self.tooltip.wm_overrideredirect(True)
-            self.tooltip.wm_geometry(f"+{x}+{y}")
-            label = tk.Label(self.tooltip, text=text, background="#FFFFE0", 
-                           relief=tk.SOLID, borderwidth=1, font=('Segoe UI', 9))
-            label.pack()
+            try:
+                x = widget.winfo_rootx() + 25
+                y = widget.winfo_rooty() - 30
+                self.tooltip = tk.Toplevel(widget)
+                self.tooltip.wm_overrideredirect(True)
+                self.tooltip.wm_geometry(f"+{x}+{y}")
+                label = tk.Label(self.tooltip, text=text, background="#FFFFE0", 
+                               relief=tk.SOLID, borderwidth=1, font=('Segoe UI', 9))
+                label.pack()
+            except:
+                pass
         
         def leave(event):
             if self.tooltip:
-                self.tooltip.destroy()
+                try:
+                    self.tooltip.destroy()
+                except:
+                    pass
                 self.tooltip = None
         
-        widget.bind('<Enter>', enter)
-        widget.bind('<Leave>', leave)
+        try:
+            widget.bind('<Enter>', enter)
+            widget.bind('<Leave>', leave)
+        except:
+            pass
 
     def update_theme(self, theme_colors):
         self.theme_colors = theme_colors
-        self.taskbar.config(bg=theme_colors['taskbar_bg'])
-        
-        self.user_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.time_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.date_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.battery_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.lang_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.volume_btn.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.notify_btn.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
-        self.power_btn.config(bg=theme_colors['taskbar_bg'])
-        
-        # Обновляем контейнер окон
-        self.windows_container.config(bg=theme_colors['taskbar_bg'])
-        self._update_windows_container()
+        try:
+            self.taskbar.config(bg=theme_colors['taskbar_bg'])
+            
+            self.user_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.time_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.date_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.battery_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.lang_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.volume_btn.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.notify_btn.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['taskbar_fg'])
+            self.power_btn.config(bg=theme_colors['taskbar_bg'])
+            
+            self.windows_container.config(bg=theme_colors['taskbar_bg'])
+            self._update_windows_container()
+        except:
+            pass
 
         # ==================== КЛАСС 17: DevModeDialog ====================
 class DevModeDialog:
@@ -4180,40 +4808,60 @@ class BipInstallWindow:
 class Desktop:
     """Рабочий стол с обоями, виджетами и поддержкой BIP"""
     
+    # ВСТРОЕННЫЕ ТЕМЫ С ОБОЯМИ
     THEMES = {
-        "Темная": {'name': 'Темная', 'bg': '#1E1E1E', 'fg': 'white', 
-                   'taskbar_bg': '#2C3E50', 'taskbar_fg': 'white', 
-                   'canvas_bg': '#1E1E1E', 'icon_fg': 'white',
-                   'widget_bg': '#2C3E50', 'widget_fg': 'white'},
-        "Светлая": {'name': 'Светлая', 'bg': '#F5F7FA', 'fg': '#2C3E50', 
-                    'taskbar_bg': '#D0D0D0', 'taskbar_fg': '#2C3E50', 
-                    'canvas_bg': '#F5F7FA', 'icon_fg': '#2C3E50',
-                    'widget_bg': '#FFFFFF', 'widget_fg': '#2C3E50'},
-        "Синяя": {'name': 'Синяя', 'bg': '#3498DB', 'fg': 'white', 
-                  'taskbar_bg': '#1F618D', 'taskbar_fg': 'white', 
-                  'canvas_bg': '#3498DB', 'icon_fg': 'white',
-                  'widget_bg': '#2980B9', 'widget_fg': 'white'},
-        "Зеленая": {'name': 'Зеленая', 'bg': '#27AE60', 'fg': 'white', 
-                    'taskbar_bg': '#1E8449', 'taskbar_fg': 'white', 
-                    'canvas_bg': '#27AE60', 'icon_fg': 'white',
-                    'widget_bg': '#229954', 'widget_fg': 'white'},
-        "Фиолетовая": {'name': 'Фиолетовая', 'bg': '#9B59B6', 'fg': 'white', 
-                       'taskbar_bg': '#6C3483', 'taskbar_fg': 'white', 
-                       'canvas_bg': '#9B59B6', 'icon_fg': 'white',
-                       'widget_bg': '#8E44AD', 'widget_fg': 'white'},
-        "Красная": {'name': 'Красная', 'bg': '#E74C3C', 'fg': 'white', 
-                    'taskbar_bg': '#922B21', 'taskbar_fg': 'white', 
-                    'canvas_bg': '#E74C3C', 'icon_fg': 'white',
-                    'widget_bg': '#C0392B', 'widget_fg': 'white'},
-        "Оранжевая": {'name': 'Оранжевая', 'bg': '#E67E22', 'fg': 'white', 
-                      'taskbar_bg': '#D35400', 'taskbar_fg': 'white', 
-                      'canvas_bg': '#E67E22', 'icon_fg': 'white',
-                      'widget_bg': '#D35400', 'widget_fg': 'white'},
-        "Бирюзовая": {'name': 'Бирюзовая', 'bg': '#1ABC9C', 'fg': 'white', 
-                      'taskbar_bg': '#148F77', 'taskbar_fg': 'white', 
-                      'canvas_bg': '#1ABC9C', 'icon_fg': 'white',
-                      'widget_bg': '#17A589', 'widget_fg': 'white'}
+        "Базовая": {
+            'name': 'Базовая', 
+            'bg': '#2980B9', 
+            'fg': 'white', 
+            'taskbar_bg': '#1A5276', 
+            'taskbar_fg': 'white', 
+            'canvas_bg': '#2980B9', 
+            'icon_fg': 'white',
+            'widget_bg': '#1F618D', 
+            'widget_fg': 'white',
+            'wallpaper': 'System\\Config\\Wallpaper\\buinw1'
+        },
+        "Техно": {
+            'name': 'Техно', 
+            'bg': '#1B5E20', 
+            'fg': '#00FF00', 
+            'taskbar_bg': '#0D3B0D', 
+            'taskbar_fg': '#00FF00', 
+            'canvas_bg': '#1B5E20', 
+            'icon_fg': '#00FF00',
+            'widget_bg': '#0D3B0D', 
+            'widget_fg': '#00FF00',
+            'wallpaper': 'System\\Config\\Wallpaper\\buinw2'
+        },
+        "Эко": {
+            'name': 'Эко', 
+            'bg': '#27AE60', 
+            'fg': '#FFFFFF', 
+            'taskbar_bg': '#1E8449', 
+            'taskbar_fg': '#FFFFFF', 
+            'canvas_bg': '#27AE60', 
+            'icon_fg': '#FFFFFF',
+            'widget_bg': '#1E8449', 
+            'widget_fg': '#FFFFFF',
+            'wallpaper': 'System\\Config\\Wallpaper\\buinw3'
+        },
+        "Космо": {
+            'name': 'Космо', 
+            'bg': '#0B1B3D', 
+            'fg': '#87CEEB', 
+            'taskbar_bg': '#060D1A', 
+            'taskbar_fg': '#87CEEB', 
+            'canvas_bg': '#0B1B3D', 
+            'icon_fg': '#87CEEB',
+            'widget_bg': '#060D1A', 
+            'widget_fg': '#87CEEB',
+            'wallpaper': 'System\\Config\\Wallpaper\\buinw4'
+        },
     }
+    
+    # ПОЛЬЗОВАТЕЛЬСКИЕ ТЕМЫ (будут загружены из файла)
+    USER_THEMES = {}
 
     def __init__(self, root, username, bitos_instance):
         self.root = root
@@ -4229,12 +4877,19 @@ class Desktop:
         )
         os.makedirs(self.virtual_desktop_path, exist_ok=True)
         
+        # Загрузка пользовательских тем
+        self._load_user_themes()
+        
         # Загрузка темы
         self.current_theme = self.load_theme()
-        self.theme_colors = self.THEMES[self.current_theme]
+        self.theme_colors = self._get_theme_colors(self.current_theme)
         
         # Менеджеры
         self.wallpaper_manager = WallpaperManager(bitos_instance)
+        
+        # Устанавливаем обои из темы если они есть
+        self._apply_theme_wallpaper(self.current_theme)
+        
         self.notification_center = NotificationCenter(root, bitos_instance)
         
         # Настройка окна
@@ -4328,7 +4983,218 @@ class Desktop:
         # Показываем приветственное уведомление
         self.root.after(1000, self.show_welcome_notification)
 
-    # ==================== ОСНОВНЫЕ МЕТОДЫ ====================
+    # ==================== МЕТОДЫ РАБОТЫ С ТЕМАМИ И ОБОЯМИ ====================
+    
+    def _load_user_themes(self):
+        """Загрузка пользовательских тем из файла"""
+        themes_file = os.path.join(self.bitos.system_paths["config"], "user_themes.json")
+        if os.path.exists(themes_file):
+            try:
+                with open(themes_file, 'r', encoding='utf-8') as f:
+                    self.USER_THEMES = json.load(f)
+            except:
+                self.USER_THEMES = {}
+        else:
+            self.USER_THEMES = {}
+    
+    def _save_user_themes(self):
+        """Сохранение пользовательских тем в файл"""
+        themes_file = os.path.join(self.bitos.system_paths["config"], "user_themes.json")
+        try:
+            with open(themes_file, 'w', encoding='utf-8') as f:
+                json.dump(self.USER_THEMES, f, indent=4, ensure_ascii=False)
+        except:
+            pass
+    
+    def _get_theme_colors(self, theme_name):
+        """Получение цветов темы по имени"""
+        if theme_name in self.THEMES:
+            return self.THEMES[theme_name].copy()
+        if theme_name in self.USER_THEMES:
+            return self.USER_THEMES[theme_name].copy()
+        return self.THEMES["Базовая"].copy()
+    
+    def get_all_themes(self):
+        """Получение всех доступных тем"""
+        all_themes = {}
+        all_themes.update(self.THEMES)
+        all_themes.update(self.USER_THEMES)
+        return all_themes
+    
+    def get_theme_names(self):
+        """Получение списка названий всех тем"""
+        return list(self.get_all_themes().keys())
+    
+    def create_user_theme(self, name, bg_color, fg_color, taskbar_bg, taskbar_fg, 
+                          canvas_bg, icon_fg, widget_bg, widget_fg, wallpaper_path=None):
+        """Создание пользовательской темы с обоями"""
+        if name in self.THEMES:
+            return False, "Тема с таким именем уже существует во встроенных темах"
+        if name in self.USER_THEMES:
+            return False, "Тема с таким именем уже существует"
+        
+        wallpaper_rel_path = None
+        if wallpaper_path and os.path.exists(wallpaper_path):
+            wallpaper_dir = os.path.join(self.bitos.base_path, "System", "Config", "Wallpaper")
+            os.makedirs(wallpaper_dir, exist_ok=True)
+            
+            ext = os.path.splitext(wallpaper_path)[1]
+            new_name = f"user_wallpaper_{int(time.time())}{ext}"
+            new_path = os.path.join(wallpaper_dir, new_name)
+            try:
+                shutil.copy2(wallpaper_path, new_path)
+                wallpaper_rel_path = f"System\\Config\\Wallpaper\\{new_name}"
+            except Exception as e:
+                return False, f"Не удалось скопировать обои: {str(e)}"
+        
+        self.USER_THEMES[name] = {
+            'name': name,
+            'bg': bg_color,
+            'fg': fg_color,
+            'taskbar_bg': taskbar_bg,
+            'taskbar_fg': taskbar_fg,
+            'canvas_bg': canvas_bg,
+            'icon_fg': icon_fg,
+            'widget_bg': widget_bg,
+            'widget_fg': widget_fg,
+            'wallpaper': wallpaper_rel_path,
+            'is_user_theme': True,
+            'created': datetime.now().isoformat()
+        }
+        
+        self._save_user_themes()
+        self.change_theme(name)
+        
+        if wallpaper_rel_path:
+            full_wallpaper_path = os.path.join(self.bitos.base_path, wallpaper_rel_path.replace('\\', os.sep))
+            if os.path.exists(full_wallpaper_path):
+                self.wallpaper_manager.set_wallpaper(full_wallpaper_path)
+                self.update_wallpaper()
+        
+        return True, "Тема успешно создана и применена!"
+    
+    def delete_user_theme(self, theme_name):
+        """Удаление пользовательской темы"""
+        if theme_name not in self.USER_THEMES:
+            return False, "Тема не найдена"
+        
+        del self.USER_THEMES[theme_name]
+        self._save_user_themes()
+        
+        if self.current_theme == theme_name:
+            self.change_theme("Базовая")
+        
+        return True, "Тема удалена"
+    
+    def load_theme(self):
+        """Загрузка темы"""
+        theme_file = os.path.join(self.bitos.system_paths["config"], "theme.cfg")
+        if os.path.exists(theme_file):
+            try:
+                with open(theme_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    theme = data.get('theme', 'Базовая')
+                    all_themes = self.get_all_themes()
+                    if theme in all_themes:
+                        return theme
+            except:
+                pass
+        return "Базовая"
+    
+    def save_theme(self, theme_name):
+        """Сохранение темы"""
+        theme_file = os.path.join(self.bitos.system_paths["config"], "theme.cfg")
+        try:
+            with open(theme_file, 'w', encoding='utf-8') as f:
+                json.dump({'theme': theme_name}, f, indent=4)
+        except:
+            pass
+    
+    def _apply_theme_wallpaper(self, theme_name):
+        """Применение обоев из темы"""
+        all_themes = self.get_all_themes()
+        if theme_name not in all_themes:
+            return
+        
+        theme = all_themes[theme_name]
+        wallpaper_path = theme.get('wallpaper')
+        
+        if wallpaper_path:
+            full_path = os.path.join(
+                self.bitos.base_path,
+                wallpaper_path.replace('\\', os.sep)
+            )
+            
+            if os.path.exists(full_path):
+                self.wallpaper_manager.set_wallpaper(full_path)
+                self.update_wallpaper()
+            else:
+                wallpaper_dir = os.path.join(self.bitos.base_path, "System", "Config", "Wallpaper")
+                if os.path.exists(wallpaper_dir):
+                    wallpaper_name = os.path.basename(wallpaper_path)
+                    for f in os.listdir(wallpaper_dir):
+                        if f == wallpaper_name or f.startswith(wallpaper_name):
+                            full_path = os.path.join(wallpaper_dir, f)
+                            self.wallpaper_manager.set_wallpaper(full_path)
+                            self.update_wallpaper()
+                            break
+    
+    def change_theme(self, theme_name):
+        """Смена темы оформления с автоматической сменой обоев"""
+        all_themes = self.get_all_themes()
+        if theme_name not in all_themes:
+            return False
+        
+        old_theme = self.current_theme
+        self.current_theme = theme_name
+        self.theme_colors = all_themes[theme_name].copy()
+        self.save_theme(theme_name)
+        
+        self._apply_theme_wallpaper(theme_name)
+        
+        self.root.configure(bg=self.theme_colors['bg'])
+        self.canvas.config(bg=self.theme_colors['canvas_bg'])
+        
+        self.update_wallpaper()
+        self.taskbar.update_theme(self.theme_colors)
+        
+        for icon in self.canvas.desktop_icons:
+            try:
+                icon.update_theme(self.theme_colors['icon_fg'])
+            except tk.TclError:
+                pass
+        
+        for widget in self.widgets[:]:
+            try:
+                widget.update_theme(self.theme_colors)
+            except:
+                if widget in self.widgets:
+                    self.widgets.remove(widget)
+        
+        self.canvas.tag_raise('icon')
+        
+        for icon in self.canvas.desktop_icons:
+            icon.selected = False
+            if not icon.hover:
+                try:
+                    self.canvas.itemconfig(icon.icon_id_obj, fill=self.theme_colors['icon_fg'])
+                    self.canvas.itemconfig(icon.text_id, fill=self.theme_colors['icon_fg'])
+                except tk.TclError:
+                    pass
+        
+        if hasattr(self.bitos, 'security'):
+            self.bitos.security.log_theme_change(self.username, old_theme, theme_name)
+        
+        self.notification_center.add_notification(
+            "🎨 Тема изменена",
+            f"Применена тема: {theme_name} с обоями",
+            icon="🎨",
+            duration=3000
+        )
+        
+        return True
+
+    # ==================== МЕТОДЫ КАК БЫЛИ В ОРИГИНАЛЕ ====================
     
     def get_virtual_desktop_path(self):
         """Возвращает путь к виртуальному рабочему столу пользователя"""
@@ -4411,7 +5277,6 @@ class Desktop:
     
     def create_desktop_icons(self):
         """Создание базовых иконок рабочего стола"""
-        # Корзина всегда в позиции (0,0)
         trash_icon = DesktopIcon(self.canvas, 0, 0, '🗑', 'Корзина', self.open_trash)
         trash_icon.update_theme(self.theme_colors['icon_fg'])
         self.canvas.desktop_icons.append(trash_icon)
@@ -4760,8 +5625,7 @@ class Desktop:
             name = name_entry.get().strip()
             if not name:
                 messagebox.showwarning("Предупреждение", "Введите имя папки", parent=dialog)
-                return
-            
+                return            
             folder_path = os.path.join(self.virtual_desktop_path, name)
             
             if os.path.exists(folder_path):
@@ -5021,17 +5885,14 @@ class Desktop:
         y = (dialog.winfo_screenheight() - 520) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        # Заголовок
         header = tk.Frame(dialog, bg='#3498DB', height=50)
         header.pack(fill=tk.X)
         tk.Label(header, text="🔗 Создание ярлыка", bg='#3498DB', fg='white',
                 font=('Segoe UI', 14, 'bold')).pack(pady=12)
         
-        # Основное содержимое
         main_frame = tk.Frame(dialog, bg='#F5F7FA')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        # Тип ярлыка
         tk.Label(main_frame, text="Тип ярлыка:", font=('Segoe UI', 11, 'bold'),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(0, 5))
         
@@ -5050,7 +5911,6 @@ class Desktop:
                       activebackground='#F5F7FA',
                       command=lambda: self._toggle_shortcut_fields(type_var, website_frame, app_frame)).pack(side=tk.LEFT, padx=10)
         
-        # ===== ПОЛЯ ДЛЯ ВЕБ-САЙТА =====
         website_frame = tk.Frame(main_frame, bg='#F5F7FA')
         website_frame.pack(fill=tk.X, pady=5)
         
@@ -5062,7 +5922,6 @@ class Desktop:
         url_entry.pack(fill=tk.X, ipady=8, pady=(5, 10))
         url_entry.insert(0, "https://")
         
-        # ===== ПОЛЯ ДЛЯ ПРИЛОЖЕНИЯ =====
         app_frame = tk.Frame(main_frame, bg='#F5F7FA')
         app_frame.pack(fill=tk.X, pady=5)
         
@@ -5096,11 +5955,8 @@ class Desktop:
                  font=('Segoe UI', 10), bd=0, padx=15, pady=8,
                  cursor='hand2', command=browse_exe).pack(side=tk.RIGHT, padx=(10, 0))
         
-        # По умолчанию показываем веб-сайт
         app_frame.pack_forget()
         
-        # ===== ОБЩИЕ ПОЛЯ =====
-        # Имя ярлыка
         tk.Label(main_frame, text="Имя ярлыка:", font=('Segoe UI', 10),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(10, 5))
         name_entry = tk.Entry(main_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
@@ -5109,7 +5965,6 @@ class Desktop:
         name_entry.pack(fill=tk.X, ipady=8, pady=(5, 10))
         name_entry.insert(0, "Мой ярлык")
         
-        # Выбор иконки
         tk.Label(main_frame, text="Иконка:", font=('Segoe UI', 10),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w')
         
@@ -5146,7 +6001,6 @@ class Desktop:
             
             btn.bind('<Button-1>', on_click)
         
-        # Поле для пользовательской иконки
         custom_frame = tk.Frame(main_frame, bg='#F5F7FA')
         custom_frame.pack(fill=tk.X, pady=(5, 0))
         
@@ -5160,7 +6014,6 @@ class Desktop:
         icon_entry.insert(0, "🌐")
         icon_entry.bind('<KeyRelease>', lambda e: icon_var.set(icon_entry.get().strip() or "📄"))
         
-        # ===== КНОПКИ =====
         btn_frame = tk.Frame(main_frame, bg='#F5F7FA')
         btn_frame.pack(fill=tk.X, pady=10)
         
@@ -5342,628 +6195,7 @@ class Desktop:
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_app_launch("Settings", self.username)
         
-        settings_window = tk.Toplevel(self.root)
-        settings_window.title("⚙ Настройки BITOS")
-        settings_window.geometry("850x650")
-        settings_window.transient(self.root)
-        settings_window.configure(bg='#F5F7FA')
-        settings_window.resizable(False, False)
-        
-        x = (settings_window.winfo_screenwidth() - 850) // 2
-        y = (settings_window.winfo_screenheight() - 650) // 2
-        settings_window.geometry(f'+{x}+{y}')
-        
-        notebook = ttk.Notebook(settings_window)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        self._create_theme_tab(notebook)
-        self._create_security_tab(notebook)
-        self._create_account_tab(notebook)
-        self._create_updates_tab(notebook)
-        self._create_system_tab(notebook, settings_window)
-        
-        bottom_frame = tk.Frame(settings_window, bg='#F5F7FA', height=50)
-        bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        tk.Button(bottom_frame, text="Закрыть", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 11), bd=0, padx=30, pady=8,
-                 cursor='hand2', command=settings_window.destroy).pack(side=tk.RIGHT, padx=5)
-    
-    def _create_theme_tab(self, notebook):
-        """Вкладка тем оформления"""
-        theme_frame = ttk.Frame(notebook)
-        notebook.add(theme_frame, text="🎨 Темы")
-        
-        main_frame = tk.Frame(theme_frame, bg='white')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        tk.Label(main_frame, text="Выберите тему оформления:", 
-                font=('Segoe UI', 14, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
-        
-        themes_grid = tk.Frame(main_frame, bg='white')
-        themes_grid.pack(fill=tk.BOTH, expand=True)
-        
-        themes = [
-            ("Темная", "#1E1E1E", "#FFFFFF", "🌙"),
-            ("Светлая", "#F5F7FA", "#2C3E50", "☀️"),
-            ("Синяя", "#3498DB", "#FFFFFF", "🌊"),
-            ("Зеленая", "#27AE60", "#FFFFFF", "🌿"),
-            ("Фиолетовая", "#9B59B6", "#FFFFFF", "🔮"),
-            ("Красная", "#E74C3C", "#FFFFFF", "❤️"),
-            ("Оранжевая", "#E67E22", "#FFFFFF", "🍊"),
-            ("Бирюзовая", "#1ABC9C", "#FFFFFF", "💎"),
-        ]
-        
-        self.theme_var = tk.StringVar(value=self.current_theme)
-        
-        for i, (theme_name, bg_color, fg_color, emoji) in enumerate(themes):
-            row = i // 4
-            col = i % 4
-            
-            card = tk.Frame(themes_grid, bg='#F0F3F4', relief=tk.RAISED, bd=1)
-            card.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
-            card.configure(width=200, height=130)
-            card.grid_propagate(False)
-            
-            preview = tk.Frame(card, bg=bg_color, width=180, height=70, relief=tk.SUNKEN, bd=1)
-            preview.pack(pady=(10, 5))
-            preview.pack_propagate(False)
-            
-            tk.Label(preview, text=f"{emoji} Aa", bg=bg_color, fg=fg_color, 
-                    font=('Segoe UI', 14, 'bold')).place(relx=0.5, rely=0.5, anchor='center')
-            
-            rb = tk.Radiobutton(card, text=theme_name, variable=self.theme_var, 
-                               value=theme_name, bg='#F0F3F4', fg='#2C3E50', 
-                               font=('Segoe UI', 10), activebackground='#F0F3F4',
-                               command=lambda t=theme_name: self.change_theme(t))
-            rb.pack(pady=5)
-            
-            def on_enter(e, f=card):
-                f.config(bg='#E8F4FD')
-            def on_leave(e, f=card):
-                f.config(bg='#F0F3F4')
-            
-            card.bind('<Enter>', on_enter)
-            card.bind('<Leave>', on_leave)
-            
-            themes_grid.grid_columnconfigure(col, weight=1)
-        for row in range(2):
-            themes_grid.grid_rowconfigure(row, weight=1)
-        
-        apply_frame = tk.Frame(main_frame, bg='white')
-        apply_frame.pack(fill=tk.X, pady=20)
-        
-        tk.Button(apply_frame, text="✅ Применить тему", bg='#3498DB', fg='white',
-                 font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', 
-                 command=lambda: self.change_theme(self.theme_var.get())).pack()
-    
-    def _create_security_tab(self, notebook):
-        """Вкладка безопасности"""
-        security_frame = ttk.Frame(notebook)
-        notebook.add(security_frame, text="🔒 Безопасность")
-        
-        main_frame = tk.Frame(security_frame, bg='white')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        tk.Label(main_frame, text="🔐 Изменение PIN-кода входа", 
-                font=('Segoe UI', 14, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
-        
-        info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
-        info_frame.pack(fill=tk.X, pady=(0, 20))
-        tk.Label(info_frame, text="💡 PIN-код используется для входа в систему. Должен содержать 4-8 цифр.",
-                font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D').pack(padx=10, pady=10)
-        
-        fields_frame = tk.Frame(main_frame, bg='white')
-        fields_frame.pack(fill=tk.X, pady=10)
-        
-        labels = ["Текущий PIN-код:", "Новый PIN-код (4-8 цифр):", "Подтвердите новый PIN-код:"]
-        self.pin_entries = []
-        
-        for i, label in enumerate(labels):
-            tk.Label(fields_frame, text=label, font=('Segoe UI', 11), 
-                    bg='white', fg='#2C3E50').pack(anchor='w', pady=(10, 5))
-            
-            entry = tk.Entry(fields_frame, font=('Segoe UI', 12), 
-                           bg='#F5F7FA', fg='#2C3E50',
-                           bd=0, highlightthickness=2, 
-                           highlightcolor='#3498DB', highlightbackground='#BDC3C7',
-                           show='•' if i > 0 else '')
-            entry.pack(fill=tk.X, ipady=8, pady=(0, 5))
-            self.pin_entries.append(entry)
-        
-        self.pin_status = tk.Label(main_frame, text="", bg='white', fg='#E74C3C', 
-                                  font=('Segoe UI', 10))
-        self.pin_status.pack(anchor='w', pady=5)
-        
-        btn_frame = tk.Frame(main_frame, bg='white')
-        btn_frame.pack(fill=tk.X, pady=20)
-        
-        tk.Button(btn_frame, text="🔑 Изменить PIN-код", bg='#3498DB', fg='white',
-                 font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=self._change_pin).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_frame, text="🔄 Сбросить PIN (1234)", bg='#E67E22', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._reset_pin).pack(side=tk.LEFT, padx=5)
-    
-    def _change_pin(self):
-        """Изменение PIN-кода"""
-        old_pin = self.pin_entries[0].get().strip()
-        new_pin = self.pin_entries[1].get().strip()
-        confirm_pin = self.pin_entries[2].get().strip()
-        
-        pin_file = os.path.join(self.bitos.base_path, "System", "Security", "pin.hash")
-        saved_hash = ""
-        if os.path.exists(pin_file):
-            with open(pin_file, 'r') as f:
-                saved_hash = f.read().strip()
-        
-        if hashlib.sha256(old_pin.encode()).hexdigest() != saved_hash:
-            self.pin_status.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
-            return
-        if not new_pin.isdigit():
-            self.pin_status.config(text="❌ PIN-код должен состоять только из цифр", fg='#E74C3C')
-            return
-        if len(new_pin) < 4 or len(new_pin) > 8:
-            self.pin_status.config(text="❌ PIN-код должен быть от 4 до 8 цифр", fg='#E74C3C')
-            return
-        if new_pin != confirm_pin:
-            self.pin_status.config(text="❌ PIN-коды не совпадают", fg='#E74C3C')
-            return
-        
-        os.makedirs(os.path.dirname(pin_file), exist_ok=True)
-        with open(pin_file, 'w') as f:
-            f.write(hashlib.sha256(new_pin.encode()).hexdigest())
-        
-        self.pin_status.config(text="✅ PIN-код успешно изменён!", fg='#27AE60')
-        
-        for entry in self.pin_entries:
-            entry.delete(0, tk.END)
-        
-        if hasattr(self.bitos, 'security'):
-            self.bitos.security.log_pin_change(self.username)
-    
-    def _reset_pin(self):
-        """Сброс PIN-кода до 1234"""
-        if messagebox.askyesno("Сброс PIN", "Сбросить PIN-код до значения по умолчанию (1234)?"):
-            pin_file = os.path.join(self.bitos.base_path, "System", "Security", "pin.hash")
-            os.makedirs(os.path.dirname(pin_file), exist_ok=True)
-            with open(pin_file, 'w') as f:
-                f.write(hashlib.sha256("1234".encode()).hexdigest())
-            
-            self.pin_status.config(text="✅ PIN-код сброшен до 1234", fg='#27AE60')
-            for entry in self.pin_entries:
-                entry.delete(0, tk.END)
-    
-    def _create_account_tab(self, notebook):
-        """Вкладка аккаунта - заглушка"""
-        account_frame = ttk.Frame(notebook)
-        notebook.add(account_frame, text="🔐 Аккаунт")
-        
-        main_frame = tk.Frame(account_frame, bg='white')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        tk.Label(main_frame, text="🔐 Управление аккаунтом", 
-                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 10))
-        
-        tk.Label(main_frame, text="Вход в аккаунт через Google Firebase", 
-                font=('Segoe UI', 11), bg='white', fg='#7F8C8D').pack(anchor='w', pady=(0, 20))
-        
-        info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
-        info_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        tk.Label(info_frame, text="🚧 Функция в разработке", 
-                font=('Segoe UI', 14, 'bold'), bg='#F0F3F4', fg='#E67E22').pack(pady=20)
-        
-        tk.Label(info_frame, text="В будущем здесь будет доступен вход через Google Firebase,\n"
-                                 "синхронизация настроек и данных между устройствами.", 
-                font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D', justify='center').pack(pady=10)
-        
-        login_frame = tk.Frame(main_frame, bg='white', relief=tk.RIDGE, bd=1)
-        login_frame.pack(fill=tk.X, pady=10)
-        
-        tk.Label(login_frame, text="🔑 Вход в аккаунт (заглушка)", 
-                font=('Segoe UI', 12, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
-        
-        tk.Label(login_frame, text="Email:", font=('Segoe UI', 10), bg='white', fg='#7F8C8D').pack(anchor='w', padx=15)
-        email_entry = tk.Entry(login_frame, font=('Segoe UI', 11), bg='#F5F7FA', 
-                              fg='#7F8C8D', state='disabled')
-        email_entry.pack(fill=tk.X, padx=15, pady=(5, 10), ipady=8)
-        email_entry.insert(0, "user@example.com")
-        
-        tk.Label(login_frame, text="Пароль:", font=('Segoe UI', 10), bg='white', fg='#7F8C8D').pack(anchor='w', padx=15)
-        pass_entry = tk.Entry(login_frame, font=('Segoe UI', 11), bg='#F5F7FA', 
-                             fg='#7F8C8D', state='disabled', show='•')
-        pass_entry.pack(fill=tk.X, padx=15, pady=(5, 10), ipady=8)
-        pass_entry.insert(0, "password123")
-        
-        btn_frame = tk.Frame(login_frame, bg='white')
-        btn_frame.pack(fill=tk.X, padx=15, pady=10)
-        
-        tk.Button(btn_frame, text="🔑 Войти", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_frame, text="📝 Регистрация", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_frame, text="🌐 Google", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
-    
-    def _create_updates_tab(self, notebook):
-        """Вкладка обновлений - заглушка"""
-        updates_frame = ttk.Frame(notebook)
-        notebook.add(updates_frame, text="📦 Обновления")
-        
-        main_frame = tk.Frame(updates_frame, bg='white')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        tk.Label(main_frame, text="📦 Система обновлений BITOS", 
-                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 10))
-        
-        tk.Label(main_frame, text="Проверка и установка обновлений с GitHub", 
-                font=('Segoe UI', 11), bg='white', fg='#7F8C8D').pack(anchor='w', pady=(0, 20))
-        
-        info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
-        info_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        tk.Label(info_frame, text=f"📌 Текущая версия: {self.bitos.version} ({self.bitos.build})",
-                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
-        
-        version_frame = tk.Frame(info_frame, bg='#F0F3F4')
-        version_frame.pack(fill=tk.X, padx=15, pady=5)
-        
-        tk.Label(version_frame, text="🔍 Статус:", font=('Segoe UI', 11), 
-                bg='#F0F3F4', fg='#2C3E50').pack(side=tk.LEFT)
-        
-        tk.Label(version_frame, text="✅ Установлена последняя версия", 
-                font=('Segoe UI', 11, 'bold'), bg='#F0F3F4', fg='#27AE60').pack(side=tk.LEFT, padx=(10, 0))
-        
-        btn_frame = tk.Frame(main_frame, bg='white')
-        btn_frame.pack(fill=tk.X, pady=10)
-        
-        tk.Button(btn_frame, text="🔍 Проверить обновления", bg='#3498DB', fg='white',
-                 font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_frame, text="⬇️ Загрузить и установить", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
-        
-        log_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=1)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
-        
-        tk.Label(log_frame, text="📋 Лог обновлений:", font=('Segoe UI', 10, 'bold'),
-                bg='white', fg='#2C3E50').pack(anchor='w', padx=10, pady=5)
-        
-        log_text = scrolledtext.ScrolledText(log_frame, font=('Consolas', 9), 
-                                            bg='#1E1E1E', fg='#00FF00',
-                                            height=6, wrap=tk.WORD)
-        log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        log_text.insert('1.0', "📦 Система обновлений готова\n")
-        log_text.insert('end', "🔍 Для проверки обновлений нажмите 'Проверить обновления'\n")
-        log_text.insert('end', "🚧 Автоматическое обновление будет доступно в следующей версии\n")
-        log_text.config(state='disabled')
-    
-    def _create_system_tab(self, notebook, settings_window):
-        """Вкладка системной информации"""
-        system_frame = ttk.Frame(notebook)
-        notebook.add(system_frame, text="💻 Система")
-        
-        main_frame = tk.Frame(system_frame, bg='white')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        tk.Label(main_frame, text="💻 Системная информация", 
-                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
-        
-        info_data = [
-            ("🖥️ Система:", platform.system()),
-            ("📀 Версия ядра:", platform.release()),
-            ("🔧 Архитектура:", platform.machine()),
-            ("🐍 Python:", platform.python_version()),
-            ("📦 BITOS версия:", self.bitos.version),
-            ("🔨 Сборка:", self.bitos.build),
-            ("👤 Пользователь:", self.username),
-            ("📁 Директория:", self.bitos.base_path),
-        ]
-        
-        for label, value in info_data:
-            frame = tk.Frame(main_frame, bg='white')
-            frame.pack(fill=tk.X, pady=4)
-            
-            tk.Label(frame, text=label, font=('Segoe UI', 10, 'bold'), 
-                    bg='white', fg='#2C3E50', width=18, anchor='w').pack(side=tk.LEFT)
-            tk.Label(frame, text=value, font=('Segoe UI', 10), 
-                    bg='white', fg='#7F8C8D', anchor='w').pack(side=tk.LEFT, padx=(10, 0))
-        
-        stats_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
-        stats_frame.pack(fill=tk.X, pady=20)
-        
-        tk.Label(stats_frame, text="📊 Статистика сессии", 
-                font=('Segoe UI', 12, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
-        
-        if hasattr(self.bitos, 'security'):
-            stats = self.bitos.security.get_session_summary()
-            stat_items = [
-                ("⏱️ Длительность:", stats.get('duration', 'Unknown')),
-                ("📱 Запущено приложений:", stats.get('apps_launched', 0)),
-                ("📁 Открыто файлов:", stats.get('files_accessed', 0)),
-                ("🗑️ Удалено файлов:", stats.get('files_deleted', 0)),
-                ("⚠️ Ошибок:", stats.get('errors', 0)),
-                ("🔐 Событий безопасности:", stats.get('security_events', 0)),
-            ]
-            
-            for label, value in stat_items:
-                frame = tk.Frame(stats_frame, bg='#F0F3F4')
-                frame.pack(fill=tk.X, padx=15, pady=2)
-                tk.Label(frame, text=label, font=('Segoe UI', 10), 
-                        bg='#F0F3F4', fg='#2C3E50', width=20, anchor='w').pack(side=tk.LEFT)
-                tk.Label(frame, text=str(value), font=('Segoe UI', 10, 'bold'), 
-                        bg='#F0F3F4', fg='#3498DB').pack(side=tk.LEFT)
-        
-        tk.Button(main_frame, text="🔄 Обновить информацию", bg='#3498DB', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', 
-                 command=lambda: self._refresh_system_tab(notebook, settings_window)).pack(pady=10)
-    
-    def _refresh_system_tab(self, notebook, settings_window):
-        """Обновление системной информации"""
-        for i, tab in enumerate(notebook.tabs()):
-            if notebook.tab(tab, "text") == "💻 Система":
-                notebook.forget(tab)
-                break
-        
-        self._create_system_tab(notebook, settings_window)
-    
-    def _show_coming_soon(self):
-        """Показать сообщение о разработке"""
-        messagebox.showinfo("В разработке", 
-            "🚧 Эта функция находится в разработке.\n\n"
-            "В ближайшее время будет добавлена.")
-
-    # ==================== ТЕМЫ ====================
-    
-    def change_theme(self, theme_name):
-        """Смена темы оформления"""
-        if theme_name in self.THEMES:
-            old_theme = self.current_theme
-            self.current_theme = theme_name
-            self.theme_colors = self.THEMES[theme_name]
-            self.save_theme(theme_name)
-            
-            self.root.configure(bg=self.theme_colors['bg'])
-            self.canvas.config(bg=self.theme_colors['canvas_bg'])
-            
-            self.update_wallpaper()
-            self.taskbar.update_theme(self.theme_colors)
-            
-            for icon in self.canvas.desktop_icons:
-                try:
-                    icon.update_theme(self.theme_colors['icon_fg'])
-                except tk.TclError:
-                    pass
-            
-            for widget in self.widgets[:]:
-                try:
-                    widget.update_theme(self.theme_colors)
-                except:
-                    if widget in self.widgets:
-                        self.widgets.remove(widget)
-            
-            self.canvas.tag_raise('icon')
-            
-            for icon in self.canvas.desktop_icons:
-                icon.selected = False
-                if not icon.hover:
-                    try:
-                        self.canvas.itemconfig(icon.icon_id_obj, fill=self.theme_colors['icon_fg'])
-                        self.canvas.itemconfig(icon.text_id, fill=self.theme_colors['icon_fg'])
-                    except tk.TclError:
-                        pass
-            
-            if hasattr(self.bitos, 'security'):
-                self.bitos.security.log_theme_change(self.username, old_theme, theme_name)
-            
-            self.notification_center.add_notification(
-                "🎨 Тема изменена",
-                f"Применена тема: {theme_name}",
-                icon="🎨",
-                duration=3000
-            )
-    
-    def load_theme(self):
-        """Загрузка темы"""
-        theme_file = os.path.join(self.bitos.system_paths["config"], "theme.cfg")
-        if os.path.exists(theme_file):
-            try:
-                with open(theme_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    theme = data.get('theme', 'Темная')
-                    if theme in self.THEMES:
-                        return theme
-            except:
-                pass
-        return "Темная"
-    
-    def save_theme(self, theme_name):
-        """Сохранение темы"""
-        theme_file = os.path.join(self.bitos.system_paths["config"], "theme.cfg")
-        try:
-            with open(theme_file, 'w', encoding='utf-8') as f:
-                json.dump({'theme': theme_name}, f, indent=4)
-        except:
-            pass
-
-    # ==================== ВИДЖЕТЫ ====================
-    
-    def load_widgets(self):
-        """Загрузка сохранённых виджетов"""
-        widgets_file = os.path.join(self.bitos.system_paths["config"], "widgets.json")
-        if os.path.exists(widgets_file):
-            try:
-                with open(widgets_file, 'r', encoding='utf-8') as f:
-                    widgets_config = json.load(f)
-                
-                for widget in self.widgets[:]:
-                    try:
-                        widget.destroy()
-                    except:
-                        pass
-                self.widgets.clear()
-                
-                for config in widgets_config:
-                    self.add_widget_from_config(config)
-            except:
-                pass
-        
-        if not self.widgets:
-            self.add_default_widgets()
-    
-    def save_widgets(self):
-        """Сохранение виджетов"""
-        widgets_file = os.path.join(self.bitos.system_paths["config"], "widgets.json")
-        configs = []
-        for widget in self.widgets:
-            try:
-                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
-                    configs.append(widget.get_config())
-            except:
-                pass
-        try:
-            with open(widgets_file, 'w', encoding='utf-8') as f:
-                json.dump(configs, f, indent=4, ensure_ascii=False)
-        except:
-            pass
-    
-    def add_default_widgets(self):
-        """Добавление виджетов по умолчанию"""
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        
-        clock_widget = ClockWidget(self.canvas, self.theme_colors, 
-                                  screen_width - 220, 50)
-        self.widgets.append(clock_widget)
-        
-        calendar_widget = CalendarWidget(self.canvas, self.theme_colors,
-                                        screen_width - 220, 200)
-        self.widgets.append(calendar_widget)
-        
-        sticker_widget = StickerWidget(self.canvas, self.theme_colors,
-                                      50, screen_height - 250,
-                                      "✨ Добро пожаловать в BITOS!\n\n"
-                                      "• Правый клик — меню\n"
-                                      "• Двойной клик — запуск\n"
-                                      "• Перетаскивайте ярлыки\n\n"
-                                      "🕐 Виджеты можно двигать\n"
-                                      "🎨 Темы в настройках")
-        self.widgets.append(sticker_widget)
-        
-        self.save_widgets()
-    
-    def add_widget_from_config(self, config):
-        """Добавление виджета из конфигурации"""
-        widget_type = config.get('type')
-        x = config.get('x', 50)
-        y = config.get('y', 50)
-        
-        try:
-            if widget_type == 'clock':
-                widget = ClockWidget(self.canvas, self.theme_colors, x, y)
-            elif widget_type == 'calendar':
-                widget = CalendarWidget(self.canvas, self.theme_colors, x, y)
-            elif widget_type == 'sticker':
-                widget = StickerWidget(self.canvas, self.theme_colors, x, y, 
-                                      config.get('text', ''))
-            else:
-                return
-            
-            self.widgets.append(widget)
-        except:
-            pass
-    
-    def update_widgets_position(self):
-        """Обновление позиций всех виджетов"""
-        for widget in self.widgets[:]:
-            try:
-                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
-                    if hasattr(widget, 'update_position'):
-                        widget.update_position()
-                else:
-                    self.widgets.remove(widget)
-            except:
-                if widget in self.widgets:
-                    self.widgets.remove(widget)
-    
-    def toggle_widgets(self):
-        """Показать/скрыть виджеты"""
-        self.widget_visible = not self.widget_visible
-        for widget in self.widgets[:]:
-            try:
-                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
-                    if self.widget_visible:
-                        widget.show()
-                    else:
-                        widget.hide()
-                else:
-                    self.widgets.remove(widget)
-            except:
-                if widget in self.widgets:
-                    self.widgets.remove(widget)
-        
-        status = "показаны" if self.widget_visible else "скрыты"
-        self.notification_center.add_notification(
-            "Виджеты",
-            f"Виджеты {status}",
-            icon="📌",
-            duration=2000
-        )
-    
-    def add_widget(self, widget_type):
-        """Добавление нового виджета"""
-        x = random.randint(50, 300)
-        y = random.randint(50, 300)
-        
-        try:
-            if widget_type == 'clock':
-                widget = ClockWidget(self.canvas, self.theme_colors, x, y)
-            elif widget_type == 'calendar':
-                widget = CalendarWidget(self.canvas, self.theme_colors, x, y)
-            elif widget_type == 'sticker':
-                widget = StickerWidget(self.canvas, self.theme_colors, x, y, 
-                                      "📝 Новая заметка\n\nПравый клик — изменить\nЛевый клик — перетащить")
-            else:
-                return
-            
-            self.widgets.append(widget)
-            self.save_widgets()
-            
-            self.notification_center.add_notification(
-                "Виджет добавлен",
-                f"Виджет '{widget_type}' добавлен на рабочий стол",
-                icon="📌"
-            )
-        except:
-            pass
-    
-    def remove_all_widgets(self):
-        """Удаление всех виджетов"""
-        if messagebox.askyesno("Удаление виджетов", "Удалить все виджеты с рабочего стола?"):
-            for widget in self.widgets[:]:
-                try:
-                    widget.destroy()
-                except:
-                    pass
-            self.widgets.clear()
-            self.save_widgets()
-            
-            self.notification_center.add_notification(
-                "Виджеты удалены",
-                "Все виджеты удалены с рабочего стола",
-                icon="🗑"
-            )
+        SettingsWindow(self.root, self)
 
     # ==================== КОНТЕКСТНОЕ МЕНЮ ====================
     
@@ -6264,6 +6496,146 @@ class Desktop:
             callback=self.update_wallpaper
         )
 
+    # ==================== ВИДЖЕТЫ ====================
+    
+    def load_widgets(self):
+        """Загрузка сохранённых виджетов"""
+        widgets_file = os.path.join(self.bitos.system_paths["config"], "widgets.json")
+        if os.path.exists(widgets_file):
+            try:
+                with open(widgets_file, 'r', encoding='utf-8') as f:
+                    widgets_config = json.load(f)
+                
+                for widget in self.widgets[:]:
+                    try:
+                        widget.destroy()
+                    except:
+                        pass
+                self.widgets.clear()
+                
+                for config in widgets_config:
+                    self.add_widget_from_config(config)
+            except:
+                pass
+    
+    def save_widgets(self):
+        """Сохранение виджетов"""
+        widgets_file = os.path.join(self.bitos.system_paths["config"], "widgets.json")
+        configs = []
+        for widget in self.widgets:
+            try:
+                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
+                    configs.append(widget.get_config())
+            except:
+                pass
+        try:
+            with open(widgets_file, 'w', encoding='utf-8') as f:
+                json.dump(configs, f, indent=4, ensure_ascii=False)
+        except:
+            pass
+    
+    def add_widget_from_config(self, config):
+        """Добавление виджета из конфигурации"""
+        widget_type = config.get('type')
+        x = config.get('x', 50)
+        y = config.get('y', 50)
+        
+        try:
+            if widget_type == 'clock':
+                widget = ClockWidget(self.canvas, self.theme_colors, x, y)
+            elif widget_type == 'calendar':
+                widget = CalendarWidget(self.canvas, self.theme_colors, x, y)
+            elif widget_type == 'sticker':
+                widget = StickerWidget(self.canvas, self.theme_colors, x, y, 
+                                      config.get('text', ''))
+            else:
+                return
+            
+            self.widgets.append(widget)
+        except:
+            pass
+    
+    def update_widgets_position(self):
+        """Обновление позиций всех виджетов"""
+        for widget in self.widgets[:]:
+            try:
+                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
+                    if hasattr(widget, 'update_position'):
+                        widget.update_position()
+                else:
+                    self.widgets.remove(widget)
+            except:
+                if widget in self.widgets:
+                    self.widgets.remove(widget)
+    
+    def toggle_widgets(self):
+        """Показать/скрыть виджеты"""
+        self.widget_visible = not self.widget_visible
+        for widget in self.widgets[:]:
+            try:
+                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
+                    if self.widget_visible:
+                        widget.show()
+                    else:
+                        widget.hide()
+                else:
+                    self.widgets.remove(widget)
+            except:
+                if widget in self.widgets:
+                    self.widgets.remove(widget)
+        
+        status = "показаны" if self.widget_visible else "скрыты"
+        self.notification_center.add_notification(
+            "Виджеты",
+            f"Виджеты {status}",
+            icon="📌",
+            duration=2000
+        )
+    
+    def add_widget(self, widget_type):
+        """Добавление нового виджета"""
+        x = random.randint(50, 300)
+        y = random.randint(50, 300)
+        
+        try:
+            if widget_type == 'clock':
+                widget = ClockWidget(self.canvas, self.theme_colors, x, y)
+            elif widget_type == 'calendar':
+                widget = CalendarWidget(self.canvas, self.theme_colors, x, y)
+            elif widget_type == 'sticker':
+                widget = StickerWidget(self.canvas, self.theme_colors, x, y, 
+                                      "📝 Новая заметка\n\nПравый клик — изменить\nЛевый клик — перетащить")
+            else:
+                return
+            
+            self.widgets.append(widget)
+            self.save_widgets()
+            
+            self.notification_center.add_notification(
+                "Виджет добавлен",
+                f"Виджет '{widget_type}' добавлен на рабочий стол",
+                icon="📌"
+            )
+        except:
+            pass
+    
+    def remove_all_widgets(self):
+        """Удаление всех виджетов"""
+        if messagebox.askyesno("Удаление виджетов", "Удалить все виджеты с рабочего стола?"):
+            for widget in self.widgets[:]:
+                try:
+                    widget.destroy()
+                except:
+                    pass
+            self.widgets.clear()
+            self.save_widgets()
+            
+            self.notification_center.add_notification(
+                "Виджеты удалены",
+                "Все виджеты удалены с рабочего стола",
+                icon="🗑"
+            )
+
     # ==================== СИСТЕМНЫЕ ДЕЙСТВИЯ ====================
     
     def reboot(self):
@@ -6296,13 +6668,13 @@ class Desktop:
             self.save_widgets()
             self.root.destroy()
             shutdown_windows()
-        
+
 class BITOS:
-    """Ядро операционной системы BITOS - с виртуальным рабочим столом и звуками"""
+    """Ядро операционной системы BITOS"""
     
     def __init__(self):
-        self.version = "05V6"
-        self.build = "2026.03"
+        self.version = "06V6_28.06"
+        self.build = "2026.06 BETA"
         self.running = True
         self.start_time = time.time()
         self.current_user = "User"
@@ -6331,10 +6703,8 @@ class BITOS:
             "desktop_files": os.path.join(self.base_path, "System", "DesktopFile"),
         }
         
-        # Инициализация путей пользователя
         self._init_user_paths()
         
-        # Пути к системным файлам
         self.system_files = {
             "serial": os.path.join(self.system_paths["security"], "serial.bin"),
             "license": os.path.join(self.system_paths["security"], "license.key"),
@@ -6350,7 +6720,6 @@ class BITOS:
             "wallpaper": os.path.join(self.system_paths["config"], "wallpaper.json"),
         }
         
-        # ЛОГ-ФАЙЛЫ
         self.log_files = {
             "boot": os.path.join(self.system_paths["logs"], "boot.log"),
             "access": os.path.join(self.system_paths["logs"], "access.log"),
@@ -6361,6 +6730,21 @@ class BITOS:
             "security": os.path.join(self.system_paths["logs"], "security.log"),
         }
         
+        # Перехват консоли
+        self._console_buffer = []
+        self._console_lock = threading.Lock()
+        self._console_running = True
+        self._console_log_path = os.path.join(self.system_paths["logs"], "console.log")
+        self._error_log_path = self.log_files["error"]
+        
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        
+        self._init_console_log()
+        sys.stdout = self._ConsoleRedirect(self, False)
+        sys.stderr = self._ConsoleRedirect(self, True)
+        self._start_console_writer()
+        
         self.protected_files = [
             self.system_files["serial"],
             self.system_files["license"],
@@ -6368,25 +6752,139 @@ class BITOS:
             self.system_files["icons_db"],
         ]
         
-        # ===== ЗВУКОВАЯ СИСТЕМА =====
+        # Звуковая система
         self.sound_enabled = True
         self.sound_path = os.path.join(self.base_path, "System", "Sounds")
         os.makedirs(self.sound_path, exist_ok=True)
         
-        # Инициализация
         self.initialize_filesystem()
         self.security = SecurityManager(self)
         
-        # Создаём звуки если их нет
         self._create_sound_files()
-        
-        # Воспроизводим звук запуска
         self.play_sound("startup")
+        
+        # Менеджер мониторов - будет создан в after_login
+        self.monitor_manager = None
         
         self.run()
     
+    # ==================== МЕТОДЫ ПЕРЕХВАТА КОНСОЛИ ====================
+    
+    def _init_console_log(self):
+        try:
+            os.makedirs(os.path.dirname(self._console_log_path), exist_ok=True)
+            if not os.path.exists(self._console_log_path):
+                with open(self._console_log_path, 'w', encoding='utf-8') as f:
+                    f.write(f"""
+╔══════════════════════════════════════════════════════════════════╗
+║                    BITOS CONSOLE LOG                            ║
+╠══════════════════════════════════════════════════════════════════╣
+║ Started:  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+║ System:   {platform.system()} {platform.release()}
+║ Python:   {platform.python_version()}
+╠══════════════════════════════════════════════════════════════════╣
+""")
+        except:
+            pass
+    
+    class _ConsoleRedirect:
+        def __init__(self, bitos, is_error):
+            self.bitos = bitos
+            self.is_error = is_error
+        
+        def write(self, text):
+            if text:
+                if self.is_error:
+                    self.bitos._original_stderr.write(text)
+                else:
+                    self.bitos._original_stdout.write(text)
+                
+                if text.strip():
+                    with self.bitos._console_lock:
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        prefix = "[STDERR]" if self.is_error else "[STDOUT]"
+                        lines = text.strip().split('\n')
+                        for line in lines:
+                            if line.strip():
+                                entry = f"{timestamp} {prefix} {line.strip()}\n"
+                                self.bitos._console_buffer.append(entry)
+                                
+                                if self.is_error or self._is_error_message(line):
+                                    error_entry = f"""
+┌─────────────────────────────────────────────────────────────────────
+│ [{timestamp}] ❌ CONSOLE ERROR DETECTED
+│ Source:   console_output
+│ Type:     ConsoleError
+│ Message:  {line.strip()[:500]}
+└─────────────────────────────────────────────────────────────────────
+"""
+                                    try:
+                                        with open(self.bitos._error_log_path, 'a', encoding='utf-8') as f:
+                                            f.write(error_entry)
+                                            f.flush()
+                                    except:
+                                        pass
+        
+        def _is_error_message(self, line):
+            error_keywords = [
+                "error", "ошибк", "exception", "исключени",
+                "traceback", "failed", "не удалось",
+                "invalid", "неверн", "cannot", "не мож",
+                "permission", "доступ", "not found", "не найден",
+                "TclError", "AttributeError", "TypeError", "ValueError",
+                "KeyError", "IndexError", "FileNotFoundError",
+            ]
+            line_lower = line.lower()
+            for keyword in error_keywords:
+                if keyword.lower() in line_lower:
+                    return True
+            return False
+        
+        def flush(self):
+            if self.is_error:
+                self.bitos._original_stderr.flush()
+            else:
+                self.bitos._original_stdout.flush()
+    
+    def _start_console_writer(self):
+        def writer():
+            while self._console_running:
+                time.sleep(0.3)
+                if not self._console_buffer:
+                    continue
+                
+                with self._console_lock:
+                    entries = self._console_buffer.copy()
+                    self._console_buffer.clear()
+                
+                try:
+                    with open(self._console_log_path, 'a', encoding='utf-8') as f:
+                        for entry in entries:
+                            f.write(entry)
+                        f.flush()
+                except:
+                    pass
+        
+        threading.Thread(target=writer, daemon=True, name="ConsoleWriter").start()
+    
+    def _stop_console_writer(self):
+        self._console_running = False
+        try:
+            with self._console_lock:
+                if self._console_buffer:
+                    with open(self._console_log_path, 'a', encoding='utf-8') as f:
+                        for entry in self._console_buffer:
+                            f.write(entry)
+                    self._console_buffer.clear()
+        except:
+            pass
+        
+        sys.stdout = self._original_stdout
+        sys.stderr = self._original_stderr
+    
+    # ==================== ИНИЦИАЛИЗАЦИЯ ПУТЕЙ ====================
+    
     def _init_user_paths(self):
-        """Инициализация путей пользователя"""
         home = os.path.expanduser("~")
         
         self.user_paths = {
@@ -6410,19 +6908,17 @@ class BITOS:
     # ==================== ЗВУКОВАЯ СИСТЕМА ====================
     
     def _create_sound_files(self):
-        """Создание простых звуковых файлов"""
         sounds = {
-            "startup.wav": (0.5, 523, 0.7),     # До - запуск
-            "logon.wav": (0.4, 660, 0.5),       # Ми - вход
-            "logoff.wav": (0.3, 392, 0.4),      # Соль - выход
-            "shutdown.wav": (0.5, 330, 0.5),    # Ми низкая - выключение
-            "error.wav": (0.3, 200, 0.3),       # Низкий - ошибка
-            "notification.wav": (0.2, 880, 0.3), # Высокий - уведомление
-            "click.wav": (0.1, 1200, 0.1),      # Короткий высокий - клик
-            "success.wav": (0.3, 660, 0.4),     # Ми - успех
-            "warning.wav": (0.3, 440, 0.3),     # Ля - предупреждение
-            "usb_connect.wav": (0.3, 880, 0.3), # Подключение USB
-            "usb_disconnect.wav": (0.2, 440, 0.2), # Отключение USB
+            "startup.wav": (0.5, 523, 0.7),
+            "logon.wav": (0.4, 660, 0.5),
+            "logoff.wav": (0.3, 392, 0.4),
+            "shutdown.wav": (0.5, 330, 0.5),
+            "error.wav": (0.3, 200, 0.3),
+            "notification.wav": (0.2, 880, 0.3),
+            "success.wav": (0.3, 660, 0.4),
+            "warning.wav": (0.3, 440, 0.3),
+            "usb_connect.wav": (0.3, 880, 0.3),
+            "usb_disconnect.wav": (0.2, 440, 0.2),
         }
         
         for filename, params in sounds.items():
@@ -6431,7 +6927,6 @@ class BITOS:
                 self._create_wav(filepath, *params)
     
     def _create_wav(self, filepath, duration, frequency, amplitude):
-        """Создание WAV файла"""
         try:
             import wave
             import struct
@@ -6454,7 +6949,6 @@ class BITOS:
             return False
     
     def play_sound(self, sound_name):
-        """Воспроизведение звука"""
         if not self.sound_enabled:
             return
         
@@ -6470,12 +6964,16 @@ class BITOS:
                 winsound.PlaySound(filepath, winsound.SND_FILENAME | winsound.SND_ASYNC)
             else:
                 try:
-                    import subprocess
                     subprocess.Popen(['paplay', filepath], 
                                    stdout=subprocess.DEVNULL, 
                                    stderr=subprocess.DEVNULL)
                 except:
-                    print('\a', end='', flush=True)
+                    try:
+                        subprocess.Popen(['aplay', filepath],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+                    except:
+                        print('\a', end='', flush=True)
         except:
             try:
                 print('\a', end='', flush=True)
@@ -6483,47 +6981,33 @@ class BITOS:
                 pass
     
     def play_logon(self):
-        """Звук входа"""
         self.play_sound("logon")
     
     def play_logoff(self):
-        """Звук выхода"""
         self.play_sound("logoff")
     
     def play_shutdown(self):
-        """Звук выключения"""
         self.play_sound("shutdown")
     
     def play_error(self):
-        """Звук ошибки"""
         self.play_sound("error")
     
     def play_notification(self):
-        """Звук уведомления"""
         self.play_sound("notification")
     
-    def play_click(self):
-        """Звук клика"""
-        self.play_sound("click")
-    
     def play_success(self):
-        """Звук успеха"""
         self.play_sound("success")
     
     def play_warning(self):
-        """Звук предупреждения"""
         self.play_sound("warning")
     
     def play_usb_connect(self):
-        """Звук подключения USB"""
         self.play_sound("usb_connect")
     
     def play_usb_disconnect(self):
-        """Звук отключения USB"""
         self.play_sound("usb_disconnect")
     
     def toggle_sound(self):
-        """Включить/выключить звук"""
         self.sound_enabled = not self.sound_enabled
         if self.sound_enabled:
             self.play_sound("notification")
@@ -6532,22 +7016,18 @@ class BITOS:
     # ==================== ФАЙЛОВАЯ СИСТЕМА ====================
     
     def initialize_filesystem(self):
-        """Инициализация файловой системы"""
         print("=" * 60)
         print("🔧 ИНИЦИАЛИЗАЦИЯ ФАЙЛОВОЙ СИСТЕМЫ BITOS")
         print("=" * 60)
         
-        # СОЗДАЁМ СИСТЕМНЫЕ ПАПКИ
         for name, path in self.system_paths.items():
             os.makedirs(path, exist_ok=True)
             print(f"  ✅ Создана папка: {name} -> {path}")
         
-        # СОЗДАЁМ ПАПКУ ВИРТУАЛЬНОГО РАБОЧЕГО СТОЛА
         default_desktop = os.path.join(self.system_paths["desktop_files"], self.current_user)
         os.makedirs(default_desktop, exist_ok=True)
         print(f"  ✅ Создан виртуальный рабочий стол: {default_desktop}")
         
-        # СОЗДАЁМ ПАПКУ КОРЗИНЫ
         trash_path = os.path.join(self.system_paths["desktop_files"], ".trash")
         os.makedirs(trash_path, exist_ok=True)
         print(f"  ✅ Создана папка корзины: {trash_path}")
@@ -6575,8 +7055,6 @@ class BITOS:
         print("=" * 60 + "\n")
     
     def create_system_files(self):
-        """Создание системных файлов"""
-        # system.cfg
         if not os.path.exists(self.system_files["system_config"]):
             config_data = {
                 "version": self.version,
@@ -6595,7 +7073,6 @@ class BITOS:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
             print(f"  ✅ Создан system.cfg")
         
-        # serial.bin
         if not os.path.exists(self.system_files["serial"]):
             serial = self.generate_serial()
             with open(self.system_files["serial"], "w", encoding="utf-8") as f:
@@ -6604,7 +7081,6 @@ class BITOS:
                 f.write(f"Version: {self.version}\n")
             print(f"  ✅ Создан serial.bin: {serial}")
         
-        # license.key
         if not os.path.exists(self.system_files["license"]):
             license_data = {
                 "product": "BITOS",
@@ -6619,26 +7095,23 @@ class BITOS:
                 json.dump(license_data, f, indent=4, ensure_ascii=False)
             print(f"  ✅ Создан license.key")
         
-        # pin.hash
         if not os.path.exists(self.system_files["pin_db"]):
             default_pin_hash = hashlib.sha256("1234".encode()).hexdigest()
             with open(self.system_files["pin_db"], "w") as f:
                 f.write(default_pin_hash)
             print(f"  ✅ Создан pin.hash (PIN по умолчанию: 1234)")
         
-        # icons.json
         if not os.path.exists(self.system_files["icons_db"]):
             default_icons = {
                 "shortcuts": [],
                 "widgets": [],
-                "theme": "Темная",
+                "theme": "Базовая",
                 "wallpaper": None
             }
             with open(self.system_files["icons_db"], "w", encoding="utf-8") as f:
                 json.dump(default_icons, f, indent=4, ensure_ascii=False)
             print(f"  ✅ Создан icons.json")
         
-        # users.db
         if not os.path.exists(self.system_files["users_db"]):
             users_data = {
                 self.current_user: {
@@ -6655,7 +7128,6 @@ class BITOS:
             print(f"  ✅ Создан users.db")
     
     def init_log_files(self):
-        """Инициализация лог-файлов"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_headers = {
             "boot": f"╔══════════════════════════════════════════════════════════════════╗\n║                      BITOS BOOT LOG                               ║\n╠══════════════════════════════════════════════════════════════════╣\n║ Version: {self.version} ({self.build})\n║ Date: {datetime.now().strftime('%Y-%m-%d')}\n║ Time: {datetime.now().strftime('%H:%M:%S')}\n║ User: {self.current_user}\n║ Mode: Virtual Desktop (System/DesktopFile/)\n╠══════════════════════════════════════════════════════════════════╣\n",
@@ -6674,13 +7146,11 @@ class BITOS:
                 print(f"  ✅ Создан {log_name}.log")
     
     def write_boot_info(self):
-        """Запись информации о загрузке"""
         boot_info = f"\n{'='*66}\nBITOS BOOT SEQUENCE COMPLETED\n{'='*66}\nVersion:     {self.version} ({self.build})\nBoot time:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nUser:        {self.current_user}\nPython:      {platform.python_version()}\nPlatform:    {platform.system()} {platform.release()}\nMachine:     {platform.machine()}\nMode:        Virtual Desktop\nDesktop:     System/DesktopFile/{self.current_user}/\n{'='*66}\n"
         with open(self.log_files["boot"], 'a', encoding='utf-8') as f:
             f.write(boot_info)
     
     def generate_serial(self):
-        """Генерация серийного номера"""
         import uuid
         try:
             mac = uuid.getnode()
@@ -6692,7 +7162,6 @@ class BITOS:
         return formatted
     
     def calculate_checksum(self, filepath):
-        """Вычисление контрольной суммы файла"""
         if not os.path.exists(filepath):
             return None
         try:
@@ -6702,7 +7171,6 @@ class BITOS:
             return None
     
     def save_checksums(self):
-        """Сохранение контрольных сумм"""
         checksums = {}
         for filepath in self.protected_files:
             if os.path.exists(filepath):
@@ -6714,7 +7182,6 @@ class BITOS:
             self.security.log_audit(f"Checksums saved for {len(checksums)} files")
     
     def load_checksums(self):
-        """Загрузка контрольных сумм"""
         if os.path.exists(self.system_files["checksums"]):
             try:
                 with open(self.system_files["checksums"], 'r', encoding='utf-8') as f:
@@ -6724,7 +7191,6 @@ class BITOS:
         return {}
     
     def verify_and_restore_files(self):
-        """Проверка и восстановление файлов"""
         saved = self.load_checksums()
         modified = []
         for filepath in self.protected_files:
@@ -6739,7 +7205,6 @@ class BITOS:
         return len(modified)
     
     def restore_file(self, filepath):
-        """Восстановление файла"""
         filename = os.path.basename(filepath)
         backup_dir = os.path.join(self.system_paths["temp"], "security_backups")
         os.makedirs(backup_dir, exist_ok=True)
@@ -6776,7 +7241,7 @@ class BITOS:
                 default_icons = {
                     "shortcuts": [],
                     "widgets": [],
-                    "theme": "Темная",
+                    "theme": "Базовая",
                     "wallpaper": None
                 }
                 with open(filepath, 'w', encoding='utf-8') as f:
@@ -6794,14 +7259,12 @@ class BITOS:
                 self.security.log_error("Restore", str(e), f"File: {filename}")
     
     def log(self, message):
-        """Запись в лог"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         with open(self.log_files["boot"], 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] {message}\n")
         print(message)
     
     def dev_log(self, message):
-        """Лог разработчика"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
             with open(self.system_files["dev_log"], "a", encoding="utf-8") as f:
@@ -6809,10 +7272,15 @@ class BITOS:
         except:
             pass
     
+    # ==================== МЕТОДЫ ДЛЯ РАБОТЫ С МОНИТОРАМИ ====================
+    
+    def get_monitor_manager(self):
+        """Получение менеджера мониторов"""
+        return getattr(self, 'monitor_manager', None)
+    
     # ==================== ЗАГРУЗКА ====================
     
     def boot_sequence(self):
-        """Последовательность загрузки"""
         splash = SplashScreen()
         stages = [
             (10, "Проверка компонентов...", "Сканирование системных модулей"),
@@ -6822,7 +7290,7 @@ class BITOS:
             (70, "Проверка безопасности...", "Анализ защищенных файлов"),
             (85, "Запуск служб...", "Инициализация сервисов"),
             (95, "Подготовка интерфейса...", "Загрузка графических компонентов"),
-            (100, "Готов к работе!", "Добро пожаловать в BITOS 05V6")
+            (100, "Готов к работе!", "Добро пожаловать в BITOS 06V6")
         ]
         for progress, status, details in stages:
             splash.update_progress(progress, status, details)
@@ -6833,31 +7301,23 @@ class BITOS:
         login.run()
     
     def after_login(self, username):
-        """Действия после входа пользователя"""
         self.current_user = username
-        
-        # Обновляем пути пользователя
         self._init_user_paths()
         
-        # СОЗДАЁМ ВИРТУАЛЬНЫЙ РАБОЧИЙ СТОЛ
         virtual_desktop = os.path.join(self.system_paths["desktop_files"], username)
         os.makedirs(virtual_desktop, exist_ok=True)
         print(f"[BITOS] Виртуальный рабочий стол создан: {virtual_desktop}")
         
-        # Создаём папку корзины
         user_trash = os.path.join(self.system_paths["desktop_files"], ".trash", username)
         os.makedirs(user_trash, exist_ok=True)
         
-        # Обновляем пути
         self.user_paths["desktop"] = virtual_desktop
         self.desktop_path = virtual_desktop
         
-        # Обновляем security менеджер
         self.security = SecurityManager(self)
         self.security.log_access(username, "LOGIN", "SUCCESS", f"Session: {self.security.session_id}")
         self.log(f"Пользователь {username} вошел в систему (виртуальный рабочий стол)")
         
-        # Обновляем БД пользователей
         try:
             with open(self.system_files["users_db"], 'r', encoding='utf-8') as f:
                 users = json.load(f)
@@ -6878,22 +7338,56 @@ class BITOS:
         except:
             pass
         
-        # ===== ЗВУК ВХОДА =====
         self.play_sound("logon")
         
-        # Запускаем рабочий стол
         desktop_root = tk.Tk()
         desktop = Desktop(desktop_root, username, self)
         
+        # ============================================================
+        # СОЗДАЁМ МЕНЕДЖЕР МОНИТОРОВ ПОСЛЕ СОЗДАНИЯ DESKTOP
+        # ============================================================
+        try:
+            print("[BITOS] 🖥️ Создаём менеджер мониторов...")
+            self.monitor_manager = MultiMonitorManager(self)
+            
+            # Устанавливаем main_desktop
+            self.monitor_manager.main_desktop = desktop
+            
+            # Патчим desktop
+            self.monitor_manager._patch_desktop(desktop)
+            
+            # Создаём рабочие столы для всех мониторов
+            self.monitor_manager._create_extra_desktops()
+            
+            # ПРИНУДИТЕЛЬНО ПОКАЗЫВАЕМ ВСЕ РАБОЧИЕ СТОЛЫ
+            self.monitor_manager.show_all_desktops()
+            
+            # ДИАГНОСТИКА
+            self.monitor_manager.debug_windows()
+            
+            print("[BITOS] ✅ Менеджер мониторов инициализирован и рабочие столы созданы")
+        except Exception as e:
+            print(f"[BITOS] ⚠️ Ошибка инициализации менеджера мониторов: {e}")
+            import traceback
+            traceback.print_exc()
+            self.monitor_manager = None
+        
+        self.autosafe = AutoSafe(self, desktop)
+        
         def on_desktop_close():
             self.input_blocker.stop_blocking()
+            self._stop_console_writer()
+            if self.monitor_manager:
+                try:
+                    self.monitor_manager.stop()
+                except:
+                    pass
             desktop_root.destroy()
         
         desktop_root.protocol("WM_DELETE_WINDOW", on_desktop_close)
         desktop_root.mainloop()
     
     def run(self):
-        """Запуск системы"""
         self.boot_sequence()
 
 # ==================== КЛАСС 0: InputBlocker (С ЧИТ-КОДОМ) ====================
@@ -7311,7 +7805,7 @@ class WallpaperManager:
             return False
 
 class NotificationCenter:
-    """Центр уведомлений с историей, всплывающими сообщениями и звуковым оповещением"""
+    """Центр уведомлений с историей, всплывающими сообщениями"""
     
     def __init__(self, parent, bitos):
         self.parent = parent
@@ -7321,95 +7815,11 @@ class NotificationCenter:
         self.active_popups = []
         self.popup_spacing = 110
         
-        # Настройки звука
+        # Настройки звука - используем звуковую систему BITOS
         self.sound_enabled = True
-        self.sound_path = os.path.join(bitos.base_path, "System", "Sounds", "notific_base.wav")
-        
-        # Создаём папку для звуков если её нет
-        self.sounds_dir = os.path.join(bitos.base_path, "System", "Sounds")
-        os.makedirs(self.sounds_dir, exist_ok=True)
-        
-        # Проверяем наличие звукового файла
-        if not os.path.exists(self.sound_path):
-            self._create_default_sound()
-        
-        # Флаг для предотвращения наложения звуков
-        self.last_sound_time = 0
-        self.sound_cooldown = 500  # миллисекунд между звуками
         
         self.history_file = os.path.join(bitos.system_paths["config"], "notifications.json")
         self.load_history()
-    
-    def _create_default_sound(self):
-        """Создаёт простой WAV файл если его нет"""
-        try:
-            import wave
-            import struct
-            
-            # Параметры звука
-            duration = 0.3  # секунд
-            frequency = 880  # Гц (нота A5)
-            sample_rate = 44100
-            amplitude = 16000
-            
-            samples = int(duration * sample_rate)
-            
-            with wave.open(self.sound_path, 'w') as wav:
-                wav.setnchannels(1)  # моно
-                wav.setsampwidth(2)  # 2 байта на сэмпл
-                wav.setframerate(sample_rate)
-                
-                for i in range(samples):
-                    # Генерация синусоиды с затуханием в конце
-                    t = i / sample_rate
-                    envelope = 1.0 - (t / duration) if t < duration else 0
-                    value = int(amplitude * envelope * math.sin(2 * math.pi * frequency * t))
-                    # Упаковка в 2 байта
-                    data = struct.pack('<h', value)
-                    wav.writeframes(data)
-        except Exception as e:
-            print(f"⚠️ Не удалось создать звуковой файл: {e}")
-    
-    def play_sound(self):
-        """Воспроизводит звук уведомления"""
-        if not self.sound_enabled:
-            return
-        
-        # Проверяем задержку между звуками
-        current_time = time.time() * 1000
-        if current_time - self.last_sound_time < self.sound_cooldown:
-            return
-        
-        if not os.path.exists(self.sound_path):
-            return
-        
-        try:
-            # Используем winsound на Windows
-            if platform.system() == "Windows":
-                import winsound
-                winsound.PlaySound(self.sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-            else:
-                # На других платформах используем простой beep
-                import sys
-                if sys.platform == 'linux':
-                    # Linux: используем beep или играем через pygame если есть
-                    try:
-                        import subprocess
-                        subprocess.Popen(['paplay', self.sound_path], 
-                                        stdout=subprocess.DEVNULL, 
-                                        stderr=subprocess.DEVNULL)
-                    except:
-                        print('\a', end='', flush=True)  # терминальный beep
-                else:
-                    print('\a', end='', flush=True)
-            
-            self.last_sound_time = current_time
-        except Exception as e:
-            # Если не удалось воспроизвести файл, делаем системный beep
-            try:
-                print('\a', end='', flush=True)
-            except:
-                pass
     
     def load_history(self):
         if os.path.exists(self.history_file):
@@ -7441,11 +7851,32 @@ class NotificationCenter:
         self.notifications.append(notification)
         self.save_history()
         
-        # Воспроизводим звук
-        if play_sound:
-            self.play_sound()
+        # Воспроизводим звук через звуковую систему BITOS
+        if play_sound and self.sound_enabled and self.bitos:
+            # ПРОВЕРЯЕМ СООБЩЕНИЕ - ЭТО ФЛЕШКА?
+            sound_type = self._detect_sound_from_message(title, message)
+            self.bitos.play_sound(sound_type)
         
         self.show_popup(notification, duration)
+    
+    def _detect_sound_from_message(self, title, message):
+        """Определяет какой звук воспроизвести по тексту сообщения"""
+        # Объединяем заголовок и сообщение для поиска
+        full_text = f"{title} {message}".lower()
+        
+        # Проверяем ключевые слова
+        if "флешка подключена" in full_text or "usb connect" in full_text or "подключено новое устройство" in full_text:
+            return "usb_connect"
+        elif "флешка отключена" in full_text or "usb disconnect" in full_text or "устройство было отключено" in full_text:
+            return "usb_disconnect"
+        elif "ошибк" in full_text or "error" in full_text:
+            return "error"
+        elif "предупреждени" in full_text or "warning" in full_text:
+            return "warning"
+        elif "успех" in full_text or "success" in full_text:
+            return "success"
+        else:
+            return "notification"
     
     def show_popup(self, notification, duration=5000):
         """Показывает всплывающее уведомление"""
@@ -7573,7 +8004,8 @@ class NotificationCenter:
     
     def test_sound(self):
         """Тест звука уведомления"""
-        self.play_sound()
+        if self.bitos:
+            self.bitos.play_sound("notification")
         self.add_notification(
             "🔊 Тест звука",
             "Если вы слышите этот звук, уведомления работают корректно",
@@ -7581,7 +8013,7 @@ class NotificationCenter:
             duration=3000,
             play_sound=False
         )
-        
+
 class ClockWidget:
     """Виджет часов"""
     
@@ -8011,9 +8443,1086 @@ class StickerWidget:
             pass
         return {'type': 'sticker', 'x': self.x, 'y': self.y, 'text': self.text}
 
-    # ==================== КЛАСС: SettingsWindow (ОПТИМИЗИРОВАННЫЙ) ====================
+class ErrorManager:
+    """
+    Расширенный менеджер ошибок BITOS
+    - Перехватывает ВСЕ ошибки и исключения
+    - Сохраняет ВСЁ что выводится в консоль (console.log)
+    - Отслеживает состояние приложения в реальном времени
+    - Автоматически исправляет ошибки
+    - Ведёт полный лог всех событий
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+    
+    def __init__(self, bitos_instance=None):
+        if hasattr(self, '_initialized'):
+            return
+        self._initialized = True
+        
+        # Основные параметры
+        self.bitos = bitos_instance
+        self.is_running = True
+        self.start_time = datetime.now()
+        
+        # Счётчики
+        self.error_count = 0
+        self.fixed_count = 0
+        self.unfixable_count = 0
+        self.warning_count = 0
+        self.info_count = 0
+        
+        # Очередь для асинхронной записи
+        self._log_queue = queue.Queue()
+        self._log_thread = None
+        
+        # Буфер для ошибок до инициализации
+        self._buffer = []
+        
+        # Перехват консольного вывода
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        self._console_buffer = []
+        
+        # Инициализация путей
+        self._init_paths()
+        
+        # Инициализация логов
+        self._init_logs()
+        
+        # Перехват консоли
+        self._redirect_console()
+        
+        # Патчим всё
+        self._patch_everything()
+        
+        # Запускаем мониторинг
+        self._start_monitoring()
+        
+        # Запускаем поток записи логов
+        self._start_log_writer()
+        
+        # Записываем информацию о старте
+        self._log_startup()
+        
+        print(f"[ErrorManager] ✅ Инициализирован")
+        print(f"[ErrorManager] 📁 Логи: {self.logs_path}")
+        print(f"[ErrorManager] 📄 console.log: {self.console_log_path}")
+        print(f"[ErrorManager] 📄 error.log: {self.error_log_path}")
+    
+    def _init_paths(self):
+        """Инициализация путей к логам"""
+        if self.bitos and hasattr(self.bitos, 'system_paths'):
+            self.logs_path = self.bitos.system_paths.get("logs")
+        
+        if not self.logs_path:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            self.logs_path = os.path.join(base_path, "System", "Logs")
+        
+        os.makedirs(self.logs_path, exist_ok=True)
+        
+        # Пути к лог-файлам
+        self.error_log_path = os.path.join(self.logs_path, "error.log")
+        self.fixed_log_path = os.path.join(self.logs_path, "fixed_errors.log")
+        self.crash_log_path = os.path.join(self.logs_path, "crash_reports.log")
+        self.debug_log_path = os.path.join(self.logs_path, "debug.log")
+        self.console_log_path = os.path.join(self.logs_path, "console.log")
+        self.event_log_path = os.path.join(self.logs_path, "events.log")
+        self.warning_log_path = os.path.join(self.logs_path, "warnings.log")
+        self.system_log_path = os.path.join(self.logs_path, "system.log")
+        
+        # Создаём все директории
+        for path in [self.logs_path]:
+            os.makedirs(path, exist_ok=True)
+    
+    def _init_logs(self):
+        """Инициализация всех лог-файлов"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Заголовок для всех логов
+        header = f"""
+╔══════════════════════════════════════════════════════════════════╗
+║              BITOS ERROR MANAGER v2.0                           ║
+╠══════════════════════════════════════════════════════════════════╣
+║ Started:  {timestamp}
+║ System:   {platform.system()} {platform.release()}
+║ Python:   {platform.python_version()}
+║ BITOS:    {self.bitos.version if self.bitos and hasattr(self.bitos, 'version') else 'Unknown'}
+║ PID:      {os.getpid()}
+╠══════════════════════════════════════════════════════════════════╣
+"""
+        
+        # Создаём все лог-файлы с заголовками
+        log_files = {
+            self.error_log_path: header + "║ ERROR LOG\n",
+            self.fixed_log_path: header.replace("ERROR", "FIXED") + "║ FIXED ERRORS LOG\n",
+            self.crash_log_path: header.replace("ERROR", "CRASH") + "║ CRASH REPORTS LOG\n",
+            self.debug_log_path: header.replace("ERROR", "DEBUG") + "║ DEBUG LOG\n",
+            self.console_log_path: header.replace("ERROR", "CONSOLE") + "║ CONSOLE OUTPUT LOG\n",
+            self.event_log_path: header.replace("ERROR", "EVENT") + "║ EVENT LOG\n",
+            self.warning_log_path: header.replace("ERROR", "WARNING") + "║ WARNING LOG\n",
+            self.system_log_path: header.replace("ERROR", "SYSTEM") + "║ SYSTEM LOG\n",
+        }
+        
+        for path, content in log_files.items():
+            try:
+                if not os.path.exists(path) or os.path.getsize(path) == 0:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(content + "\n")
+            except:
+                pass
+    
+    def _redirect_console(self):
+        """Перехват всего консольного вывода"""
+        class ConsoleRedirect:
+            def __init__(self, manager, is_error=False):
+                self.manager = manager
+                self.is_error = is_error
+                self.buffer = []
+            
+            def write(self, text):
+                if text and text.strip():
+                    # Сохраняем в буфер
+                    self.buffer.append(text)
+                    # Пишем в оригинальный вывод
+                    if self.is_error:
+                        self.manager._original_stderr.write(text)
+                    else:
+                        self.manager._original_stdout.write(text)
+                    # Сохраняем в лог
+                    self.manager._log_console(text, is_error=self.is_error)
+                    # Проверяем на наличие ошибок
+                    if self.is_error or "error" in text.lower() or "exception" in text.lower():
+                        self.manager._detect_error_from_console(text)
+            
+            def flush(self):
+                if self.is_error:
+                    self.manager._original_stderr.flush()
+                else:
+                    self.manager._original_stdout.flush()
+        
+        # Перенаправляем вывод
+        sys.stdout = ConsoleRedirect(self, is_error=False)
+        sys.stderr = ConsoleRedirect(self, is_error=True)
+    
+    def _log_console(self, text, is_error=False):
+        """Запись консольного вывода в лог"""
+        if not text or not text.strip():
+            return
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        prefix = "[STDERR]" if is_error else "[STDOUT]"
+        
+        entry = f"{timestamp} {prefix} {text.strip()}\n"
+        
+        # Добавляем в очередь
+        try:
+            self._log_queue.put(('console', entry))
+        except:
+            pass
+    
+    def _detect_error_from_console(self, text):
+        """Обнаружение ошибок в консольном выводе"""
+        if "Traceback" in text or "Error" in text or "Exception" in text:
+            # Это похоже на ошибку
+            self.error_count += 1
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            entry = f"""
+┌─────────────────────────────────────────────────────────────────────
+│ [{timestamp}] ⚠️ ОБНАРУЖЕНА ОШИБКА В КОНСОЛИ
+│ Message: {text.strip()[:200]}
+│ Источник: консольный вывод
+└─────────────────────────────────────────────────────────────────────
+"""
+            try:
+                with open(self.error_log_path, 'a', encoding='utf-8') as f:
+                    f.write(entry)
+            except:
+                pass
+    
+    def _patch_everything(self):
+        """Патчинг всех компонентов для перехвата ошибок"""
+        self._patch_tkinter()
+        self._patch_threading()
+        self._patch_functions()
+    
+    def _patch_tkinter(self):
+        """Патчинг tkinter для перехвата ошибок"""
+        try:
+            import tkinter as tk
+            
+            # Сохраняем оригинальные методы
+            self._original_report_callback = tk.Tk.report_callback_exception
+            self._original_after = tk.Misc.after
+            self._original_destroy = tk.Misc.destroy
+            
+            # Создаём новый обработчик
+            def custom_report_callback(self_widget, exc, val, tb):
+                """Кастомный обработчик ошибок tkinter"""
+                error_msg = f"tkinter error: {exc.__name__}: {val}"
+                self._handle_exception(exc, val, tb, source="tkinter")
+                
+                # Вызываем оригинальный обработчик если есть
+                if self._original_report_callback:
+                    try:
+                        self._original_report_callback(self_widget, exc, val, tb)
+                    except:
+                        pass
+            
+            # Применяем патч
+            tk.Tk.report_callback_exception = custom_report_callback
+            
+            # Патчим after для безопасности
+            def safe_after(self_widget, ms, func=None, *args):
+                if not self_widget or not self_widget.winfo_exists():
+                    return None
+                try:
+                    return self._original_after(self_widget, ms, func, *args)
+                except tk.TclError as e:
+                    self._log_error("TclError", str(e), traceback.format_exc(), source="after")
+                    return None
+            
+            tk.Misc.after = safe_after
+            
+            # Патчим destroy
+            def safe_destroy(self_widget):
+                try:
+                    if not self_widget or not self_widget.winfo_exists():
+                        return
+                    self._original_destroy(self_widget)
+                except tk.TclError:
+                    pass  # Игнорируем ошибки удаления уже удалённых виджетов
+            
+            tk.Misc.destroy = safe_destroy
+            
+        except Exception as e:
+            print(f"[ErrorManager] ⚠️ Не удалось пропатчить tkinter: {e}")
+    
+    def _patch_threading(self):
+        """Патчинг threading для перехвата ошибок в потоках"""
+        try:
+            original_thread_run = threading.Thread.run
+            
+            def safe_thread_run(self):
+                try:
+                    original_thread_run(self)
+                except Exception as e:
+                    self._handle_exception(
+                        type(e), e, traceback.extract_tb(e.__traceback__),
+                        source=f"thread:{self.name}"
+                    )
+            
+            threading.Thread.run = safe_thread_run
+            
+        except Exception as e:
+            print(f"[ErrorManager] ⚠️ Не удалось пропатчить threading: {e}")
+    
+    def _patch_functions(self):
+        """Патчинг функций с декоратором @safe_call"""
+        pass  # Реализовано через декоратор
+    
+    def _start_monitoring(self):
+        """Запуск мониторинга"""
+        # Перехватываем глобальные исключения
+        sys.excepthook = self._global_exception_handler
+        
+        # Запускаем фоновый мониторинг
+        self._start_background_monitor()
+    
+    def _start_background_monitor(self):
+        """Фоновый мониторинг состояния системы"""
+        def monitor():
+            while self.is_running:
+                try:
+                    # Проверяем состояние каждые 5 секунд
+                    time.sleep(5)
+                    
+                    # Проверяем наличие незакрытых окон
+                    self._check_windows()
+                    
+                    # Проверяем состояние памяти
+                    self._check_memory()
+                    
+                    # Проверяем состояние потоков
+                    self._check_threads()
+                    
+                except Exception as e:
+                    self._log_error("MonitorError", str(e), traceback.format_exc())
+        
+        thread = threading.Thread(target=monitor, daemon=True, name="ErrorMonitor")
+        thread.start()
+    
+    def _check_windows(self):
+        """Проверка состояния окон"""
+        try:
+            import tkinter as tk
+            root = tk._default_root
+            if root:
+                # Проверяем дочерние окна
+                for child in root.winfo_children():
+                    try:
+                        if not child.winfo_exists():
+                            self._log_warning("WindowCheck", f"Обнаружено несуществующее окно: {child}")
+                    except:
+                        pass
+        except:
+            pass
+    
+    def _check_memory(self):
+        """Проверка памяти"""
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            if memory.percent > 90:
+                self._log_warning("MemoryCheck", f"Высокое использование памяти: {memory.percent}%")
+        except:
+            pass
+    
+    def _check_threads(self):
+        """Проверка потоков"""
+        try:
+            threads = threading.enumerate()
+            if len(threads) > 100:
+                self._log_warning("ThreadCheck", f"Много потоков: {len(threads)}")
+        except:
+            pass
+    
+    def _global_exception_handler(self, exc_type, exc_value, exc_traceback):
+        """Глобальный обработчик исключений"""
+        self._handle_exception(exc_type, exc_value, exc_traceback, source="global")
+        # Вызываем стандартный обработчик
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+    
+    def _handle_exception(self, exc_type, exc_value, exc_traceback, source="unknown"):
+        """Обработка исключения"""
+        error_name = exc_type.__name__ if hasattr(exc_type, '__name__') else str(exc_type)
+        error_message = str(exc_value) if exc_value else "Unknown error"
+        
+        # Получаем трассировку
+        tb_str = ""
+        if exc_traceback:
+            tb_str = ''.join(traceback.format_tb(exc_traceback))
+        
+        # Логируем ошибку
+        self._log_error(error_name, error_message, tb_str, source)
+        
+        # Пытаемся исправить
+        fix = self._try_fix(error_name, error_message, exc_value)
+        if fix:
+            self.fixed_count += 1
+            self._log_fixed(error_name, error_message, fix)
+        else:
+            self.unfixable_count += 1
+        
+        return fix
+    
+    def _log_error(self, error_name, error_message, traceback_str="", source="unknown"):
+        """Запись ошибки в лог"""
+        with self._lock:
+            self.error_count += 1
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            entry = f"""
+┌─────────────────────────────────────────────────────────────────────
+│ [{timestamp}] ❌ ERROR #{self.error_count}
+│ Source:   {source}
+│ Type:     {error_name}
+│ Message:  {error_message[:200]}
+"""
+            if traceback_str:
+                entry += "│ Traceback:\n"
+                for line in traceback_str.split('\n')[-10:]:
+                    if line.strip():
+                        entry += f"│   {line}\n"
+            entry += "└─────────────────────────────────────────────────────────────────────\n"
+            
+            # Добавляем в очередь
+            try:
+                self._log_queue.put(('error', entry))
+            except:
+                pass
+    
+    def _log_fixed(self, error_name, error_message, fix_description):
+        """Запись исправления"""
+        with self._lock:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            entry = f"""
+┌─────────────────────────────────────────────────────────────────────
+│ [{timestamp}] ✅ FIXED #{self.fixed_count}
+│ Type:     {error_name}
+│ Message:  {error_message[:200]}
+│ Fix:      {fix_description}
+└─────────────────────────────────────────────────────────────────────
+"""
+            try:
+                self._log_queue.put(('fixed', entry))
+            except:
+                pass
+    
+    def _log_warning(self, warning_type, message):
+        """Запись предупреждения"""
+        with self._lock:
+            self.warning_count += 1
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            entry = f"[{timestamp}] ⚠️ WARNING #{self.warning_count} [{warning_type}] {message}\n"
+            
+            try:
+                self._log_queue.put(('warning', entry))
+            except:
+                pass
+    
+    def _log_info(self, message):
+        """Запись информационного сообщения"""
+        with self._lock:
+            self.info_count += 1
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            entry = f"[{timestamp}] ℹ️ INFO #{self.info_count} {message}\n"
+            
+            try:
+                self._log_queue.put(('info', entry))
+            except:
+                pass
+    
+    def _log_startup(self):
+        """Запись информации о старте"""
+        self._log_info(f"BITOS запущен. Версия: {self.bitos.version if self.bitos else 'Unknown'}")
+        self._log_info(f"Пользователь: {self.bitos.current_user if self.bitos else 'Unknown'}")
+        self._log_info(f"Путь: {os.getcwd()}")
+    
+    def _try_fix(self, error_name, error_message, exc_value):
+        """Попытка исправить ошибку"""
+        # Специальные обработчики
+        fixes = {
+            "invalid command name": lambda: "🔄 Пересоздание команды",
+            "application has been destroyed": lambda: "🔄 Очистка уничтоженных виджетов",
+            "can't invoke": lambda: "🔄 Обновление ссылок на виджеты",
+            "window was deleted": lambda: "🔄 Удаление ссылок на уничтоженные окна",
+            "NoneType has no attribute": lambda: "🔧 Добавлена проверка на None",
+            "not found": lambda: "📁 Создание отсутствующего элемента",
+            "permission denied": lambda: "🔑 Запрос прав администратора",
+        }
+        
+        for key, fix_func in fixes.items():
+            if key.lower() in error_message.lower() or key.lower() in error_name.lower():
+                return fix_func()
+        
+        return None
+    
+    def _start_log_writer(self):
+        """Запуск потока для записи логов"""
+        def writer():
+            while self.is_running:
+                try:
+                    # Получаем запись из очереди с таймаутом
+                    try:
+                        log_type, content = self._log_queue.get(timeout=1)
+                    except queue.Empty:
+                        continue
+                    
+                    # Определяем файл для записи
+                    file_map = {
+                        'console': self.console_log_path,
+                        'error': self.error_log_path,
+                        'fixed': self.fixed_log_path,
+                        'warning': self.warning_log_path,
+                        'info': self.event_log_path,
+                        'system': self.system_log_path,
+                        'debug': self.debug_log_path,
+                    }
+                    
+                    file_path = file_map.get(log_type, self.debug_log_path)
+                    
+                    # Записываем
+                    try:
+                        with open(file_path, 'a', encoding='utf-8') as f:
+                            f.write(content)
+                            f.flush()
+                    except:
+                        pass
+                    
+                except Exception as e:
+                    # Если не можем записать, выводим в консоль
+                    print(f"[ErrorManager] Ошибка записи лога: {e}")
+        
+        self._log_thread = threading.Thread(target=writer, daemon=True, name="LogWriter")
+        self._log_thread.start()
+    
+    # ==================== ПУБЛИЧНЫЕ МЕТОДЫ ====================
+    
+    def log_error(self, error_type, message, traceback_str=""):
+        """Ручное логирование ошибки"""
+        self._log_error(error_type, message, traceback_str, source="manual")
+    
+    def log_warning(self, warning_type, message):
+        """Ручное логирование предупреждения"""
+        self._log_warning(warning_type, message)
+    
+    def log_info(self, message):
+        """Ручное логирование информации"""
+        self._log_info(message)
+    
+    def log_system(self, message):
+        """Запись системного сообщения"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        entry = f"[{timestamp}] 🖥️ {message}\n"
+        try:
+            self._log_queue.put(('system', entry))
+        except:
+            pass
+    
+    def log_debug(self, message):
+        """Запись отладочного сообщения"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        entry = f"[{timestamp}] 🐛 DEBUG: {message}\n"
+        try:
+            self._log_queue.put(('debug', entry))
+        except:
+            pass
+    
+    def get_statistics(self):
+        """Получение статистики"""
+        return {
+            'total_errors': self.error_count,
+            'fixed_errors': self.fixed_count,
+            'unfixable_errors': self.unfixable_count,
+            'warnings': self.warning_count,
+            'info_messages': self.info_count,
+            'fix_rate': f"{(self.fixed_count / max(1, self.error_count) * 100):.1f}%",
+            'uptime': str(datetime.now() - self.start_time),
+            'log_files': {
+                'error': os.path.getsize(self.error_log_path) if os.path.exists(self.error_log_path) else 0,
+                'console': os.path.getsize(self.console_log_path) if os.path.exists(self.console_log_path) else 0,
+                'events': os.path.getsize(self.event_log_path) if os.path.exists(self.event_log_path) else 0,
+            }
+        }
+    
+    def show_logs_dialog(self, parent=None):
+        """Показать диалог с логами"""
+        if not parent:
+            parent = tk._default_root
+        
+        if not parent:
+            parent = tk.Tk()
+            parent.withdraw()
+        
+        dialog = tk.Toplevel(parent)
+        dialog.title("📋 Журналы BITOS")
+        dialog.geometry("900x600")
+        dialog.transient(parent)
+        dialog.configure(bg='#F5F7FA')
+        
+        # Центрируем
+        x = (dialog.winfo_screenwidth() - 900) // 2
+        y = (dialog.winfo_screenheight() - 600) // 2
+        dialog.geometry(f'+{x}+{y}')
+        
+        # Заголовок
+        header = tk.Frame(dialog, bg='#2C3E50', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="📋 Журналы BITOS", bg='#2C3E50', fg='white',
+                font=('Segoe UI', 14, 'bold')).pack(pady=10)
+        
+        # Вкладки
+        notebook = ttk.Notebook(dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Статистика
+        stats = self.get_statistics()
+        stats_frame = ttk.Frame(notebook)
+        notebook.add(stats_frame, text="📊 Статистика")
+        
+        stats_text = f"""
+╔══════════════════════════════════════════════════════════════════╗
+║                    СТАТИСТИКА ОШИБОК                            ║
+╠══════════════════════════════════════════════════════════════════╣
+║ Всего ошибок:     {stats['total_errors']}
+║ Исправлено:       {stats['fixed_errors']}
+║ Не исправлено:    {stats['unfixable_errors']}
+║ Эффективность:    {stats['fix_rate']}
+║ Предупреждений:   {stats['warnings']}
+║ Информационных:   {stats['info_messages']}
+║ Время работы:     {stats['uptime']}
+╠══════════════════════════════════════════════════════════════════╣
+║ Размеры логов:                                                 ║
+║ error.log:        {stats['log_files']['error'] / 1024:.1f} KB
+║ console.log:      {stats['log_files']['console'] / 1024:.1f} KB
+║ events.log:       {stats['log_files']['events'] / 1024:.1f} KB
+╚══════════════════════════════════════════════════════════════════╝
+"""
+        tk.Label(stats_frame, text=stats_text, bg='white', fg='#2C3E50',
+                font=('Consolas', 11), justify='left').pack(padx=20, pady=20)
+        
+        # Вкладки для логов
+        log_files = {
+            'error.log': self.error_log_path,
+            'console.log': self.console_log_path,
+            'events.log': self.event_log_path,
+            'warnings.log': self.warning_log_path,
+            'fixed_errors.log': self.fixed_log_path,
+            'system.log': self.system_log_path,
+            'debug.log': self.debug_log_path,
+        }
+        
+        for name, path in log_files.items():
+            if os.path.exists(path):
+                frame = ttk.Frame(notebook)
+                notebook.add(frame, text=name)
+                
+                text_area = scrolledtext.ScrolledText(frame, font=('Consolas', 9),
+                                                      bg='#1E1E1E', fg='#00FF00',
+                                                      wrap=tk.WORD)
+                text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+                
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        lines = content.split('\n')
+                        if len(lines) > 500:
+                            lines = lines[-500:]
+                        text_area.insert('1.0', '\n'.join(lines))
+                except:
+                    text_area.insert('1.0', f"Не удалось прочитать {name}")
+                
+                text_area.config(state='disabled')
+        
+        # Кнопка закрытия
+        btn_frame = tk.Frame(dialog, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Button(btn_frame, text="🔄 Обновить", bg='#3498DB', fg='white',
+                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
+                 command=lambda: self._refresh_logs_dialog(dialog, notebook)).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(btn_frame, text="🗑 Очистить логи", bg='#E74C3C', fg='white',
+                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
+                 command=lambda: self._clear_all_logs()).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(btn_frame, text="Закрыть", bg='#95A5A6', fg='white',
+                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
+                 command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+    
+    def _refresh_logs_dialog(self, dialog, notebook):
+        """Обновление диалога с логами"""
+        dialog.destroy()
+        self.show_logs_dialog(dialog.master)
+    
+    def _clear_all_logs(self):
+        """Очистка всех логов"""
+        if not messagebox.askyesno("Очистка", "Очистить все логи?"):
+            return
+        
+        log_paths = [
+            self.error_log_path,
+            self.fixed_log_path,
+            self.crash_log_path,
+            self.debug_log_path,
+            self.console_log_path,
+            self.event_log_path,
+            self.warning_log_path,
+            self.system_log_path,
+        ]
+        
+        for path in log_paths:
+            try:
+                if os.path.exists(path):
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write("")
+            except:
+                pass
+        
+        # Сбрасываем счётчики
+        self.error_count = 0
+        self.fixed_count = 0
+        self.unfixable_count = 0
+        self.warning_count = 0
+        self.info_count = 0
+        
+        # Пересоздаём логи
+        self._init_logs()
+        
+        messagebox.showinfo("Успех", "Все логи очищены")
+    
+    def stop(self):
+        """Остановка менеджера"""
+        self.is_running = False
+        
+        # Восстанавливаем вывод
+        sys.stdout = self._original_stdout
+        sys.stderr = self._original_stderr
+        
+        # Восстанавливаем tkinter
+        try:
+            import tkinter as tk
+            if hasattr(self, '_original_report_callback'):
+                tk.Tk.report_callback_exception = self._original_report_callback
+        except:
+            pass
+        
+        # Восстанавливаем threading
+        try:
+            threading.Thread.run = self._original_thread_run
+        except:
+            pass
+        
+        print("[ErrorManager] ⏹️ Остановлен")
+    
+    def __del__(self):
+        """Деструктор"""
+        try:
+            self.stop()
+        except:
+            pass
+
+
+# ==================== ДЕКОРАТОР ДЛЯ БЕЗОПАСНОГО ВЫЗОВА ====================
+
+def safe_call(func):
+    """Декоратор для безопасного вызова функции с логированием ошибок"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Получаем менеджер ошибок
+            error_manager = None
+            for arg in args:
+                if hasattr(arg, 'error_manager'):
+                    error_manager = arg.error_manager
+                    break
+                if hasattr(arg, 'bitos') and hasattr(arg.bitos, 'error_manager'):
+                    error_manager = arg.bitos.error_manager
+                    break
+            
+            if not error_manager:
+                # Пытаемся найти глобальный экземпляр
+                try:
+                    error_manager = ErrorManager._instance
+                except:
+                    pass
+            
+            if error_manager:
+                error_manager.log_error(
+                    func.__name__,
+                    str(e),
+                    traceback.format_exc()
+                )
+            else:
+                print(f"[{func.__name__}] Ошибка: {e}")
+            
+            return None
+    return wrapper
+
+
+# ==================== ФУНКЦИЯ ИНИЦИАЛИЗАЦИИ ====================
+
+def init_error_manager(bitos_instance=None):
+    """
+    Инициализация менеджера ошибок
+    
+    Args:
+        bitos_instance: Экземпляр BITOS
+    
+    Returns:
+        ErrorManager: Экземпляр менеджера ошибок
+    """
+    manager = ErrorManager(bitos_instance)
+    
+    # Если есть BITOS, добавляем методы
+    if bitos_instance:
+        bitos_instance.error_manager = manager
+        bitos_instance.show_errors = lambda: manager.show_logs_dialog()
+        bitos_instance.clear_errors = manager._clear_all_logs
+        bitos_instance.log_info = manager.log_info
+        bitos_instance.log_warning = manager.log_warning
+        bitos_instance.log_error = manager.log_error
+    
+    return manager
+
+# ==================== КЛАСС: SoundClickPlayer ====================
+class SoundClickPlayer:
+    """
+    Проигрыватель звука с ПРЯМЫМ изменением системной громкости через WinAPI
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+    
+    def __init__(self, bitos=None):
+        if hasattr(self, '_initialized'):
+            return
+        self._initialized = True
+        
+        self.bitos = bitos
+        self.enabled = False
+        self._playing = False
+        self._running = False
+        
+        # Громкость из файла конфигурации
+        self.volume = self._load_volume_from_config()
+        self._last_known_volume = self.volume
+        
+        # Поток для мониторинга громкости
+        self._monitor_thread = None
+        
+        # Инициализация WinAPI
+        self._init_winapi_volume()
+        
+        print(f"[SoundClickPlayer] ✅ Инициализирован (громкость {self.volume}%)")
+    
+    def _init_winapi_volume(self):
+        """Инициализация WinAPI для контроля громкости"""
+        import ctypes
+        from ctypes import wintypes
+        
+        self.ctypes = ctypes
+        self.wintypes = wintypes
+        
+        # Загружаем user32.dll
+        self.user32 = ctypes.windll.user32
+        
+        # Константы для сообщений
+        self.WM_APPCOMMAND = 0x0319
+        self.APPCOMMAND_VOLUME_UP = 0x0A0000
+        self.APPCOMMAND_VOLUME_DOWN = 0x090000
+        self.APPCOMMAND_VOLUME_MUTE = 0x080000
+        
+        # Получаем handle рабочего стола
+        self.hwnd = self.user32.GetDesktopWindow()
+        
+        print("[SoundClickPlayer] 🎵 WinAPI инициализирован")
+    
+    def _load_volume_from_config(self):
+        """Загрузка громкости из файла System/Config/volume.cfg"""
+        config_path = os.path.join('System', 'Config', 'volume.cfg')
+        default_volume = 30
+        
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    try:
+                        volume = int(content)
+                        if 0 <= volume <= 100:
+                            return volume
+                        else:
+                            return default_volume
+                    except ValueError:
+                        return default_volume
+            else:
+                self._save_volume_to_config(default_volume)
+                return default_volume
+        except:
+            return default_volume
+    
+    def _save_volume_to_config(self, volume):
+        """Сохранение громкости в файл"""
+        config_path = os.path.join('System', 'Config', 'volume.cfg')
+        try:
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            with open(config_path, 'w', encoding='utf-8') as f:
+                f.write(str(volume))
+            return True
+        except:
+            return False
+    
+    def _get_current_volume(self):
+        """Получение текущей громкости через реестр"""
+        try:
+            import winreg
+            
+            # Открываем ключ реестра
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Internet Explorer\Main",
+                0,
+                winreg.KEY_READ
+            )
+            
+            # Пробуем получить громкость (может не работать)
+            try:
+                value, _ = winreg.QueryValueEx(key, "Volume")
+                winreg.CloseKey(key)
+                return int(value)
+            except:
+                winreg.CloseKey(key)
+                return 50
+                
+        except:
+            return 50
+    
+    def _send_volume_command(self, command):
+        """Отправка команды громкости через WinAPI"""
+        try:
+            # Отправляем сообщение рабочему столу
+            self.user32.SendMessageW(
+                self.hwnd,
+                self.WM_APPCOMMAND,
+                0,
+                command
+            )
+            return True
+        except Exception as e:
+            print(f"[SoundClickPlayer] ⚠️ Ошибка отправки команды: {e}")
+            return False
+    
+    def _set_system_volume(self, target_volume):
+        """Установка системной громкости через WinAPI"""
+        import time
+        
+        # Получаем текущую громкость
+        current = self._get_current_volume()
+        
+        if target_volume == current:
+            return
+        
+        # Определяем направление и количество нажатий
+        if target_volume > current:
+            command = self.APPCOMMAND_VOLUME_UP
+            steps = (target_volume - current) // 2  # ~2% за нажатие
+        else:
+            command = self.APPCOMMAND_VOLUME_DOWN
+            steps = (current - target_volume) // 2
+        
+        if steps <= 0:
+            steps = 1
+        
+        print(f"[SoundClickPlayer] 🔊 {current}% -> {target_volume}% ({steps} шагов)")
+        
+        # Отправляем команды
+        for i in range(steps):
+            self._send_volume_command(command)
+            time.sleep(0.05)  # Задержка между нажатиями
+    
+    def set_volume(self, volume):
+        """Установка громкости"""
+        try:
+            volume = int(volume)
+            if 0 <= volume <= 100:
+                old_volume = self.volume
+                self.volume = volume
+                self._last_known_volume = volume
+                self._save_volume_to_config(volume)
+                
+                # Устанавливаем системную громкость
+                self._set_system_volume(volume)
+                
+                print(f"[SoundClickPlayer] 🔊 Громкость: {old_volume}% -> {volume}%")
+                return True
+            return False
+        except:
+            return False
+    
+    def enable(self):
+        """Включение"""
+        if not self.enabled:
+            self.enabled = True
+            
+            # Устанавливаем громкость
+            self._set_system_volume(self.volume)
+            
+            # Запускаем мониторинг
+            self._start_volume_monitor()
+            
+            print(f"[SoundClickPlayer] 🔊 ВКЛЮЧЁН (громкость: {self.volume}%)")
+            return True
+        return True
+    
+    def disable(self):
+        """Выключение"""
+        if self.enabled:
+            self.enabled = False
+            self._stop_volume_monitor()
+            print("[SoundClickPlayer] 🔇 ВЫКЛЮЧЁН")
+            return True
+        return True
+    
+    def toggle(self):
+        """Переключение"""
+        if self.enabled:
+            self.disable()
+        else:
+            self.enable()
+        return self.enabled
+    
+    def _check_volume_change(self):
+        """Проверка изменения громкости"""
+        try:
+            current_volume = self._load_volume_from_config()
+            
+            if current_volume != self._last_known_volume:
+                old_volume = self.volume
+                self.volume = current_volume
+                self._last_known_volume = current_volume
+                
+                # Меняем системную громкость
+                self._set_system_volume(self.volume)
+                
+                print(f"[SoundClickPlayer] 📁 Громкость: {old_volume}% -> {self.volume}%")
+                return True
+            return False
+        except:
+            return False
+    
+    def _start_volume_monitor(self):
+        """Запуск мониторинга"""
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            return
+        
+        self._running = True
+        self._monitor_thread = threading.Thread(target=self._volume_monitor_loop, daemon=True)
+        self._monitor_thread.start()
+    
+    def _stop_volume_monitor(self):
+        """Остановка мониторинга"""
+        self._running = False
+        self._monitor_thread = None
+    
+    def _volume_monitor_loop(self):
+        """Цикл мониторинга"""
+        import time
+        
+        while self._running and self.enabled:
+            try:
+                self._check_volume_change()
+                time.sleep(1)
+            except:
+                time.sleep(1)
+    
+    def play_sound(self):
+        """Воспроизведение системного звука"""
+        try:
+            import winsound
+            winsound.Beep(1200, 50)
+        except:
+            pass
+    
+    def get_status(self):
+        """Статус"""
+        return {
+            'enabled': self.enabled,
+            'volume': self.volume,
+            'method': 'WinAPI SendMessage'
+        }
+
+# ==================== КЛАСС: SettingsWindow (ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ) ====================
 class SettingsWindow:
-    """Окно настроек BITOS - легкая версия с заглушками"""
+    """Окно настроек BITOS с полноценной системой обновлений"""
     
     def __init__(self, parent, desktop):
         self.parent = parent
@@ -8022,8 +9531,19 @@ class SettingsWindow:
         self.window = None
         self.notebook = None
         
-        # Кэш для уменьшения нагрузки
-        self._theme_cache = {}
+        # Создаём менеджер обновлений
+        self.update_manager = UpdateManager(self.bitos)
+        
+        # Переменные для UI обновлений
+        self.update_status_label = None
+        self.update_version_label = None
+        self.update_progress_bar = None
+        self.update_progress_label = None
+        self.check_btn = None
+        self.download_btn = None
+        self.install_btn = None
+        self.update_info_text = None
+        self.update_log_text = None
         
         self.create_window()
     
@@ -8031,36 +9551,38 @@ class SettingsWindow:
         """Создание окна настроек"""
         self.window = tk.Toplevel(self.parent)
         self.window.title("⚙ Настройки BITOS")
-        self.window.geometry("850x650")
+        self.window.geometry("950x780")
         self.window.transient(self.parent)
         self.window.configure(bg='#F5F7FA')
         self.window.resizable(False, False)
         
         # Центрируем окно
-        x = (self.window.winfo_screenwidth() - 850) // 2
-        y = (self.window.winfo_screenheight() - 650) // 2
+        x = (self.window.winfo_screenwidth() - 950) // 2
+        y = (self.window.winfo_screenheight() - 780) // 2
         self.window.geometry(f'+{x}+{y}')
         
         # Создаём вкладки
         self.notebook = ttk.Notebook(self.window)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Создаём все вкладки
+        # Вкладки
         self._create_theme_tab()
+        self._create_sound_tab()
         self._create_security_tab()
         self._create_account_tab()
-        self._create_updates_tab()
+        self._create_updates_tab()  # <--- ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВКЛАДКА
         self._create_system_tab()
         
-        # Кнопка закрытия внизу
+        # Нижняя панель
         bottom_frame = tk.Frame(self.window, bg='#F5F7FA', height=50)
         bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
         tk.Button(bottom_frame, text="Закрыть", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=30, pady=8,
                  cursor='hand2', command=self.window.destroy).pack(side=tk.RIGHT, padx=5)
+
+    # ==================== ВКЛАДКА 1: ТЕМЫ (БЕЗ ИЗМЕНЕНИЙ) ====================
     
-    # ==================== ВКЛАДКА 1: ТЕМЫ ====================
     def _create_theme_tab(self):
         """Вкладка тем оформления"""
         theme_frame = ttk.Frame(self.notebook)
@@ -8069,84 +9591,653 @@ class SettingsWindow:
         main_frame = tk.Frame(theme_frame, bg='white')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        tk.Label(main_frame, text="Выберите тему оформления:", 
-                font=('Segoe UI', 14, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
+        # Заголовок
+        header_frame = tk.Frame(main_frame, bg='white')
+        header_frame.pack(fill=tk.X, pady=(0, 15))
         
-        # Сетка тем
-        themes_grid = tk.Frame(main_frame, bg='white')
-        themes_grid.pack(fill=tk.BOTH, expand=True)
+        tk.Label(header_frame, text="🎨 Управление темами оформления", 
+                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(side=tk.LEFT)
         
-        themes = [
-            ("Темная", "#1E1E1E", "#FFFFFF", "🌙"),
-            ("Светлая", "#F5F7FA", "#2C3E50", "☀️"),
-            ("Синяя", "#3498DB", "#FFFFFF", "🌊"),
-            ("Зеленая", "#27AE60", "#FFFFFF", "🌿"),
-            ("Фиолетовая", "#9B59B6", "#FFFFFF", "🔮"),
-            ("Красная", "#E74C3C", "#FFFFFF", "❤️"),
-        ]
+        tk.Label(header_frame, text="Обои меняются автоматически вместе с темой", 
+                font=('Segoe UI', 10), bg='white', fg='#27AE60').pack(side=tk.RIGHT)
+        
+        # Контейнер с темами
+        themes_container = tk.Frame(main_frame, bg='white')
+        themes_container.pack(fill=tk.BOTH, expand=True)
+        
+        canvas = tk.Canvas(themes_container, bg='white', highlightthickness=0)
+        scrollbar = tk.Scrollbar(themes_container, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='white')
+        
+        scrollable_frame.bind("<Configure>", 
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.theme_var = tk.StringVar(value=self.desktop.current_theme)
         
-        for i, (theme_name, bg_color, fg_color, emoji) in enumerate(themes):
-            row = i // 3
-            col = i % 3
-            
-            # Карточка темы
-            card = tk.Frame(themes_grid, bg='#F0F3F4', relief=tk.RAISED, bd=1)
-            card.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
-            card.configure(width=200, height=130)
-            card.grid_propagate(False)
-            
-            # Превью цвета
-            preview = tk.Frame(card, bg=bg_color, width=180, height=70, relief=tk.SUNKEN, bd=1)
-            preview.pack(pady=(10, 5))
-            preview.pack_propagate(False)
-            
-            tk.Label(preview, text=f"{emoji} Aa", bg=bg_color, fg=fg_color, 
-                    font=('Segoe UI', 14, 'bold')).place(relx=0.5, rely=0.5, anchor='center')
-            
-            # Radio button
-            rb = tk.Radiobutton(card, text=theme_name, variable=self.theme_var, 
-                               value=theme_name, bg='#F0F3F4', fg='#2C3E50', 
-                               font=('Segoe UI', 10), activebackground='#F0F3F4',
-                               command=lambda t=theme_name: self._apply_theme(t))
-            rb.pack(pady=5)
-            
-            # Hover эффект
-            def on_enter(e, f=card):
-                f.config(bg='#E8F4FD')
-            def on_leave(e, f=card):
-                f.config(bg='#F0F3F4')
-            
-            card.bind('<Enter>', on_enter)
-            card.bind('<Leave>', on_leave)
-            
-            # Настройка сетки
-            themes_grid.grid_columnconfigure(col, weight=1)
-        for row in range(2):
-            themes_grid.grid_rowconfigure(row, weight=1)
+        all_themes = self.desktop.get_all_themes()
         
-        # Кнопка применения
-        apply_frame = tk.Frame(main_frame, bg='white')
-        apply_frame.pack(fill=tk.X, pady=20)
+        # Встроенные темы
+        tk.Label(scrollable_frame, text="📦 Встроенные темы:", 
+                font=('Segoe UI', 13, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(10, 10))
         
-        tk.Button(apply_frame, text="✅ Применить тему", bg='#3498DB', fg='white',
+        themes_grid = tk.Frame(scrollable_frame, bg='white')
+        themes_grid.pack(fill=tk.X, pady=5)
+        
+        builtin_themes = ["Базовая", "Техно", "Эко", "Космо"]
+        
+        for i, theme_name in enumerate(builtin_themes):
+            if theme_name in all_themes:
+                theme = all_themes[theme_name]
+                self._create_theme_card(themes_grid, i, theme_name, theme, is_user=False)
+        
+        # Пользовательские темы
+        user_themes = [name for name in all_themes if name not in builtin_themes]
+        if user_themes:
+            tk.Label(scrollable_frame, text="👤 Пользовательские темы:", 
+                    font=('Segoe UI', 13, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(20, 10))
+            
+            user_grid = tk.Frame(scrollable_frame, bg='white')
+            user_grid.pack(fill=tk.X, pady=5)
+            
+            for i, theme_name in enumerate(user_themes):
+                theme = all_themes[theme_name]
+                self._create_theme_card(user_grid, i, theme_name, theme, is_user=True)
+        
+        # Кнопка создания темы
+        create_frame = tk.Frame(main_frame, bg='white')
+        create_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Button(create_frame, text="➕ Создать свою тему", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', 
-                 command=lambda: self._apply_theme(self.theme_var.get())).pack()
+                 cursor='hand2', command=self._show_create_theme_dialog).pack()
     
-    def _apply_theme(self, theme_name):
-        """Применение темы"""
-        self.desktop.change_theme(theme_name)
-        if hasattr(self.desktop, 'notification_center'):
-            self.desktop.notification_center.add_notification(
-                "🎨 Тема изменена",
-                f"Применена тема: {theme_name}",
-                icon="🎨",
-                duration=3000
+    def _create_theme_card(self, parent, index, theme_name, theme, is_user=False):
+        """Создание карточки темы с превью"""
+        row = index // 3
+        col = index % 3
+        
+        card = tk.Frame(parent, bg='#F0F3F4', relief=tk.RAISED, bd=1)
+        card.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
+        card.configure(width=250, height=200)
+        card.grid_propagate(False)
+        
+        # Превью темы
+        preview = tk.Canvas(card, bg=theme['bg'], width=230, height=120, 
+                            highlightthickness=1, highlightcolor='#BDC3C7')
+        preview.pack(pady=(10, 5))
+        preview.pack_propagate(False)
+        
+        # Пытаемся показать превью обоев
+        wallpaper_path = None
+        if theme.get('wallpaper'):
+            wallpaper_path = os.path.join(
+                self.bitos.base_path,
+                theme['wallpaper'].replace('\\', os.sep)
             )
+        
+        if wallpaper_path and os.path.exists(wallpaper_path) and PIL_AVAILABLE:
+            try:
+                img = Image.open(wallpaper_path)
+                img.thumbnail((230, 120), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                preview.create_image(115, 60, image=photo, anchor='center')
+                preview.image_ref = photo
+            except Exception:
+                self._draw_preview_gradient(preview, theme['bg'], 230, 120)
+        else:
+            self._draw_preview_gradient(preview, theme['bg'], 230, 120)
+        
+        # Название темы на превью
+        icon_map = {
+            "Базовая": "🔵",
+            "Техно": "💻",
+            "Эко": "🌿",
+            "Космо": "🚀"
+        }
+        icon = icon_map.get(theme_name, "🎨")
+        
+        preview.create_text(115, 55, text=f"{icon} {theme_name}", 
+                            font=('Segoe UI', 12, 'bold'), fill=theme['fg'])
+        preview.create_text(115, 80, text="Нажмите для применения", 
+                            font=('Segoe UI', 8), fill=theme['fg'])
+        
+        # Радиокнопка выбора темы
+        rb = tk.Radiobutton(card, text=theme_name, variable=self.theme_var, 
+                           value=theme_name, bg='#F0F3F4', fg='#2C3E50', 
+                           font=('Segoe UI', 10, 'bold'), activebackground='#F0F3F4',
+                           command=lambda t=theme_name: self._apply_theme_with_wallpaper(t))
+        rb.pack(pady=2)
+        
+        # Кнопка предпросмотра обоев
+        if wallpaper_path and os.path.exists(wallpaper_path):
+            preview_btn = tk.Button(card, text="🖼 Показать обои", bg='#3498DB', fg='white',
+                                   font=('Segoe UI', 8), bd=0, padx=10, pady=2,
+                                   cursor='hand2',
+                                   command=lambda p=wallpaper_path: self._show_wallpaper_preview(p))
+            preview_btn.pack(pady=2)
+        
+        # Кнопка удаления для пользовательских тем
+        if is_user:
+            del_btn = tk.Button(card, text="🗑 Удалить тему", bg='#E74C3C', fg='white',
+                               font=('Segoe UI', 8), bd=0, padx=10, pady=2,
+                               cursor='hand2',
+                               command=lambda t=theme_name: self._delete_user_theme(t))
+            del_btn.pack(pady=2)
+        
+        # Hover эффекты
+        def on_enter(e, f=card):
+            f.config(bg='#E8F4FD')
+        def on_leave(e, f=card):
+            f.config(bg='#F0F3F4')
+        
+        card.bind('<Enter>', on_enter)
+        card.bind('<Leave>', on_leave)
+        card.bind('<Button-1>', lambda e, t=theme_name: self._apply_theme_with_wallpaper(t))
+        preview.bind('<Button-1>', lambda e, t=theme_name: self._apply_theme_with_wallpaper(t))
+        rb.bind('<Button-1>', lambda e, t=theme_name: self._apply_theme_with_wallpaper(t))
     
-    # ==================== ВКЛАДКА 2: БЕЗОПАСНОСТЬ ====================
+    def _draw_preview_gradient(self, canvas, bg_color, width, height):
+        """Рисует градиентный фон на Canvas для превью"""
+        try:
+            r, g, b = self._hex_to_rgb(bg_color)
+            for i in range(height):
+                factor = i / height
+                new_r = int(r + (255 - r) * factor * 0.2)
+                new_g = int(g + (255 - g) * factor * 0.2)
+                new_b = int(b + (255 - b) * factor * 0.2)
+                color = f'#{new_r:02x}{new_g:02x}{new_b:02x}'
+                canvas.create_line(0, i, width, i, fill=color, tags='gradient')
+        except Exception:
+            canvas.create_rectangle(0, 0, width, height, fill=bg_color, outline='')
+    
+    def _hex_to_rgb(self, hex_color):
+        """Преобразование HEX в RGB"""
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    
+    def _apply_theme_with_wallpaper(self, theme_name):
+        """Применение темы с автоматической сменой обоев"""
+        try:
+            all_themes = self.desktop.get_all_themes()
+            
+            if theme_name not in all_themes:
+                return
+            
+            theme = all_themes[theme_name]
+            
+            # 1. Применяем тему (цвета)
+            success = self.desktop.change_theme(theme_name)
+            
+            if not success:
+                messagebox.showerror("Ошибка", f"Не удалось применить тему '{theme_name}'")
+                return
+            
+            # 2. Применяем обои из темы если они есть
+            if theme.get('wallpaper'):
+                wallpaper_path = os.path.join(
+                    self.bitos.base_path,
+                    theme['wallpaper'].replace('\\', os.sep)
+                )
+                
+                if os.path.exists(wallpaper_path):
+                    self.desktop.wallpaper_manager.set_wallpaper(wallpaper_path)
+                    self.desktop.update_wallpaper()
+                    self.desktop.theme_colors['wallpaper'] = theme['wallpaper']
+                    self.desktop.save_theme(theme_name)
+                    
+                    self.desktop.notification_center.add_notification(
+                        "🖼 Обои обновлены",
+                        f"Установлены обои для темы '{theme_name}'",
+                        icon="🖼",
+                        duration=3000
+                    )
+                else:
+                    self.desktop.notification_center.add_notification(
+                        "⚠️ Обои не найдены",
+                        f"Файл обоев для темы '{theme_name}' отсутствует",
+                        icon="⚠️",
+                        duration=3000
+                    )
+            
+            self.theme_var.set(theme_name)
+            
+            self.desktop.notification_center.add_notification(
+                "🎨 Тема применена",
+                f"Применена тема: {theme_name} с обоями",
+                icon="🎨",
+                duration=2000
+            )
+            
+            self._refresh_theme_tab()
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось применить тему с обоями:\n{str(e)}")
+    
+    def _show_wallpaper_preview(self, wallpaper_path):
+        """Показывает полноэкранный предпросмотр обоев"""
+        if not PIL_AVAILABLE:
+            messagebox.showinfo("Информация", "Для просмотра обоев установите Pillow")
+            return
+        
+        try:
+            preview_window = tk.Toplevel(self.window)
+            preview_window.title("🖼 Предпросмотр обоев")
+            preview_window.geometry("800x600")
+            preview_window.transient(self.window)
+            preview_window.configure(bg='#2C3E50')
+            
+            x = (preview_window.winfo_screenwidth() - 800) // 2
+            y = (preview_window.winfo_screenheight() - 600) // 2
+            preview_window.geometry(f'+{x}+{y}')
+            
+            img = Image.open(wallpaper_path)
+            img.thumbnail((750, 500), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            label = tk.Label(preview_window, image=photo, bg='#2C3E50')
+            label.image = photo
+            label.pack(expand=True, padx=20, pady=20)
+            
+            info_frame = tk.Frame(preview_window, bg='#2C3E50')
+            info_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+            
+            file_name = os.path.basename(wallpaper_path)
+            file_size = os.path.getsize(wallpaper_path) / 1024
+            tk.Label(info_frame, text=f"📄 {file_name}  •  {file_size:.1f} KB", 
+                    font=('Segoe UI', 10), bg='#2C3E50', fg='#BDC3C7').pack()
+            
+            tk.Button(info_frame, text="Закрыть", bg='#E74C3C', fg='white',
+                     font=('Segoe UI', 10), bd=0, padx=20, pady=5,
+                     command=preview_window.destroy).pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть обои:\n{str(e)}")
+    
+    def _delete_user_theme(self, theme_name):
+        """Удаление пользовательской темы"""
+        if messagebox.askyesno("Удаление темы", f"Удалить тему '{theme_name}'?"):
+            success, msg = self.desktop.delete_user_theme(theme_name)
+            if success:
+                messagebox.showinfo("Успех", msg)
+                self._refresh_theme_tab()
+            else:
+                messagebox.showerror("Ошибка", msg)
+    
+    def _refresh_theme_tab(self):
+        """Обновление вкладки тем"""
+        for i, tab in enumerate(self.notebook.tabs()):
+            if self.notebook.tab(tab, "text") == "🎨 Темы":
+                self.notebook.forget(tab)
+                self._create_theme_tab()
+                self.notebook.select(len(self.notebook.tabs()) - 1)
+                break
+    
+    def _show_create_theme_dialog(self):
+        """Диалог создания пользовательской темы с обоями"""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("➕ Создание темы")
+        dialog.geometry("720x650")
+        dialog.transient(self.window)
+        dialog.grab_set()
+        dialog.configure(bg='#F5F7FA')
+        dialog.resizable(False, False)
+        
+        x = (dialog.winfo_screenwidth() - 720) // 2
+        y = (dialog.winfo_screenheight() - 650) // 2
+        dialog.geometry(f'+{x}+{y}')
+        
+        header = tk.Frame(dialog, bg='#3498DB', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="➕ Создание пользовательской темы с обоями", 
+                bg='#3498DB', fg='white', font=('Segoe UI', 14, 'bold')).pack(pady=12)
+        
+        main_container = tk.Frame(dialog, bg='#F5F7FA')
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        canvas = tk.Canvas(main_container, bg='#F5F7FA', highlightthickness=0)
+        scrollbar = tk.Scrollbar(main_container, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='#F5F7FA')
+        
+        scrollable_frame.bind("<Configure>", 
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        fields = {}
+        
+        def add_color_field(label, default_value):
+            frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+            frame.pack(fill=tk.X, pady=5)
+            
+            tk.Label(frame, text=label, font=('Segoe UI', 10),
+                    bg='#F5F7FA', fg='#2C3E50', width=22, anchor='w').pack(side=tk.LEFT)
+            
+            entry = tk.Entry(frame, font=('Segoe UI', 10), bg='white', fg='#2C3E50',
+                            bd=0, highlightthickness=2, highlightcolor='#3498DB',
+                            highlightbackground='#BDC3C7', width=12)
+            entry.pack(side=tk.LEFT, padx=5)
+            entry.insert(0, default_value)
+            
+            def pick_color():
+                from tkinter import colorchooser
+                color = colorchooser.askcolor(title=f"Выберите цвет для {label}")[1]
+                if color:
+                    entry.delete(0, tk.END)
+                    entry.insert(0, color)
+                    update_preview()
+            
+            tk.Button(frame, text="🎨", bg='#F5F7FA', fg='#2C3E50',
+                     font=('Segoe UI', 10), bd=0, cursor='hand2',
+                     command=pick_color).pack(side=tk.LEFT, padx=2)
+            
+            return entry
+        
+        # Основные цвета
+        tk.Label(scrollable_frame, text="🎨 Основные цвета темы:", 
+                font=('Segoe UI', 12, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(10, 5))
+        
+        fields['bg'] = add_color_field("Фон рабочего стола:", "#2980B9")
+        fields['fg'] = add_color_field("Цвет текста:", "#FFFFFF")
+        fields['taskbar_bg'] = add_color_field("Фон панели задач:", "#1A5276")
+        fields['taskbar_fg'] = add_color_field("Цвет текста панели:", "#FFFFFF")
+        fields['canvas_bg'] = add_color_field("Фон холста:", "#2980B9")
+        fields['icon_fg'] = add_color_field("Цвет иконок:", "#FFFFFF")
+        fields['widget_bg'] = add_color_field("Фон виджетов:", "#1F618D")
+        fields['widget_fg'] = add_color_field("Цвет виджетов:", "#FFFFFF")
+        
+        # Обои
+        tk.Label(scrollable_frame, text="🖼 Обои для темы:", 
+                font=('Segoe UI', 12, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(15, 5))
+        
+        wallpaper_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        wallpaper_frame.pack(fill=tk.X, pady=5)
+        
+        wallpaper_path_var = tk.StringVar()
+        wallpaper_entry = tk.Entry(wallpaper_frame, textvariable=wallpaper_path_var,
+                                  font=('Segoe UI', 10), bg='white', fg='#7F8C8D',
+                                  bd=0, highlightthickness=2, highlightcolor='#3498DB',
+                                  highlightbackground='#BDC3C7', state='readonly')
+        wallpaper_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        wallpaper_entry.insert(0, "Файл не выбран (будет градиент)")
+        
+        def browse_wallpaper():
+            from tkinter import filedialog
+            file_path = filedialog.askopenfilename(
+                title="Выберите обои для темы",
+                filetypes=[("Изображения", "*.png *.jpg *.jpeg *.gif *.bmp"), ("Все файлы", "*.*")]
+            )
+            if file_path:
+                wallpaper_entry.config(state='normal')
+                wallpaper_entry.delete(0, tk.END)
+                wallpaper_entry.insert(0, file_path)
+                wallpaper_entry.config(state='readonly')
+                fields['wallpaper_path'] = file_path
+                update_preview()
+        
+        tk.Button(wallpaper_frame, text="📂 Обзор", bg='#3498DB', fg='white',
+                 font=('Segoe UI', 10), bd=0, padx=15, pady=5,
+                 cursor='hand2', command=browse_wallpaper).pack(side=tk.RIGHT, padx=(5, 0))
+        
+        tk.Label(scrollable_frame, text="Название темы:", 
+                font=('Segoe UI', 12, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(15, 5))
+        
+        name_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        name_frame.pack(fill=tk.X, pady=5)
+        
+        name_entry = tk.Entry(name_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
+                             bd=0, highlightthickness=2, highlightcolor='#3498DB',
+                             highlightbackground='#BDC3C7')
+        name_entry.pack(fill=tk.X, ipady=8)
+        name_entry.insert(0, "Моя тема")
+        fields['name'] = name_entry
+        
+        # Превью
+        preview_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        preview_frame.pack(fill=tk.X, pady=15)
+        
+        tk.Label(preview_frame, text="🖼 Превью темы:", font=('Segoe UI', 12, 'bold'),
+                bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(0, 5))
+        
+        preview_canvas = tk.Canvas(preview_frame, bg='#2980B9', width=660, height=100,
+                                   highlightthickness=2, highlightcolor='#3498DB')
+        preview_canvas.pack(fill=tk.X, pady=5)
+        
+        preview_text = preview_canvas.create_text(330, 30, text="Тема: Моя тема",
+                                                   font=('Segoe UI', 14, 'bold'), fill='white')
+        preview_subtext = preview_canvas.create_text(330, 55, text="Панель задач | Иконки | Виджеты",
+                                                      font=('Segoe UI', 10), fill='white')
+        preview_taskbar = preview_canvas.create_rectangle(0, 70, 660, 100, 
+                                                         fill='#1A5276', outline='')
+        preview_taskbar_text = preview_canvas.create_text(330, 85, text="ПУСК | 📁 Проводник | ⏰ 12:00",
+                                                          fill='white', font=('Segoe UI', 8))
+        
+        def update_preview():
+            try:
+                bg_color = fields['bg'].get().strip() or "#2980B9"
+                fg_color = fields['fg'].get().strip() or "#FFFFFF"
+                taskbar_bg = fields['taskbar_bg'].get().strip() or "#1A5276"
+                taskbar_fg = fields['taskbar_fg'].get().strip() or "#FFFFFF"
+                theme_name = name_entry.get().strip() or "Моя тема"
+                
+                preview_canvas.config(bg=bg_color)
+                preview_canvas.itemconfig(preview_text, fill=fg_color, text=f"Тема: {theme_name}")
+                preview_canvas.itemconfig(preview_subtext, fill=fg_color)
+                preview_canvas.itemconfig(preview_taskbar, fill=taskbar_bg)
+                preview_canvas.itemconfig(preview_taskbar_text, fill=taskbar_fg)
+            except Exception as e:
+                pass
+        
+        for key, entry in fields.items():
+            if key != 'name' and key != 'wallpaper_path' and hasattr(entry, 'bind'):
+                entry.bind('<KeyRelease>', lambda e: update_preview())
+        
+        name_entry.bind('<KeyRelease>', lambda e: update_preview())
+        
+        btn_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X, pady=15)
+        
+        def create_theme():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showerror("Ошибка", "Введите название темы", parent=dialog)
+                return
+            
+            if name in self.desktop.THEMES:
+                messagebox.showerror("Ошибка", "Тема с таким именем уже существует", parent=dialog)
+                return
+            
+            try:
+                bg_color = fields['bg'].get().strip() or "#2980B9"
+                fg_color = fields['fg'].get().strip() or "#FFFFFF"
+                taskbar_bg = fields['taskbar_bg'].get().strip() or "#1A5276"
+                taskbar_fg = fields['taskbar_fg'].get().strip() or "#FFFFFF"
+                canvas_bg = fields['canvas_bg'].get().strip() or "#2980B9"
+                icon_fg = fields['icon_fg'].get().strip() or "#FFFFFF"
+                widget_bg = fields['widget_bg'].get().strip() or "#1F618D"
+                widget_fg = fields['widget_fg'].get().strip() or "#FFFFFF"
+                wallpaper_path = fields.get('wallpaper_path')
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Некорректные цвета: {str(e)}", parent=dialog)
+                return
+            
+            success, msg = self.desktop.create_user_theme(
+                name, bg_color, fg_color, taskbar_bg, taskbar_fg,
+                canvas_bg, icon_fg, widget_bg, widget_fg, wallpaper_path
+            )
+            
+            if success:
+                messagebox.showinfo("Успех", msg, parent=dialog)
+                dialog.destroy()
+                self._refresh_theme_tab()
+                self._apply_theme_with_wallpaper(name)
+            else:
+                messagebox.showerror("Ошибка", msg, parent=dialog)
+        
+        tk.Button(btn_frame, text="✅ Создать и применить тему", bg='#27AE60', fg='white',
+                 font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
+                 cursor='hand2', command=create_theme).pack(side=tk.RIGHT, padx=5)
+        
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+                 font=('Segoe UI', 11), bd=0, padx=30, pady=10,
+                 cursor='hand2', command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        
+        dialog.after(100, update_preview)
+        name_entry.focus_set()
+
+    # ==================== ВКЛАДКА 2: ЗВУК (БЕЗ ИЗМЕНЕНИЙ) ====================
+    
+    def _create_sound_tab(self):
+        """Вкладка настроек системных звуков"""
+        sound_frame = ttk.Frame(self.notebook)
+        self.notebook.add(sound_frame, text="🔊 Звук")
+        
+        main_frame = tk.Frame(sound_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        tk.Label(main_frame, text="🔊 Системные звуки BITOS", 
+                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
+        
+        system_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        system_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(system_frame, text="🔊 Системные звуки", 
+                font=('Segoe UI', 14, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
+        
+        tk.Label(system_frame, text="Включить/выключить все системные звуки BITOS",
+                font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D').pack(anchor='w', padx=15, pady=(0, 5))
+        
+        system_switch_frame = tk.Frame(system_frame, bg='#F0F3F4')
+        system_switch_frame.pack(fill=tk.X, padx=15, pady=10)
+        
+        self.system_sound_var = tk.BooleanVar(value=self.bitos.sound_enabled if self.bitos else True)
+        
+        self.system_switch_canvas = tk.Canvas(system_switch_frame, width=60, height=30,
+                                              bg='#F0F3F4', highlightthickness=0)
+        self.system_switch_canvas.pack(side=tk.LEFT)
+        
+        self.system_switch_bg = self.system_switch_canvas.create_rectangle(
+            5, 5, 55, 25,
+            fill='#27AE60' if self.system_sound_var.get() else '#95A5A6',
+            outline=''
+        )
+        self.system_switch_handle = self.system_switch_canvas.create_oval(
+            37 if self.system_sound_var.get() else 7,
+            7, 
+            53 if self.system_sound_var.get() else 23, 
+            23,
+            fill='white', 
+            outline='#7F8C8D'
+        )
+        
+        self.system_switch_label = tk.Label(system_switch_frame,
+                                            text="Включены" if self.system_sound_var.get() else "Выключены",
+                                            font=('Segoe UI', 11, 'bold'),
+                                            bg='#F0F3F4',
+                                            fg='#27AE60' if self.system_sound_var.get() else '#7F8C8D')
+        self.system_switch_label.pack(side=tk.LEFT, padx=(10, 0))
+        
+        self.system_switch_canvas.bind('<Button-1>', self._toggle_system_sound)
+        self.system_switch_canvas.bind('<Enter>', lambda e: self.system_switch_canvas.config(cursor='hand2'))
+        
+        sounds_list_frame = tk.Frame(system_frame, bg='#F0F3F4')
+        sounds_list_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+        
+        tk.Label(sounds_list_frame, text="Доступные системные звуки:", 
+                font=('Segoe UI', 9, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', pady=(5, 5))
+        
+        sounds_grid = tk.Frame(sounds_list_frame, bg='#F0F3F4')
+        sounds_grid.pack(fill=tk.X)
+        
+        sound_names = [
+            ("🚀", "startup", "Запуск системы"),
+            ("🔑", "logon", "Вход в систему"),
+            ("🚪", "logoff", "Выход из системы"),
+            ("⏻", "shutdown", "Выключение"),
+            ("❌", "error", "Ошибка"),
+            ("🔔", "notification", "Уведомление"),
+            ("✅", "success", "Успех"),
+            ("⚠️", "warning", "Предупреждение"),
+            ("💾", "usb_connect", "USB подключение"),
+            ("💾", "usb_disconnect", "USB отключение"),
+        ]
+        
+        for i, (icon, name, label) in enumerate(sound_names):
+            row = i // 5
+            col = i % 5
+            btn = tk.Button(sounds_grid, text=f"{icon} {label}", bg='#34495E', fg='white',
+                           font=('Segoe UI', 8), bd=0, padx=8, pady=3,
+                           cursor='hand2',
+                           command=lambda n=name: self._test_system_sound(n))
+            btn.grid(row=row, column=col, padx=3, pady=3, sticky='w')
+            btn.bind('<Enter>', lambda e, b=btn: b.config(bg='#3498DB'))
+            btn.bind('<Leave>', lambda e, b=btn: b.config(bg='#34495E'))
+        
+        save_frame = tk.Frame(main_frame, bg='white')
+        save_frame.pack(fill=tk.X, pady=20)
+        
+        tk.Button(save_frame, text="✅ Применить настройки", bg='#27AE60', fg='white',
+                 font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
+                 cursor='hand2', command=self._save_sound_settings).pack(side=tk.RIGHT, padx=5)
+    
+    def _toggle_system_sound(self, event=None):
+        """Переключение системных звуков"""
+        new_state = not self.system_sound_var.get()
+        self.system_sound_var.set(new_state)
+        
+        color = '#27AE60' if new_state else '#95A5A6'
+        self.system_switch_canvas.itemconfig(self.system_switch_bg, fill=color)
+        
+        x_pos = 37 if new_state else 7
+        self.system_switch_canvas.coords(self.system_switch_handle, x_pos, 7, x_pos + 16, 23)
+        
+        text = "Включены" if new_state else "Выключены"
+        color_text = '#27AE60' if new_state else '#7F8C8D'
+        self.system_switch_label.config(text=text, fg=color_text)
+        
+        if self.bitos:
+            self.bitos.sound_enabled = new_state
+            if new_state:
+                self.bitos.play_sound("notification")
+    
+    def _test_system_sound(self, sound_name):
+        """Тест системного звука"""
+        if self.bitos:
+            if self.bitos.sound_enabled:
+                self.bitos.play_sound(sound_name)
+            else:
+                was_enabled = self.bitos.sound_enabled
+                self.bitos.sound_enabled = True
+                self.bitos.play_sound(sound_name)
+                self.bitos.sound_enabled = was_enabled
+    
+    def _save_sound_settings(self):
+        """Сохранение настроек звука"""
+        try:
+            if self.bitos:
+                self.bitos.sound_enabled = self.system_sound_var.get()
+            
+            messagebox.showinfo("Успех", "Настройки звука сохранены!")
+            
+            if self.desktop and hasattr(self.desktop, 'notification_center'):
+                self.desktop.notification_center.add_notification(
+                    "🔊 Настройки звука",
+                    "Настройки звука сохранены",
+                    icon="🔊",
+                    duration=2000
+                )
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{str(e)}")
+
+    # ==================== ВКЛАДКА 3: БЕЗОПАСНОСТЬ (БЕЗ ИЗМЕНЕНИЙ) ====================
+    
     def _create_security_tab(self):
         """Вкладка безопасности"""
         security_frame = ttk.Frame(self.notebook)
@@ -8158,13 +10249,11 @@ class SettingsWindow:
         tk.Label(main_frame, text="🔐 Изменение PIN-кода входа", 
                 font=('Segoe UI', 14, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
-        # Информация
         info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
         info_frame.pack(fill=tk.X, pady=(0, 20))
         tk.Label(info_frame, text="💡 PIN-код используется для входа в систему. Должен содержать 4-8 цифр.",
                 font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D').pack(padx=10, pady=10)
         
-        # Поля ввода
         fields_frame = tk.Frame(main_frame, bg='white')
         fields_frame.pack(fill=tk.X, pady=10)
         
@@ -8183,12 +10272,10 @@ class SettingsWindow:
             entry.pack(fill=tk.X, ipady=8, pady=(0, 5))
             self.pin_entries.append(entry)
         
-        # Статус
         self.pin_status = tk.Label(main_frame, text="", bg='white', fg='#E74C3C', 
                                   font=('Segoe UI', 10))
         self.pin_status.pack(anchor='w', pady=5)
         
-        # Кнопки
         btn_frame = tk.Frame(main_frame, bg='white')
         btn_frame.pack(fill=tk.X, pady=20)
         
@@ -8248,139 +10335,672 @@ class SettingsWindow:
             self.pin_status.config(text="✅ PIN-код сброшен до 1234", fg='#27AE60')
             for entry in self.pin_entries:
                 entry.delete(0, tk.END)
+
+    # ==================== ВКЛАДКА 4: АККАУНТ (УПРОЩЁННАЯ) ====================
     
-    # ==================== ВКЛАДКА 3: АККАУНТ (ЗАГЛУШКА) ====================
     def _create_account_tab(self):
-        """Вкладка аккаунта - заглушка"""
+        """Вкладка аккаунта"""
         account_frame = ttk.Frame(self.notebook)
-        self.notebook.add(account_frame, text="🔐 Аккаунт")
+        self.notebook.add(account_frame, text="👤 Аккаунт")
         
         main_frame = tk.Frame(account_frame, bg='white')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        # Заголовок
-        tk.Label(main_frame, text="🔐 Управление аккаунтом", 
-                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 10))
+        tk.Label(main_frame, text="👤 Информация об аккаунте", 
+                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
-        tk.Label(main_frame, text="Вход в аккаунт через Google Firebase", 
-                font=('Segoe UI', 11), bg='white', fg='#7F8C8D').pack(anchor='w', pady=(0, 20))
+        info_data = [
+            ("Имя пользователя:", self.desktop.username),
+            ("Домашняя папка:", self.bitos.user_paths["home"]),
+            ("Виртуальный рабочий стол:", self.bitos.user_paths["desktop"]),
+            ("Версия BITOS:", self.bitos.version),
+        ]
         
-        # Информационная панель
-        info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
-        info_frame.pack(fill=tk.X, pady=(0, 20))
+        for label, value in info_data:
+            frame = tk.Frame(main_frame, bg='white')
+            frame.pack(fill=tk.X, pady=4)
+            
+            tk.Label(frame, text=label, font=('Segoe UI', 10, 'bold'), 
+                    bg='white', fg='#2C3E50', width=22, anchor='w').pack(side=tk.LEFT)
+            tk.Label(frame, text=value, font=('Segoe UI', 10), 
+                    bg='white', fg='#7F8C8D', anchor='w').pack(side=tk.LEFT, padx=(10, 0))
         
-        tk.Label(info_frame, text="🚧 Функция в разработке", 
-                font=('Segoe UI', 14, 'bold'), bg='#F0F3F4', fg='#E67E22').pack(pady=20)
+        btn_frame = tk.Frame(main_frame, bg='white')
+        btn_frame.pack(fill=tk.X, pady=20)
         
-        tk.Label(info_frame, text="В будущем здесь будет доступен вход через Google Firebase,\n"
-                                 "синхронизация настроек и данных между устройствами.", 
-                font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D', justify='center').pack(pady=10)
-        
-        # Форма входа (заглушка)
-        login_frame = tk.Frame(main_frame, bg='white', relief=tk.RIDGE, bd=1)
-        login_frame.pack(fill=tk.X, pady=10)
-        
-        tk.Label(login_frame, text="🔑 Вход в аккаунт (заглушка)", 
-                font=('Segoe UI', 12, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
-        
-        # Поля (неактивные)
-        tk.Label(login_frame, text="Email:", font=('Segoe UI', 10), bg='white', fg='#7F8C8D').pack(anchor='w', padx=15)
-        email_entry = tk.Entry(login_frame, font=('Segoe UI', 11), bg='#F5F7FA', 
-                              fg='#7F8C8D', state='disabled')
-        email_entry.pack(fill=tk.X, padx=15, pady=(5, 10), ipady=8)
-        email_entry.insert(0, "user@example.com")
-        
-        tk.Label(login_frame, text="Пароль:", font=('Segoe UI', 10), bg='white', fg='#7F8C8D').pack(anchor='w', padx=15)
-        pass_entry = tk.Entry(login_frame, font=('Segoe UI', 11), bg='#F5F7FA', 
-                             fg='#7F8C8D', state='disabled', show='•')
-        pass_entry.pack(fill=tk.X, padx=15, pady=(5, 10), ipady=8)
-        pass_entry.insert(0, "password123")
-        
-        # Кнопки (заглушки)
-        btn_frame = tk.Frame(login_frame, bg='white')
-        btn_frame.pack(fill=tk.X, padx=15, pady=10)
-        
-        tk.Button(btn_frame, text="🔑 Войти", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
+        tk.Button(btn_frame, text="🔑 Сменить пароль", bg='#3498DB', fg='white',
+                 font=('Segoe UI', 11), bd=0, padx=20, pady=8,
                  cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
         
-        tk.Button(btn_frame, text="📝 Регистрация", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_frame, text="🌐 Google", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="🌐 Открыть Global ID", bg='#27AE60', fg='white',
+                 font=('Segoe UI', 11), bd=0, padx=20, pady=8,
+                 cursor='hand2', command=self._open_global_id).pack(side=tk.LEFT, padx=5)
     
-    def _show_coming_soon(self):
-        """Показать сообщение о разработке"""
-        messagebox.showinfo("В разработке", 
-            "🚧 Эта функция находится в разработке.\n\n"
-            "В ближайшее время будет добавлен вход через Google Firebase\n"
-            "с синхронизацией настроек и данных между устройствами.")
+    def _open_global_id(self):
+        """Открыть сайт Global ID"""
+        import webbrowser
+        webbrowser.open("https://saryanich.github.io/Global-ID/")
+
+    # ==================== ВКЛАДКА 5: ОБНОВЛЕНИЯ (ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ) ====================
     
-    # ==================== ВКЛАДКА 4: ОБНОВЛЕНИЯ (ЗАГЛУШКА) ====================
     def _create_updates_tab(self):
-        """Вкладка обновлений - заглушка"""
+        """Вкладка обновлений - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ с системой автообновления"""
         updates_frame = ttk.Frame(self.notebook)
         self.notebook.add(updates_frame, text="📦 Обновления")
         
         main_frame = tk.Frame(updates_frame, bg='white')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        # Заголовок
-        tk.Label(main_frame, text="📦 Система обновлений BITOS", 
-                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 10))
+        # ===== ЗАГОЛОВОК =====
+        header_frame = tk.Frame(main_frame, bg='white')
+        header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(main_frame, text="Проверка и установка обновлений с GitHub", 
-                font=('Segoe UI', 11), bg='white', fg='#7F8C8D').pack(anchor='w', pady=(0, 20))
+        tk.Label(header_frame, text="📦 Система обновлений BITOS", 
+                font=('Segoe UI', 18, 'bold'), bg='white', fg='#2C3E50').pack(side=tk.LEFT)
         
-        # Информация о версии
-        info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
-        info_frame.pack(fill=tk.X, pady=(0, 20))
+        version_badge = tk.Label(header_frame, text=f"v{self.bitos.version}", 
+                                 font=('Segoe UI', 12, 'bold'), bg='#3498DB', fg='white',
+                                 padx=12, pady=4)
+        version_badge.pack(side=tk.LEFT, padx=(15, 0))
         
-        tk.Label(info_frame, text=f"📌 Текущая версия: {self.bitos.version} ({self.bitos.build})",
-                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
+        # ===== СТАТУСНАЯ ПАНЕЛЬ =====
+        status_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        status_frame.pack(fill=tk.X, pady=(0, 15))
         
-        # Информация о последней версии (заглушка)
-        version_frame = tk.Frame(info_frame, bg='#F0F3F4')
-        version_frame.pack(fill=tk.X, padx=15, pady=5)
+        # Текущая версия
+        version_frame = tk.Frame(status_frame, bg='#F0F3F4')
+        version_frame.pack(fill=tk.X, padx=15, pady=8)
         
-        tk.Label(version_frame, text="🔍 Статус:", font=('Segoe UI', 11), 
-                bg='#F0F3F4', fg='#2C3E50').pack(side=tk.LEFT)
+        tk.Label(version_frame, text="📌 Текущая версия:", 
+                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(side=tk.LEFT)
         
-        tk.Label(version_frame, text="✅ Установлена последняя версия", 
-                font=('Segoe UI', 11, 'bold'), bg='#F0F3F4', fg='#27AE60').pack(side=tk.LEFT, padx=(10, 0))
+        tk.Label(version_frame, text=f"{self.bitos.version} ({self.bitos.build})", 
+                font=('Segoe UI', 11, 'bold'), bg='#F0F3F4', fg='#3498DB').pack(side=tk.LEFT, padx=(10, 0))
         
-        # Кнопки
+        # Статус обновления
+        status_line = tk.Frame(status_frame, bg='#F0F3F4')
+        status_line.pack(fill=tk.X, padx=15, pady=(0, 8))
+        
+        tk.Label(status_line, text="🔍 Статус:", 
+                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(side=tk.LEFT)
+        
+        # Проверяем сохранённый статус
+        saved_status = self.update_manager.status
+        if saved_status.get('update_available', False):
+            status_text = f"✅ Доступно обновление v{saved_status.get('latest_version', '')}"
+            status_color = '#E67E22'
+        elif saved_status.get('checked_at'):
+            status_text = "✅ Установлена последняя версия"
+            status_color = '#27AE60'
+        else:
+            status_text = "⏳ Ожидание проверки"
+            status_color = '#7F8C8D'
+        
+        self.update_status_label = tk.Label(status_line, text=status_text, 
+                                           font=('Segoe UI', 11, 'bold'),
+                                           bg='#F0F3F4', fg=status_color)
+        self.update_status_label.pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Время последней проверки
+        if saved_status.get('checked_at'):
+            try:
+                check_time = datetime.fromisoformat(saved_status['checked_at'])
+                time_str = check_time.strftime('%H:%M:%S %d.%m.%Y')
+                tk.Label(status_line, text=f"(Проверено: {time_str})", 
+                        font=('Segoe UI', 9), bg='#F0F3F4', fg='#95A5A6').pack(side=tk.LEFT, padx=(15, 0))
+            except:
+                pass
+        
+        # ===== КНОПКИ УПРАВЛЕНИЯ =====
         btn_frame = tk.Frame(main_frame, bg='white')
-        btn_frame.pack(fill=tk.X, pady=10)
+        btn_frame.pack(fill=tk.X, pady=5)
         
-        tk.Button(btn_frame, text="🔍 Проверить обновления", bg='#3498DB', fg='white',
-                 font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
+        # Кнопка проверки
+        self.check_btn = tk.Button(btn_frame, text="🔍 Проверить обновления", 
+                                  bg='#3498DB', fg='white',
+                                  font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
+                                  cursor='hand2', command=self._check_updates)
+        self.check_btn.pack(side=tk.LEFT, padx=5)
         
-        tk.Button(btn_frame, text="⬇️ Загрузить и установить", bg='#95A5A6', fg='white',
-                 font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
+        # Кнопка скачивания (изначально неактивна)
+        self.download_btn = tk.Button(btn_frame, text="⬇️ Скачать обновление", 
+                                     bg='#95A5A6', fg='white',
+                                     font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
+                                     cursor='hand2', state='disabled',
+                                     command=self._download_update)
+        self.download_btn.pack(side=tk.LEFT, padx=5)
         
-        # Лог обновлений (заглушка)
+        # Кнопка установки (изначально неактивна)
+        self.install_btn = tk.Button(btn_frame, text="🔄 Установить и перезагрузить", 
+                                    bg='#95A5A6', fg='white',
+                                    font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
+                                    cursor='hand2', state='disabled',
+                                    command=self._install_update)
+        self.install_btn.pack(side=tk.LEFT, padx=5)
+        
+        # ===== ПРОГРЕСС-БАР =====
+        progress_frame = tk.Frame(main_frame, bg='white')
+        progress_frame.pack(fill=tk.X, pady=(10, 5))
+        
+        self.update_progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=700)
+        self.update_progress_bar.pack(fill=tk.X)
+        
+        self.update_progress_label = tk.Label(progress_frame, text="", 
+                                             bg='white', fg='#7F8C8D', font=('Segoe UI', 9))
+        self.update_progress_label.pack(anchor='w', pady=(5, 0))
+        
+        # ===== ИНФОРМАЦИЯ О РЕЛИЗЕ =====
+        info_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=1)
+        info_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 5))
+        
+        tk.Label(info_frame, text="📋 Информация о версии:", 
+                font=('Segoe UI', 10, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', padx=10, pady=5)
+        
+        self.update_info_text = scrolledtext.ScrolledText(info_frame, font=('Consolas', 10), 
+                                                          bg='#F5F7FA', fg='#2C3E50',
+                                                          height=4, wrap=tk.WORD)
+        self.update_info_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.update_info_text.insert('1.0', "🔍 Нажмите 'Проверить обновления' для получения информации\n")
+        self.update_info_text.config(state='disabled')
+        
+        # ===== ЛОГ ОБНОВЛЕНИЙ =====
         log_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=1)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
         
-        tk.Label(log_frame, text="📋 Лог обновлений:", font=('Segoe UI', 10, 'bold'),
-                bg='white', fg='#2C3E50').pack(anchor='w', padx=10, pady=5)
+        log_header = tk.Frame(log_frame, bg='white')
+        log_header.pack(fill=tk.X, padx=10, pady=5)
         
-        log_text = scrolledtext.ScrolledText(log_frame, font=('Consolas', 9), 
-                                            bg='#1E1E1E', fg='#00FF00',
-                                            height=6, wrap=tk.WORD)
-        log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        log_text.insert('1.0', "📦 Система обновлений готова\n")
-        log_text.insert('end', "🔍 Для проверки обновлений нажмите 'Проверить обновления'\n")
-        log_text.insert('end', "🚧 Автоматическое обновление будет доступно в следующей версии\n")
-        log_text.config(state='disabled')
+        tk.Label(log_header, text="📝 Лог обновлений:", 
+                font=('Segoe UI', 10, 'bold'), bg='white', fg='#2C3E50').pack(side=tk.LEFT)
+        
+        tk.Button(log_header, text="Очистить", bg='#E74C3C', fg='white',
+                 font=('Segoe UI', 8), bd=0, padx=10, pady=2,
+                 cursor='hand2', command=self._clear_update_log).pack(side=tk.RIGHT)
+        
+        self.update_log_text = scrolledtext.ScrolledText(log_frame, font=('Consolas', 9), 
+                                                         bg='#1E1E1E', fg='#00FF00',
+                                                         height=5, wrap=tk.WORD)
+        self.update_log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.update_log_text.insert('1.0', "[INFO] Система обновлений готова\n")
+        self.update_log_text.insert('end', "[INFO] Для проверки нажмите 'Проверить обновления'\n")
+        self.update_log_text.config(state='disabled')
+        
+        # Обновляем состояние кнопок
+        self._update_buttons_state()
     
-    # ==================== ВКЛАДКА 5: СИСТЕМА ====================
+    def _update_buttons_state(self):
+        """Обновление состояния кнопок в зависимости от статуса"""
+        if self.update_manager.update_available:
+            self.download_btn.config(state='normal', bg='#27AE60')
+            self.install_btn.config(state='disabled', bg='#95A5A6')
+        else:
+            self.download_btn.config(state='disabled', bg='#95A5A6')
+            self.install_btn.config(state='disabled', bg='#95A5A6')
+        
+        if self.update_manager.is_downloading:
+            self.check_btn.config(state='disabled', bg='#95A5A6')
+            self.download_btn.config(state='disabled', bg='#95A5A6')
+        
+        if self.update_manager.is_installing:
+            self.check_btn.config(state='disabled', bg='#95A5A6')
+            self.download_btn.config(state='disabled', bg='#95A5A6')
+            self.install_btn.config(state='disabled', bg='#95A5A6')
+    
+    def _log_update(self, message, log_type="INFO"):
+        """Добавление записи в лог обновлений"""
+        colors = {
+            "INFO": "#00FF00",
+            "WARNING": "#FFA500",
+            "ERROR": "#FF0000",
+            "SUCCESS": "#00FF00",
+            "DOWNLOAD": "#00BFFF",
+            "INSTALL": "#FFD700"
+        }
+        
+        color = colors.get(log_type, "#00FF00")
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        self.update_log_text.config(state='normal')
+        self.update_log_text.insert('end', f"[{timestamp}] ", "timestamp")
+        self.update_log_text.insert('end', f"[{log_type}] ", log_type)
+        self.update_log_text.insert('end', f"{message}\n", "message")
+        
+        # Настраиваем теги
+        self.update_log_text.tag_config("timestamp", foreground="#7F8C8D")
+        self.update_log_text.tag_config("INFO", foreground="#00FF00")
+        self.update_log_text.tag_config("WARNING", foreground="#FFA500")
+        self.update_log_text.tag_config("ERROR", foreground="#FF0000")
+        self.update_log_text.tag_config("SUCCESS", foreground="#00FF00")
+        self.update_log_text.tag_config("DOWNLOAD", foreground="#00BFFF")
+        self.update_log_text.tag_config("INSTALL", foreground="#FFD700")
+        self.update_log_text.tag_config("message", foreground=color)
+        
+        # Прокручиваем вниз
+        self.update_log_text.see('end')
+        self.update_log_text.config(state='disabled')
+        self.update_log_text.update()
+    
+    def _check_updates(self):
+        """Проверка обновлений"""
+        if self.update_manager.check_in_progress:
+            return
+        
+        self._log_update("Начинаем проверку обновлений...", "INFO")
+        self.check_btn.config(state='disabled', text="⏳ Проверка...")
+        self.update_status_label.config(text="⏳ Проверка обновлений...", fg='#3498DB')
+        
+        def callback(success, version, download_url, release_notes, error):
+            self.window.after(0, lambda: self._check_callback(success, version, download_url, release_notes, error))
+        
+        # Запускаем проверку в потоке
+        thread = threading.Thread(target=self.update_manager.check_for_updates, args=(callback,))
+        thread.daemon = True
+        thread.start()
+    
+    def _check_callback(self, success, version, download_url, release_notes, error):
+        """Callback после проверки обновлений"""
+        self.check_btn.config(state='normal', text="🔍 Проверить обновления")
+        
+        if error:
+            self._log_update(f"❌ Ошибка: {error}", "ERROR")
+            self.update_status_label.config(text=f"❌ {error}", fg='#E74C3C')
+            
+            # Показываем диалог с ошибкой
+            if "requests" in error:
+                messagebox.showerror("Ошибка", 
+                    "Библиотека requests не установлена!\n\n"
+                    "Установите её командой:\n"
+                    "pip install requests")
+            else:
+                messagebox.showerror("Ошибка", f"Не удалось проверить обновления:\n{error}")
+            return
+        
+        if success:
+            self._log_update(f"✅ Доступно обновление v{version}!", "SUCCESS")
+            self.update_status_label.config(text=f"✅ Доступно обновление v{version}", fg='#E67E22')
+            
+            # Показываем информацию о релизе
+            self.update_info_text.config(state='normal')
+            self.update_info_text.delete('1.0', tk.END)
+            
+            info = f"""
+╔═══════════════════════════════════════════════════════════════
+║ НОВАЯ ВЕРСИЯ: v{version}
+╠═══════════════════════════════════════════════════════════════
+║ Текущая версия: {self.bitos.version}
+║
+║ 📝 Описание релиза:
+║ {release_notes if release_notes else 'Нет описания'}
+╠═══════════════════════════════════════════════════════════════
+║ 📥 Ссылка для скачивания: {download_url}
+╚═══════════════════════════════════════════════════════════════
+"""
+            self.update_info_text.insert('1.0', info)
+            self.update_info_text.config(state='disabled')
+            
+            # Активируем кнопку скачивания
+            self.download_btn.config(state='normal', bg='#27AE60')
+            self._log_update(f"📥 Нажмите 'Скачать обновление' для загрузки v{version}", "DOWNLOAD")
+            
+            # Показываем уведомление
+            if self.desktop and hasattr(self.desktop, 'notification_center'):
+                self.desktop.notification_center.add_notification(
+                    "📦 Доступно обновление",
+                    f"Версия {version} доступна для скачивания",
+                    icon="📦",
+                    duration=5000
+                )
+        else:
+            self._log_update("✅ Установлена последняя версия", "INFO")
+            self.update_status_label.config(text="✅ Установлена последняя версия", fg='#27AE60')
+            
+            self.update_info_text.config(state='normal')
+            self.update_info_text.delete('1.0', tk.END)
+            self.update_info_text.insert('1.0', "✅ Установлена последняя версия BITOS\n\n"
+                                               f"Текущая версия: {self.bitos.version}\n"
+                                               f"Дата проверки: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
+            self.update_info_text.config(state='disabled')
+            
+            self.download_btn.config(state='disabled', bg='#95A5A6')
+            self.install_btn.config(state='disabled', bg='#95A5A6')
+    
+    def _download_update(self):
+        """Скачивание обновления"""
+        if not self.update_manager.update_available:
+            messagebox.showinfo("Информация", "Нет доступных обновлений для скачивания")
+            return
+        
+        if self.update_manager.is_downloading:
+            messagebox.showinfo("Информация", "Скачивание уже выполняется")
+            return
+        
+        # Спрашиваем пользователя
+        if not messagebox.askyesno("Скачивание обновления", 
+                                  f"Начать скачивание обновления v{self.update_manager.latest_version}?\n\n"
+                                  f"Размер: ~10-50 МБ\n"
+                                  f"Время: зависит от скорости интернета"):
+            return
+        
+        self._log_update(f"📥 Начинаем скачивание v{self.update_manager.latest_version}...", "DOWNLOAD")
+        self.download_btn.config(state='disabled', text="⏳ Скачивание...")
+        self.check_btn.config(state='disabled')
+        self.update_progress_bar['value'] = 0
+        self.update_progress_label.config(text="Подготовка к скачиванию...")
+        
+        def progress_callback(percent, status_text):
+            self.window.after(0, lambda: self._download_progress(percent, status_text))
+        
+        def complete_callback(success, file_path, error):
+            self.window.after(0, lambda: self._download_complete(success, file_path, error))
+        
+        # Запускаем скачивание в потоке
+        thread = threading.Thread(target=self._download_thread, 
+                                 args=(progress_callback, complete_callback))
+        thread.daemon = True
+        thread.start()
+    
+    def _download_thread(self, progress_callback, complete_callback):
+        """Поток для скачивания"""
+        try:
+            import requests
+            
+            # Подготавливаем URL
+            url = self.update_manager.download_url
+            
+            # Создаём имя файла
+            filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+            filepath = os.path.join(self.update_manager.temp_dir, filename)
+            
+            # Скачиваем с прогрессом
+            response = requests.get(url, stream=True, timeout=30)
+            total_size = int(response.headers.get('content-length', 0))
+            
+            if total_size == 0:
+                complete_callback(False, None, "Не удалось определить размер файла")
+                return
+            
+            progress_callback(0, "Начинаем загрузку...")
+            
+            with open(filepath, 'wb') as f:
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        percent = int((downloaded / total_size) * 100)
+                        progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+            
+            # Проверяем, что файл скачался
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                complete_callback(True, filepath, None)
+            else:
+                complete_callback(False, None, "Файл не скачан")
+                
+        except Exception as e:
+            complete_callback(False, None, str(e))
+    
+    def _download_progress(self, percent, status_text):
+        """Обновление прогресса скачивания"""
+        self.update_progress_bar['value'] = percent
+        self.update_progress_label.config(text=status_text)
+        self._log_update(f"📥 {status_text}", "DOWNLOAD")
+    
+    def _download_complete(self, success, file_path, error):
+        """Завершение скачивания"""
+        self.download_btn.config(state='normal', text="⬇️ Скачать обновление")
+        self.check_btn.config(state='normal')
+        
+        if success:
+            self._log_update(f"✅ Скачивание завершено! Файл: {os.path.basename(file_path)}", "SUCCESS")
+            self.update_progress_label.config(text="✅ Скачивание завершено!")
+            self.update_status_label.config(text="✅ Обновление скачано, готово к установке", fg='#27AE60')
+            
+            # Активируем кнопку установки
+            self.install_btn.config(state='normal', bg='#E67E22')
+            self.update_manager.download_progress = 100
+            
+            # Показываем уведомление
+            if self.desktop and hasattr(self.desktop, 'notification_center'):
+                self.desktop.notification_center.add_notification(
+                    "✅ Обновление скачано",
+                    f"Версия {self.update_manager.latest_version} готова к установке",
+                    icon="✅",
+                    duration=5000
+                )
+            
+            # Спрашиваем, устанавливать ли сейчас
+            if messagebox.askyesno("Установка обновления", 
+                                  f"Обновление v{self.update_manager.latest_version} скачано.\n\n"
+                                  "Установить сейчас? (Потребуется перезагрузка)"):
+                self._install_update()
+        else:
+            self._log_update(f"❌ Ошибка скачивания: {error}", "ERROR")
+            self.update_progress_label.config(text=f"❌ Ошибка: {error}")
+            self.update_status_label.config(text=f"❌ Ошибка скачивания", fg='#E74C3C')
+            self.download_btn.config(state='normal', bg='#27AE60')
+            
+            messagebox.showerror("Ошибка скачивания", 
+                f"Не удалось скачать обновление:\n{error}\n\n"
+                "Попробуйте позже или скачайте вручную с GitHub.")
+    
+    def _install_update(self):
+        """Установка обновления с перезагрузкой"""
+        if self.update_manager.is_installing:
+            return
+        
+        if not self.update_manager.download_progress == 100:
+            messagebox.showinfo("Информация", "Сначала скачайте обновление")
+            return
+        
+        # Проверяем, есть ли файл
+        filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+        filepath = os.path.join(self.update_manager.temp_dir, filename)
+        
+        if not os.path.exists(filepath):
+            messagebox.showerror("Ошибка", "Файл обновления не найден.\nПопробуйте скачать заново.")
+            return
+        
+        # Спрашиваем пользователя
+        if not messagebox.askyesno("Установка обновления", 
+                                  f"Установить обновление v{self.update_manager.latest_version}?\n\n"
+                                  "⚠️ ВНИМАНИЕ:\n"
+                                  "• Программа будет перезагружена\n"
+                                  "• Все несохранённые данные будут потеряны\n"
+                                  "• Убедитесь, что вы сохранили все важные файлы"):
+            return
+        
+        self._log_update(f"🔄 Начинаем установку v{self.update_manager.latest_version}...", "INSTALL")
+        self.install_btn.config(state='disabled', text="⏳ Установка...")
+        self.download_btn.config(state='disabled')
+        self.check_btn.config(state='disabled')
+        self.update_progress_label.config(text="⏳ Установка обновления...")
+        self.update_progress_bar['value'] = 50
+        
+        # Запускаем установку в потоке
+        thread = threading.Thread(target=self._install_thread, args=(filepath,))
+        thread.daemon = True
+        thread.start()
+    
+    def _install_thread(self, filepath):
+        """Поток для установки обновления"""
+        try:
+            self.update_manager.is_installing = True
+            
+            # Создаём резервную копию текущей версии
+            backup_path = os.path.join(self.update_manager.backup_dir, 
+                                      f"bitos_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            os.makedirs(backup_path, exist_ok=True)
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Создание резервной копии..."))
+            self._log_update("📦 Создание резервной копии текущей версии...", "INSTALL")
+            
+            # Копируем текущие файлы в резерв
+            base_path = self.bitos.base_path
+            for item in os.listdir(base_path):
+                if item in ['System', 'venv', '__pycache__', '.git']:
+                    continue
+                src = os.path.join(base_path, item)
+                dst = os.path.join(backup_path, item)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, ignore_dangling_symlinks=True)
+                else:
+                    shutil.copy2(src, dst)
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Распаковка обновления..."))
+            self.window.after(0, lambda: self.update_progress_bar.config(value=70))
+            self._log_update("📦 Распаковка обновления...", "INSTALL")
+            
+            # Распаковываем архив
+            import zipfile
+            extract_path = os.path.join(self.update_manager.temp_dir, "extracted")
+            os.makedirs(extract_path, exist_ok=True)
+            
+            with zipfile.ZipFile(filepath, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            
+            # Находим папку с кодом (обычно она имеет имя вида Saryanich-BITOS-xxxxxxx)
+            extracted_items = os.listdir(extract_path)
+            extracted_dir = None
+            for item in extracted_items:
+                if os.path.isdir(os.path.join(extract_path, item)):
+                    extracted_dir = os.path.join(extract_path, item)
+                    break
+            
+            if not extracted_dir:
+                self.window.after(0, lambda: self._install_error("Не удалось найти распакованные файлы"))
+                return
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Замена файлов..."))
+            self.window.after(0, lambda: self.update_progress_bar.config(value=85))
+            self._log_update("📦 Замена файлов...", "INSTALL")
+            
+            # Копируем новые файлы поверх старых (кроме System)
+            for item in os.listdir(extracted_dir):
+                if item == 'System':
+                    continue
+                src = os.path.join(extracted_dir, item)
+                dst = os.path.join(base_path, item)
+                if os.path.exists(dst):
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    else:
+                        os.remove(dst)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="✅ Установка завершена!"))
+            self.window.after(0, lambda: self.update_progress_bar.config(value=100))
+            self._log_update("✅ Установка завершена!", "SUCCESS")
+            
+            # Сохраняем статус
+            self.update_manager.status['install_complete'] = True
+            self.update_manager.status['installed_version'] = self.update_manager.latest_version
+            self.update_manager.status['installed_at'] = datetime.now().isoformat()
+            self.update_manager._save_status()
+            
+            # Показываем сообщение и перезагружаемся
+            self.window.after(1000, self._restart_after_update)
+            
+        except Exception as e:
+            self.window.after(0, lambda: self._install_error(str(e)))
+    
+    def _install_error(self, error):
+        """Ошибка установки"""
+        self._log_update(f"❌ Ошибка установки: {error}", "ERROR")
+        self.update_progress_label.config(text=f"❌ Ошибка: {error}")
+        self.update_status_label.config(text=f"❌ Ошибка установки", fg='#E74C3C')
+        self.install_btn.config(state='normal', text="🔄 Установить и перезагрузить", bg='#E67E22')
+        self.download_btn.config(state='normal')
+        self.check_btn.config(state='normal')
+        self.update_manager.is_installing = False
+        
+        messagebox.showerror("Ошибка установки", 
+            f"Не удалось установить обновление:\n{error}\n\n"
+            "Попробуйте скачать обновление вручную с GitHub.")
+    
+    def _restart_after_update(self):
+        """Перезагрузка после установки обновления"""
+        self._log_update("🔄 Перезагрузка системы...", "INSTALL")
+        
+        if self.desktop and hasattr(self.desktop, 'notification_center'):
+            self.desktop.notification_center.add_notification(
+                "🔄 Перезагрузка",
+                "Система перезагружается для применения обновления",
+                icon="🔄",
+                duration=5000
+            )
+        
+        # Сохраняем состояние
+        try:
+            self.desktop.save_desktop_shortcuts()
+            self.desktop.save_widgets()
+        except:
+            pass
+        
+        # Закрываем окна
+        try:
+            self.window.destroy()
+        except:
+            pass
+        
+        # Перезапускаем приложение
+        self._restart_application()
+    
+    def _restart_application(self):
+        """Перезапуск приложения"""
+        try:
+            # Создаём скрипт для перезапуска
+            restart_script = f'''
+import sys, os, subprocess, time, json
+import sys
+import os
+import subprocess
+import time
+
+# Ждём закрытия основного процесса
+time.sleep(2)
+
+# Запускаем заново
+python_exe = sys.executable
+script_path = sys.argv[0]
+
+if os.path.exists(script_path):
+    subprocess.Popen([python_exe, script_path], creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+'''
+            restart_path = os.path.join(self.update_manager.temp_dir, "restart.pyw")
+            with open(restart_path, 'w', encoding='utf-8') as f:
+                f.write(restart_script)
+            
+            # Запускаем скрипт перезапуска
+            subprocess.Popen([sys.executable, restart_path], 
+                           creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
+            
+            # Закрываем текущее приложение
+            sys.exit(0)
+            
+        except Exception as e:
+            self._log_update(f"⚠️ Ошибка перезапуска: {e}", "WARNING")
+            # Если не удалось перезапустить, просто закрываемся
+            sys.exit(0)
+    
+    def _clear_update_log(self):
+        """Очистка лога обновлений"""
+        self.update_log_text.config(state='normal')
+        self.update_log_text.delete('1.0', tk.END)
+        self.update_log_text.insert('1.0', "[INFO] Лог очищен\n")
+        self.update_log_text.insert('end', "[INFO] Система обновлений готова\n")
+        self.update_log_text.config(state='disabled')
+    
+    def _show_coming_soon(self):
+        """Показать сообщение о разработке"""
+        messagebox.showinfo("В разработке", 
+            "🚧 Эта функция находится в разработке.\n\n"
+            "В ближайшее время будет добавлена.")
+
+    # ==================== ВКЛАДКА 6: СИСТЕМА (БЕЗ ИЗМЕНЕНИЙ) ====================
+    
     def _create_system_tab(self):
         """Вкладка системной информации"""
         system_frame = ttk.Frame(self.notebook)
@@ -8392,7 +11012,6 @@ class SettingsWindow:
         tk.Label(main_frame, text="💻 Системная информация", 
                 font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
-        # Информационные строки
         info_data = [
             ("🖥️ Система:", platform.system()),
             ("📀 Версия ядра:", platform.release()),
@@ -8413,7 +11032,6 @@ class SettingsWindow:
             tk.Label(frame, text=value, font=('Segoe UI', 10), 
                     bg='white', fg='#7F8C8D', anchor='w').pack(side=tk.LEFT, padx=(10, 0))
         
-        # Статистика
         stats_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
         stats_frame.pack(fill=tk.X, pady=20)
         
@@ -8439,19 +11057,1368 @@ class SettingsWindow:
                 tk.Label(frame, text=str(value), font=('Segoe UI', 10, 'bold'), 
                         bg='#F0F3F4', fg='#3498DB').pack(side=tk.LEFT)
         
-        # Кнопка обновить статистику
         tk.Button(main_frame, text="🔄 Обновить информацию", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._refresh_system_info).pack(pady=10)
+                 cursor='hand2', command=self._refresh_system_tab).pack(pady=10)
     
-    def _refresh_system_info(self):
+    def _refresh_system_tab(self):
         """Обновление системной информации"""
-        # Пересоздаём вкладку системы
-        self.notebook.forget(self.notebook.select())
+        for i, tab in enumerate(self.notebook.tabs()):
+            if self.notebook.tab(tab, "text") == "💻 Система":
+                self.notebook.forget(tab)
+                break
         self._create_system_tab()
-        self.notebook.select(len(self.notebook.tabs()) - 1)
 
-# ==================== ЗАПУСК ====================
+class AutoSafe:
+    """
+    Автоматическое сохранение состояния рабочего стола BITOS:
+    - Позиции иконок на рабочем столе
+    - ПОЛОЖЕНИЕ НА ЭКРАНЕ всех виджетов (часы, календарь, стикеры)
+    - Текущая тема оформления
+    - Настройки обоев
+    
+    Сохранение происходит:
+    - Каждые 10 секунд (в фоновом режиме) - только если что-то изменилось
+    - При смене темы
+    - При изменении виджетов (добавление/удаление/перемещение)
+    - При выходе из системы
+    - При выключении/перезагрузке
+    
+    АВТОНОМНЫЙ КЛАСС - НЕ ТРЕБУЕТ ИЗМЕНЕНИЙ В ДРУГИХ КЛАССАХ!
+    """
+    
+    # Константы
+    SAVE_INTERVAL = 10  # секунд
+    CONFIG_DIR = "System\\Config"
+    SHORTCUTS_FILE = "desktop_shortcuts.json"
+    WIDGETS_FILE = "widgets.json"
+    THEME_FILE = "theme.cfg"
+    WALLPAPER_FILE = "wallpaper.json"
+    AUTOSAVE_FILE = "autosave_state.json"
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+    
+    def __init__(self, bitos=None, desktop=None):
+        if hasattr(self, '_initialized'):
+            return
+        self._initialized = True
+        
+        self.bitos = bitos
+        self.desktop = desktop
+        
+        # Состояние сохранения
+        self._is_running = True
+        self._save_counter = 0
+        self._last_save_time = 0
+        self._save_in_progress = False
+        
+        # Хеш последнего сохранённого состояния (для отслеживания изменений)
+        self._last_state_hash = None
+        
+        # Пути к файлам
+        self._init_paths()
+        
+        # Запуск фонового сохранения
+        self._start_auto_save()
+        
+        # Установка автономных триггеров
+        self._setup_autonomous_triggers()
+        
+        print("[AutoSafe] ✅ Инициализирован. Сохранение каждые 10 секунд")
+        print(f"[AutoSafe] 📁 Путь: {self.config_path}")
+    
+    def _init_paths(self):
+        """Инициализация путей к файлам конфигурации"""
+        if self.bitos and hasattr(self.bitos, 'system_paths'):
+            self.config_path = self.bitos.system_paths.get("config", "")
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            self.config_path = os.path.join(base_path, "System", "Config")
+        
+        os.makedirs(self.config_path, exist_ok=True)
+        
+        # Полные пути к файлам
+        self.shortcuts_path = os.path.join(self.config_path, self.SHORTCUTS_FILE)
+        self.widgets_path = os.path.join(self.config_path, self.WIDGETS_FILE)
+        self.theme_path = os.path.join(self.config_path, self.THEME_FILE)
+        self.wallpaper_path = os.path.join(self.config_path, self.WALLPAPER_FILE)
+        self.autosave_path = os.path.join(self.config_path, self.AUTOSAVE_FILE)
+    
+    def _setup_autonomous_triggers(self):
+        """Установка автономных триггеров без изменения других классов"""
+        if not self.desktop:
+            print("[AutoSafe] ⚠️ Desktop не передан, триггеры не установлены")
+            return
+        
+        try:
+            # ===== ТРИГГЕР 1: СМЕНА ТЕМЫ =====
+            original_change_theme = self.desktop.change_theme
+            
+            def patched_change_theme(theme_name):
+                result = original_change_theme(theme_name)
+                self.save_all()
+                return result
+            
+            self.desktop.change_theme = patched_change_theme
+            print("[AutoSafe] ✅ Триггер 'смена темы' установлен")
+            
+            # ===== ТРИГГЕР 2: ИЗМЕНЕНИЕ ВИДЖЕТОВ =====
+            original_add_widget = self.desktop.add_widget
+            original_remove_all_widgets = self.desktop.remove_all_widgets
+            
+            def patched_add_widget(widget_type):
+                result = original_add_widget(widget_type)
+                self.save_all()
+                return result
+            
+            def patched_remove_all_widgets():
+                result = original_remove_all_widgets()
+                self.save_all()
+                return result
+            
+            self.desktop.add_widget = patched_add_widget
+            self.desktop.remove_all_widgets = patched_remove_all_widgets
+            print("[AutoSafe] ✅ Триггер 'изменение виджетов' установлен")
+            
+            # ===== ТРИГГЕР 3: ПЕРЕМЕЩЕНИЕ ВИДЖЕТОВ =====
+            self._patch_widget_drag()
+            
+            # ===== ТРИГГЕР 4: ВЫХОД ИЗ СИСТЕМЫ =====
+            original_logout = self.desktop.logout
+            
+            def patched_logout():
+                self.save_all()
+                original_logout()
+            
+            self.desktop.logout = patched_logout
+            print("[AutoSafe] ✅ Триггер 'выход из системы' установлен")
+            
+            # ===== ТРИГГЕР 5: ВЫКЛЮЧЕНИЕ/ПЕРЕЗАГРУЗКА =====
+            original_shutdown = self.desktop.shutdown
+            original_reboot = self.desktop.reboot
+            
+            def patched_shutdown():
+                self.save_all()
+                original_shutdown()
+            
+            def patched_reboot():
+                self.save_all()
+                original_reboot()
+            
+            self.desktop.shutdown = patched_shutdown
+            self.desktop.reboot = patched_reboot
+            print("[AutoSafe] ✅ Триггер 'выключение/перезагрузка' установлен")
+            
+            # ===== ТРИГГЕР 6: КОНТЕКСТНОЕ МЕНЮ =====
+            self._add_to_context_menu()
+            print("[AutoSafe] ✅ Триггер 'контекстное меню' установлен")
+            
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Ошибка установки триггеров: {e}")
+    
+    def _patch_widget_drag(self):
+        """Патчинг методов перетаскивания виджетов для отслеживания перемещения"""
+        # Патчим метод stop_drag у каждого класса виджетов
+        widget_classes = [ClockWidget, CalendarWidget, StickerWidget]
+        
+        for widget_class in widget_classes:
+            try:
+                original_stop_drag = widget_class.stop_drag
+                
+                def patched_stop_drag(self, event):
+                    # Вызываем оригинальный метод с event
+                    original_stop_drag(self, event)
+                    # Сохраняем после перемещения
+                    try:
+                        if hasattr(self, 'canvas') and hasattr(self.canvas, 'master'):
+                            desktop = self.canvas.master
+                            if hasattr(desktop, 'autosafe'):
+                                desktop.autosafe.save_all()
+                    except:
+                        pass
+                
+                widget_class.stop_drag = patched_stop_drag
+                print(f"[AutoSafe] ✅ Патчинг drag для {widget_class.__name__}")
+            except Exception as e:
+                print(f"[AutoSafe] ⚠️ Не удалось пропатчить {widget_class.__name__}: {e}")
+        
+        # Патчим метод save_text у StickerWidget
+        try:
+            original_save_text = StickerWidget.save_text
+            
+            def patched_save_text(self, event):
+                # Вызываем оригинальный метод с event
+                original_save_text(self, event)
+                # Сохраняем после изменения текста
+                try:
+                    if hasattr(self, 'canvas') and hasattr(self.canvas, 'master'):
+                        desktop = self.canvas.master
+                        if hasattr(desktop, 'autosafe'):
+                            desktop.autosafe.save_all()
+                except:
+                    pass
+            
+            StickerWidget.save_text = patched_save_text
+            print("[AutoSafe] ✅ Патчинг сохранения текста стикера")
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Не удалось пропатчить StickerWidget.save_text: {e}")
+    
+    def _add_to_context_menu(self):
+        """Добавление пункта в контекстное меню"""
+        try:
+            if hasattr(self.desktop, 'context_menu'):
+                self.desktop.context_menu.add_separator()
+                self.desktop.context_menu.add_command(
+                    label='💾 Сохранить состояние сейчас',
+                    command=self.force_save
+                )
+                self.desktop.context_menu.add_command(
+                    label='📊 Статус автосохранения',
+                    command=self.show_status
+                )
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Не удалось добавить пункт в контекстное меню: {e}")
+    
+    def _start_auto_save(self):
+        """Запуск фонового автоматического сохранения"""
+        def saver():
+            while self._is_running:
+                try:
+                    time.sleep(self.SAVE_INTERVAL)
+                    if not self._save_in_progress:
+                        if self._has_changes():
+                            self.save_all()
+                except Exception as e:
+                    print(f"[AutoSafe] ⚠️ Ошибка в фоновом сохранении: {e}")
+        
+        thread = threading.Thread(target=saver, daemon=True, name="AutoSafe")
+        thread.start()
+    
+    def _has_changes(self):
+        """Проверка наличия изменений с последнего сохранения"""
+        try:
+            current_state = self._get_current_state_hash()
+            if current_state != self._last_state_hash:
+                self._last_state_hash = current_state
+                return True
+            return False
+        except:
+            return True
+    
+    def _get_current_state_hash(self):
+        """Получение хеша текущего состояния"""
+        try:
+            state = {
+                'shortcuts': self._get_shortcuts_data(),
+                'widgets': self._get_widgets_data(),
+                'theme': self._get_theme_data(),
+                'wallpaper': self._get_wallpaper_data()
+            }
+            state_str = json.dumps(state, sort_keys=True, default=str)
+            return hashlib.md5(state_str.encode()).hexdigest()
+        except:
+            return str(time.time())
+    
+    def _get_shortcuts_data(self):
+        """Получение данных ярлыков для хеша"""
+        if not self.desktop:
+            return []
+        
+        shortcuts = []
+        try:
+            for icon in self.desktop.canvas.desktop_icons:
+                if icon.is_trash:
+                    continue
+                if hasattr(icon, 'is_virtual_item') and icon.is_virtual_item:
+                    continue
+                if hasattr(icon, 'is_file_item') and icon.is_file_item:
+                    continue
+                
+                icon_dict = icon.to_dict()
+                if icon_dict.get('command'):
+                    shortcuts.append(icon_dict)
+        except:
+            pass
+        
+        return sorted(shortcuts, key=lambda x: x.get('text', ''))
+    
+    def _get_widgets_data(self):
+        """Получение данных виджетов для хеша"""
+        if not self.desktop:
+            return []
+        
+        widgets = []
+        try:
+            for widget in self.desktop.widgets:
+                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
+                    config = widget.get_config()
+                    if config:
+                        widgets.append(config)
+        except:
+            pass
+        
+        return sorted(widgets, key=lambda x: (x.get('x', 0), x.get('y', 0), x.get('type', '')))
+    
+    def _get_theme_data(self):
+        """Получение данных темы для хеша"""
+        if not self.desktop:
+            return {}
+        return {'theme': self.desktop.current_theme}
+    
+    def _get_wallpaper_data(self):
+        """Получение данных обоев для хеша"""
+        if not self.desktop or not self.desktop.wallpaper_manager:
+            return {}
+        return {
+            'path': self.desktop.wallpaper_manager.wallpaper_path,
+            'style': self.desktop.wallpaper_manager.wallpaper_style
+        }
+    
+    def save_all(self):
+        """Сохранение всего состояния рабочего стола"""
+        if self._save_in_progress:
+            return False
+        
+        self._save_in_progress = True
+        self._save_counter += 1
+        
+        try:
+            # Сохраняем всё
+            shortcuts = self._save_shortcuts()
+            widgets = self._save_widgets()
+            theme = self._save_theme()
+            wallpaper = self._save_wallpaper()
+            
+            # Сохраняем состояние автосохранения
+            state = {
+                'timestamp': datetime.now().isoformat(),
+                'counter': self._save_counter,
+                'shortcuts': shortcuts,
+                'widgets': widgets,
+                'theme': theme,
+                'wallpaper': wallpaper
+            }
+            
+            self._save_state(state)
+            self._last_save_time = time.time()
+            self._last_state_hash = self._get_current_state_hash()
+            
+            return True
+            
+        except Exception as e:
+            print(f"[AutoSafe] ❌ Ошибка сохранения: {e}")
+            return False
+        finally:
+            self._save_in_progress = False
+    
+    def _save_shortcuts(self):
+        """Сохранение ярлыков рабочего стола"""
+        if not self.desktop:
+            return None
+        
+        shortcuts = []
+        try:
+            for icon in self.desktop.canvas.desktop_icons:
+                if icon.is_trash:
+                    continue
+                if hasattr(icon, 'is_virtual_item') and icon.is_virtual_item:
+                    continue
+                if hasattr(icon, 'is_file_item') and icon.is_file_item:
+                    continue
+                
+                icon_dict = icon.to_dict()
+                if icon_dict.get('command'):
+                    shortcuts.append(icon_dict)
+        except:
+            pass
+        
+        try:
+            with open(self.shortcuts_path, 'w', encoding='utf-8') as f:
+                json.dump(shortcuts, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Ошибка сохранения ярлыков: {e}")
+        
+        return shortcuts
+    
+    def _save_widgets(self):
+        """Сохранение виджетов (включая ПОЛОЖЕНИЕ НА ЭКРАНЕ)"""
+        if not self.desktop:
+            return None
+        
+        widgets = []
+        try:
+            for widget in self.desktop.widgets:
+                if hasattr(widget, 'frame') and widget.frame and widget.frame.winfo_exists():
+                    config = widget.get_config()
+                    if config:
+                        config['x'] = widget.x
+                        config['y'] = widget.y
+                        widgets.append(config)
+        except:
+            pass
+        
+        try:
+            with open(self.widgets_path, 'w', encoding='utf-8') as f:
+                json.dump(widgets, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Ошибка сохранения виджетов: {e}")
+        
+        return widgets
+    
+    def _save_theme(self):
+        """Сохранение темы"""
+        if not self.desktop:
+            return None
+        
+        theme_data = {'theme': self.desktop.current_theme}
+        
+        try:
+            with open(self.theme_path, 'w', encoding='utf-8') as f:
+                json.dump(theme_data, f, indent=4)
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Ошибка сохранения темы: {e}")
+        
+        return theme_data
+    
+    def _save_wallpaper(self):
+        """Сохранение настроек обоев"""
+        if not self.desktop or not self.desktop.wallpaper_manager:
+            return None
+        
+        wallpaper_data = {
+            'path': self.desktop.wallpaper_manager.wallpaper_path,
+            'style': self.desktop.wallpaper_manager.wallpaper_style
+        }
+        
+        try:
+            with open(self.wallpaper_path, 'w', encoding='utf-8') as f:
+                json.dump(wallpaper_data, f, indent=4)
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Ошибка сохранения обоев: {e}")
+        
+        return wallpaper_data
+    
+    def _save_state(self, state):
+        """Сохранение состояния в файл"""
+        try:
+            with open(self.autosave_path, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=4, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"[AutoSafe] ⚠️ Ошибка сохранения состояния: {e}")
+            return False
+    
+    def force_save(self):
+        """Принудительное сохранение (вызывается из контекстного меню)"""
+        print("[AutoSafe] 💾 Принудительное сохранение...")
+        return self.save_all()
+    
+    def show_status(self):
+        """Показать статус автосохранения в диалоге"""
+        if not self.desktop:
+            messagebox.showinfo("📊 Статус автосохранения", "AutoSafe не инициализирован")
+            return
+        
+        status = self.get_status()
+        info = [
+            f"🔄 Автосохранение: {'✅ Активно' if status['is_running'] else '❌ Остановлено'}",
+            f"📊 Сохранений: {status['save_counter']}",
+            f"⏱️ Последнее: {status['last_save_time']}",
+            f"⏱️ Интервал: {status['save_interval']} сек",
+            f"📁 Папка: {status['config_path']}",
+            "",
+            "📄 Файлы:",
+            f"  Ярлыки: {'✅' if status['files']['shortcuts'] else '❌'}",
+            f"  Виджеты: {'✅' if status['files']['widgets'] else '❌'}",
+            f"  Тема: {'✅' if status['files']['theme'] else '❌'}",
+            f"  Обои: {'✅' if status['files']['wallpaper'] else '❌'}",
+            f"  Состояние: {'✅' if status['files']['autosave'] else '❌'}",
+        ]
+        messagebox.showinfo("📊 Статус автосохранения", "\n".join(info))
+    
+    def get_status(self):
+        """Получение статуса автосохранения"""
+        return {
+            'is_running': self._is_running,
+            'save_counter': self._save_counter,
+            'last_save_time': datetime.fromtimestamp(self._last_save_time).strftime('%H:%M:%S') if self._last_save_time else 'Никогда',
+            'save_interval': self.SAVE_INTERVAL,
+            'config_path': self.config_path,
+            'files': {
+                'shortcuts': os.path.exists(self.shortcuts_path),
+                'widgets': os.path.exists(self.widgets_path),
+                'theme': os.path.exists(self.theme_path),
+                'wallpaper': os.path.exists(self.wallpaper_path),
+                'autosave': os.path.exists(self.autosave_path),
+            }
+        }
+    
+    def stop(self):
+        """Остановка автосохранения"""
+        self._is_running = False
+        print("[AutoSafe] ⏹️ Остановлен")
+
+# ==================== MultiMonitorManager (ИСПРАВЛЕННЫЙ) ====================
+
+import os
+import sys
+import json
+import threading
+import subprocess
+import platform
+import random
+from datetime import datetime
+
+# Проверка библиотек
+try:
+    from screeninfo import get_monitors
+    SCREENINFO_AVAILABLE = True
+except ImportError:
+    SCREENINFO_AVAILABLE = False
+
+try:
+    from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QTextEdit
+    from PyQt6.QtCore import Qt, QTimer, QPoint, QDateTime
+    from PyQt6.QtGui import QFont, QPalette, QColor, QScreen, QGuiApplication, QPainter, QBrush, QLinearGradient
+    PYQT_AVAILABLE = True
+except ImportError:
+    PYQT_AVAILABLE = False
+
+try:
+    if platform.system() == "Windows":
+        import ctypes
+        from ctypes import wintypes
+        WIN32_AVAILABLE = True
+    else:
+        WIN32_AVAILABLE = False
+except ImportError:
+    WIN32_AVAILABLE = False
+
+
+class MultiMonitorManager:
+    """Менеджер нескольких мониторов с точными размерами и синхронизацией узоров темы"""
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+    
+    def __init__(self, bitos=None):
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+        
+        self._initialized = True
+        self.bitos = bitos
+        self.main_desktop = None
+        self.monitors = []
+        self.processes = {}
+        self.is_running = True
+        
+        self._init_paths()
+        self._detect_monitors_accurate()
+        
+    def _init_paths(self):
+        try:
+            if self.bitos and hasattr(self.bitos, 'base_path'):
+                base_path = self.bitos.base_path
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            
+            self.config_path = os.path.join(base_path, "System", "Config")
+            self.temp_dir = os.path.join(base_path, "System", "Temp")
+            
+            os.makedirs(self.config_path, exist_ok=True)
+            os.makedirs(self.temp_dir, exist_ok=True)
+            
+            self.monitor_config_path = os.path.join(self.config_path, "monitors.json")
+        except:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            self.config_path = os.path.join(base_path, "System", "Config")
+            self.temp_dir = os.path.join(base_path, "System", "Temp")
+            self.monitor_config_path = os.path.join(self.config_path, "monitors.json")
+            os.makedirs(self.config_path, exist_ok=True)
+            os.makedirs(self.temp_dir, exist_ok=True)
+    
+    def _detect_monitors_accurate(self):
+        self.monitors = []
+        
+        if WIN32_AVAILABLE:
+            try:
+                monitors = self._get_monitors_win32()
+                if monitors:
+                    self.monitors = monitors
+                    self._save_monitor_config()
+                    return
+            except Exception as e:
+                pass
+        
+        if PYQT_AVAILABLE and not self.monitors:
+            try:
+                monitors = self._get_monitors_pyqt()
+                if monitors:
+                    self.monitors = monitors
+                    self._save_monitor_config()
+                    return
+            except Exception as e:
+                pass
+        
+        if SCREENINFO_AVAILABLE and not self.monitors:
+            try:
+                for i, m in enumerate(get_monitors()):
+                    self.monitors.append({
+                        'index': i,
+                        'name': m.name or f"Монитор {i+1}",
+                        'width': m.width,
+                        'height': m.height,
+                        'x': m.x,
+                        'y': m.y,
+                        'is_primary': m.is_primary
+                    })
+            except Exception as e:
+                pass
+        
+        if not self.monitors:
+            self.monitors = [
+                {'index': 0, 'name': 'Монитор 1', 'width': 1920, 'height': 1080, 'x': 0, 'y': 0, 'is_primary': True}
+            ]
+        
+        self._save_monitor_config()
+    
+    def _get_monitors_win32(self):
+        monitors = []
+        try:
+            user32 = ctypes.windll.user32
+            MONITORENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.POINTER(wintypes.RECT), ctypes.c_double
+            )
+            monitors_list = []
+            
+            def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                class MONITORINFOEXW(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", wintypes.DWORD),
+                        ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD),
+                        ("szDevice", wintypes.WCHAR * 32)
+                    ]
+                monitor_info = MONITORINFOEXW()
+                monitor_info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+                
+                if user32.GetMonitorInfoW(hMonitor, ctypes.byref(monitor_info)):
+                    name = monitor_info.szDevice
+                    rc = monitor_info.rcMonitor
+                    is_primary = bool(monitor_info.dwFlags & 0x00000001)
+                    monitors_list.append({
+                        'name': name, 'x': rc.left, 'y': rc.top,
+                        'width': rc.right - rc.left, 'height': rc.bottom - rc.top,
+                        'is_primary': is_primary
+                    })
+                return 1
+            
+            callback_func = MONITORENUMPROC(callback)
+            hdc = user32.GetDC(0)
+            if user32.EnumDisplayMonitors(hdc, None, callback_func, 0):
+                monitors_list.sort(key=lambda m: m['x'])
+                for i, mon in enumerate(monitors_list):
+                    monitors.append({
+                        'index': i, 'name': mon['name'], 'width': mon['width'], 'height': mon['height'],
+                        'x': mon['x'], 'y': mon['y'], 'is_primary': mon['is_primary']
+                    })
+                user32.ReleaseDC(0, hdc)
+        except:
+            pass
+        return monitors
+    
+    def _get_monitors_pyqt(self):
+        monitors = []
+        try:
+            app = QApplication.instance() or QApplication(sys.argv)
+            screens = QGuiApplication.screens()
+            for i, screen in enumerate(screens):
+                geom = screen.geometry()
+                monitors.append({
+                    'index': i, 'name': screen.name(), 'width': geom.width(), 'height': geom.height(),
+                    'x': geom.x(), 'y': geom.y(), 'is_primary': screen == QGuiApplication.primaryScreen()
+                })
+        except:
+            pass
+        return monitors
+    
+    def _save_monitor_config(self):
+        try:
+            config = {'monitors': self.monitors, 'saved_at': datetime.now().isoformat()}
+            with open(self.monitor_config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except:
+            pass
+
+    def _patch_desktop(self, desktop):
+        """Интеграционный метод для связывания менеджера с рабочим столом BITOS"""
+        self.main_desktop = desktop
+        print("[MultiMonitorManager] ✅ Метод _patch_desktop успешно вызван для связи с основным окном.")
+        return True
+    
+    def _create_extra_desktops(self):
+        if len(self.monitors) <= 1:
+            return
+        
+        for i, monitor in enumerate(self.monitors):
+            if monitor.get('is_primary', False):
+                continue
+            
+            if PYQT_AVAILABLE:
+                self._create_pyqt_desktop(i)
+            else:
+                self._create_tkinter_desktop(i)
+    
+    def _create_pyqt_desktop(self, monitor_index):
+        if monitor_index >= len(self.monitors):
+            return False
+        
+        if monitor_index in self.processes:
+            try:
+                self.processes[monitor_index].kill()
+            except:
+                pass
+            del self.processes[monitor_index]
+        
+        script_code = self._generate_accurate_script(monitor_index)
+        script_path = os.path.join(self.temp_dir, f"monitor_{monitor_index}.py")
+        
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(script_code)
+        
+        log_path = os.path.join(self.temp_dir, f"monitor_{monitor_index}_log.txt")
+        try:
+            python_exe = sys.executable
+            with open(log_path, 'w', encoding='utf-8') as log_file:
+                process = subprocess.Popen(
+                    [python_exe, script_path],
+                    stdout=log_file, stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                )
+            self.processes[monitor_index] = process
+            return True
+        except:
+            return False
+    
+    def _create_tkinter_desktop(self, monitor_index):
+        if monitor_index >= len(self.monitors):
+            return False
+        monitor = self.monitors[monitor_index]
+        
+        script_code = f'''# -*- coding: utf-8 -*-
+import sys, json, tkinter as tk
+from datetime import datetime
+with open(r"{self.monitor_config_path}", 'r', encoding='utf-8') as f:
+    config = json.load(f)
+monitor = config['monitors'][{monitor_index}]
+root = tk.Tk()
+root.overrideredirect(True)
+root.geometry(f"{{monitor['width']}}x{{monitor['height']}}+{{monitor['x']}}+{{monitor['y']}}")
+root.configure(bg='#1e1e2e')
+time_label = tk.Label(root, text="", font=('Segoe UI', 64, 'bold'), fg='#cdd6f4', bg='#1e1e2e')
+time_label.pack(expand=True)
+def update_time():
+    time_label.config(text=datetime.now().strftime("%H:%M:%S"))
+    root.after(1000, update_time)
+update_time()
+root.mainloop()
+'''
+        script_path = os.path.join(self.temp_dir, f"monitor_tk_{monitor_index}.py")
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(script_code)
+        
+        try:
+            process = subprocess.Popen(
+                [sys.executable, script_path],
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+            self.processes[monitor_index] = process
+            return True
+        except:
+            return False
+    
+    def _generate_accurate_script(self, monitor_index):
+        theme_cfg_path = os.path.join(self.config_path, "theme.cfg")
+        current_theme_name = "Базовая"
+        
+        if os.path.exists(theme_cfg_path):
+            try:
+                with open(theme_cfg_path, 'r', encoding='utf-8') as f:
+                    theme_data = json.load(f)
+                    current_theme_name = theme_data.get('theme', 'Базовая')
+            except:
+                pass
+
+        themes_palette = {
+            "Базовая": {"bg": "#2980B9", "canvas_bg": "#0a0a2a", "accent": "#00D4FF", "panel": "#1F618D", "text": "#cdd6f4"},
+            "Техно": {"bg": "#1B5E20", "canvas_bg": "#0a0a1a", "accent": "#00FF00", "panel": "#0D3B0D", "text": "#00FF00"},
+            "Эко": {"bg": "#27AE60", "canvas_bg": "#0a2a1a", "accent": "#2ECC71", "panel": "#1E8449", "text": "#FFFFFF"},
+            "Космо": {"bg": "#0B1B3D", "canvas_bg": "#050a1a", "accent": "#87CEEB", "panel": "#060D1A", "text": "#87CEEB"}
+        }
+        
+        selected_colors = themes_palette.get(current_theme_name, themes_palette["Базовая"])
+        bg_color = selected_colors["canvas_bg"]
+        accent_color = selected_colors["accent"]
+        panel_color = selected_colors["panel"]
+        text_color = selected_colors["text"]
+
+        # Безопасное определение батареи до генерации f-строки
+        percent = 100
+        charging = "Сеть"
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            if battery:
+                percent = battery.percent
+                charging = "Заряжается" if battery.power_plugged else "Разряжается"
+        except:
+            pass
+
+        return f'''# -*- coding: utf-8 -*-
+import sys, os, json, random
+from pathlib import Path
+from datetime import datetime
+
+try:
+    from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit
+    from PyQt6.QtCore import Qt, QTimer, QDateTime, QPoint
+    from PyQt6.QtGui import QFont, QPainter, QColor, QBrush, QLinearGradient
+except:
+    sys.exit(1)
+
+with open(r"{self.monitor_config_path}", 'r', encoding='utf-8') as f:
+    config = json.load(f)
+
+monitor = config['monitors'][{monitor_index}]
+MONITOR_X = monitor['x']
+MONITOR_Y = monitor['y']
+MONITOR_W = monitor['width']
+MONITOR_H = monitor['height']
+
+class BeautyPatternWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.bg_color = QColor("{bg_color}")
+        self.stars = []
+        for _ in range(100):
+            x = random.randint(0, MONITOR_W)
+            y = random.randint(0, MONITOR_H)
+            size = random.randint(1, 3)
+            speed = random.uniform(0.1, 0.5)
+            brightness = random.randint(50, 255)
+            self.stars.append([x, y, size, speed, brightness])
+            
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self.animate_stars)
+        self.anim_timer.start(80)
+
+    def animate_stars(self):
+        for star in self.stars:
+            star[4] += random.randint(-15, 15)
+            star[4] = max(50, min(255, star[4]))
+            star[1] += star[3]
+            if star[1] > MONITOR_H:
+                star[1] = 0
+                star[0] = random.randint(0, MONITOR_W)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0.0, self.bg_color)
+        
+        r, g, b = self.bg_color.red(), self.bg_color.green(), self.bg_color.blue()
+        bottom_color = QColor(
+            min(255, int(r + (255 - r) * 0.15)),
+            min(255, int(g + (255 - g) * 0.15)),
+            min(255, int(b + (255 - b) * 0.15))
+        )
+        gradient.setColorAt(1.0, bottom_color)
+        painter.fillRect(self.rect(), QBrush(gradient))
+        
+        for x, y, size, speed, brightness in self.stars:
+            color = QColor(brightness, brightness, brightness)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            painter.drawEllipse(QPoint(int(x), int(y)), size, size)
+
+
+class MonitorWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setGeometry(MONITOR_X, MONITOR_Y, MONITOR_W, MONITOR_H)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnBottomHint)
+        
+        self.background_widget = BeautyPatternWidget(self)
+        self.setCentralWidget(self.background_widget)
+        
+        root_layout = QVBoxLayout(self.background_widget)
+        root_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        center_box = QWidget(self)
+        center_box.setStyleSheet("background: transparent;")
+        root_layout.addWidget(center_box)
+        
+        main_layout = QVBoxLayout(center_box)
+        main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.setSpacing(20)
+        
+        self.time_label = QLabel(self)
+        self.time_label.setStyleSheet("color: {text_color}; font-size: 75px; font-family: 'Segoe UI', Arial; font-weight: bold;")
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.time_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.date_label = QLabel(self)
+        self.date_label.setStyleSheet("color: {text_color}; font-size: 22px; font-family: 'Segoe UI', Arial; opacity: 0.8;")
+        self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.date_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.battery_label = QLabel("СИСТЕМА ПИТАНИЯ: {percent}% [{charging}]", self)
+        self.battery_label.setStyleSheet("color: {accent_color}; font-size: 16px; font-family: 'Segoe UI', Arial; font-weight: bold;")
+        self.battery_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.battery_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.notes_label = QLabel("ЗАМЕТКИ И ЗАДАЧИ", self)
+        self.notes_label.setStyleSheet("color: {text_color}; font-size: 14px; font-family: 'Segoe UI', Arial; font-weight: bold; opacity: 0.6; margin-top: 15px;")
+        self.notes_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.notes_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.notes_edit = QTextEdit(self)
+        self.notes_edit.setFixedSize(500, 260)
+        self.notes_edit.setStyleSheet(
+            "background-color: {panel_color}; color: {text_color}; border: 2px solid {accent_color}; "
+            "border-radius: 12px; font-size: 15px; font-family: 'Segoe UI', sans-serif; padding: 12px;"
+        )
+        self.notes_path = Path("C:/Users/Викторовна/OneDrive/Рабочий стол/System/Config/desktop_notes.txt")
+        self.load_notes()
+        self.notes_edit.textChanged.connect(self.save_notes)
+        main_layout.addWidget(self.notes_edit, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_status)
+        self.timer.start(1000)
+        self.update_status()
+
+    def update_status(self):
+        current = QDateTime.currentDateTime()
+        self.time_label.setText(current.toString("HH:mm:ss"))
+        months = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+        days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+        dt = current.toPyDateTime()
+        self.date_label.setText(f"{{dt.day}} {{months[dt.month-1]}} {{dt.year}} г., {{days[dt.weekday()]}}")
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            if battery:
+                state = "Заряжается" if battery.power_plugged else "Разряжается"
+                self.battery_label.setText(f"СИСТЕМА ПИТАНИЯ: {{battery.percent}}% [{{state}}]")
+        except:
+            pass
+
+    def load_notes(self):
+        if self.notes_path.exists():
+            try:
+                self.notes_edit.setPlainText(self.notes_path.read_text(encoding='utf-8'))
+            except:
+                pass
+
+    def save_notes(self):
+        try:
+            self.notes_path.parent.mkdir(parents=True, exist_ok=True)
+            self.notes_path.write_text(self.notes_edit.toPlainText(), encoding='utf-8')
+        except:
+            pass
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MonitorWindow()
+    window.show()
+    sys.exit(app.exec())
+'''
+
+    def show_all_desktops(self):
+        self._create_extra_desktops()
+    
+    def debug_windows(self):
+        pass
+    
+    def get_monitor_info(self, index=None):
+        if index is not None:
+            return self.monitors[index] if 0 <= index < len(self.monitors) else None
+        return self.monitors.copy()
+    
+    def refresh_monitors(self):
+        self.stop()
+        self._detect_monitors_accurate()
+        self._create_extra_desktops()
+    
+    def stop(self):
+        self.is_running = False
+        for p in list(self.processes.values()):
+            try:
+                if p.poll() is None:
+                    p.terminate()
+                    p.wait(timeout=3)
+            except:
+                try:
+                    p.kill()
+                except:
+                    pass
+        self.processes.clear()
+    
+    def __del__(self):
+        self.stop()
+
+# ==================== КЛАСС: UpdateManager (ИСПРАВЛЕННЫЙ) ====================
+class UpdateManager:
+    """
+    Менеджер обновлений BITOS
+    - Проверка обновлений на GitHub
+    - Скачивание и установка
+    - Автоматическая перезагрузка
+    - Отслеживание статуса
+    """
+    
+    def __init__(self, bitos_instance):
+        self.bitos = bitos_instance
+        # Нормализуем текущую версию для сравнения
+        self.current_version = self._normalize_version(
+            bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
+        )
+        self.current_version_raw = bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
+        self.repo_url = "https://api.github.com/repos/Saryanich/BITOS/releases/latest"
+        
+        # Состояние обновления
+        self.latest_version = None
+        self.latest_version_raw = None
+        self.download_url = None
+        self.release_notes = None
+        self.update_available = False
+        self.download_progress = 0
+        self.is_downloading = False
+        self.is_installing = False
+        
+        # Пути
+        self.temp_dir = os.path.join(bitos_instance.system_paths["temp"], "updates")
+        self.update_status_file = os.path.join(bitos_instance.system_paths["config"], "update_status.json")
+        self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backup")
+        
+        os.makedirs(self.temp_dir, exist_ok=True)
+        os.makedirs(self.backup_dir, exist_ok=True)
+        
+        # Загрузка сохранённого статуса
+        self.status = self._load_status()
+        
+        # Флаг для UI
+        self.check_in_progress = False
+        self.last_check_time = None
+        self.error_message = None
+        
+        print(f"[UpdateManager] ✅ Инициализирован. Версия: {self.current_version_raw}")
+        print(f"[UpdateManager] 📌 Нормализованная версия для сравнения: {self.current_version}")
+    
+    def _normalize_version(self, version):
+        """
+        Нормализация версии для сравнения
+        Преобразует "06V6_20.06" и "06V6" в сопоставимый формат
+        
+        Примеры:
+        - "06V6_20.06" -> "6.6.20.06"
+        - "06V6" -> "6.6.0"
+        - "v1.2.3" -> "1.2.3"
+        """
+        # Убираем префикс v
+        v = version.replace('v', '').strip()
+        
+        # Заменяем V на точку (06V6 -> 06.6)
+        v = v.replace('V', '.')
+        
+        # Если есть подчёркивание, заменяем на точку
+        v = v.replace('_', '.')
+        
+        # Разбиваем на части
+        parts = v.split('.')
+        
+        # Нормализуем каждую часть (убираем ведущие нули)
+        normalized_parts = []
+        for part in parts:
+            try:
+                # Пытаемся преобразовать в число
+                num = int(part)
+                normalized_parts.append(str(num))
+            except ValueError:
+                # Если не число, оставляем как есть
+                normalized_parts.append(part)
+        
+        # Собираем обратно
+        return '.'.join(normalized_parts)
+    
+    def _parse_version_parts(self, version):
+        """
+        Разбор версии на числовые компоненты для сравнения
+        """
+        normalized = self._normalize_version(version)
+        parts = normalized.split('.')
+        result = []
+        for p in parts:
+            try:
+                result.append(int(p))
+            except ValueError:
+                result.append(p)
+        return result
+    
+    def _compare_versions(self, v1, v2):
+        """
+        Сравнение версий с поддержкой форматов:
+        - "06V6" и "06V6_20.06"
+        - "v1.2.3" и "1.2.3"
+        
+        Returns:
+            1 if v1 > v2, -1 if v1 < v2, 0 if equal
+        """
+        parts1 = self._parse_version_parts(v1)
+        parts2 = self._parse_version_parts(v2)
+        
+        # Сравниваем по частям
+        for i in range(max(len(parts1), len(parts2))):
+            p1 = parts1[i] if i < len(parts1) else 0
+            p2 = parts2[i] if i < len(parts2) else 0
+            
+            # Если оба числа - сравниваем как числа
+            if isinstance(p1, int) and isinstance(p2, int):
+                if p1 > p2:
+                    return 1
+                elif p1 < p2:
+                    return -1
+            else:
+                # Если строки - сравниваем как строки
+                s1 = str(p1).lower()
+                s2 = str(p2).lower()
+                if s1 > s2:
+                    return 1
+                elif s1 < s2:
+                    return -1
+        
+        return 0
+    
+    def _load_status(self):
+        """Загрузка статуса обновления"""
+        if os.path.exists(self.update_status_file):
+            try:
+                with open(self.update_status_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    def _save_status(self):
+        """Сохранение статуса обновления"""
+        try:
+            with open(self.update_status_file, 'w', encoding='utf-8') as f:
+                json.dump(self.status, f, indent=4, ensure_ascii=False)
+        except:
+            pass
+    
+    def check_for_updates(self, callback=None):
+        """
+        Проверка наличия обновлений на GitHub
+        
+        Args:
+            callback: функция обратного вызова (success, version, download_url, release_notes, error)
+        
+        Returns:
+            tuple: (has_update, version, download_url, release_notes)
+        """
+        if self.check_in_progress:
+            if callback:
+                callback(False, None, None, None, "Проверка уже выполняется")
+            return False, None, None, None
+        
+        self.check_in_progress = True
+        self.error_message = None
+        
+        try:
+            # Проверяем наличие requests
+            if not REQUESTS_AVAILABLE:
+                self.error_message = "Библиотека requests не установлена. Установите: pip install requests"
+                self.check_in_progress = False
+                if callback:
+                    callback(False, None, None, None, self.error_message)
+                return False, None, None, None
+            
+            # Запрос к GitHub API
+            response = requests.get(self.repo_url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Получаем версию (убираем 'v' если есть)
+                latest_tag_raw = data.get("tag_name", "").replace("v", "").strip()
+                self.latest_version_raw = latest_tag_raw
+                self.latest_version = self._normalize_version(latest_tag_raw)
+                self.download_url = data.get("zipball_url")
+                self.release_notes = data.get("body", "Нет описания релиза")
+                
+                print(f"[UpdateManager] 📌 Сравнение: текущая={self.current_version} vs новая={self.latest_version}")
+                
+                # Сравниваем версии
+                if self._compare_versions(self.latest_version, self.current_version) > 0:
+                    self.update_available = True
+                    self.status['update_available'] = True
+                    self.status['latest_version'] = latest_tag_raw
+                    self.status['checked_at'] = datetime.now().isoformat()
+                    self._save_status()
+                    
+                    self.last_check_time = datetime.now()
+                    self.check_in_progress = False
+                    
+                    if callback:
+                        callback(True, latest_tag_raw, self.download_url, self.release_notes, None)
+                    
+                    return True, latest_tag_raw, self.download_url, self.release_notes
+                else:
+                    self.update_available = False
+                    self.status['update_available'] = False
+                    self.status['checked_at'] = datetime.now().isoformat()
+                    self._save_status()
+                    
+                    self.last_check_time = datetime.now()
+                    self.check_in_progress = False
+                    
+                    if callback:
+                        callback(False, None, None, None, None)
+                    
+                    return False, None, None, None
+            else:
+                self.error_message = f"Ошибка API: {response.status_code}"
+                self.check_in_progress = False
+                if callback:
+                    callback(False, None, None, None, self.error_message)
+                return False, None, None, None
+                
+        except requests.exceptions.Timeout:
+            self.error_message = "Таймаут подключения к GitHub"
+            self.check_in_progress = False
+            if callback:
+                callback(False, None, None, None, self.error_message)
+            return False, None, None, None
+            
+        except requests.exceptions.ConnectionError:
+            self.error_message = "Нет подключения к интернету"
+            self.check_in_progress = False
+            if callback:
+                callback(False, None, None, None, self.error_message)
+            return False, None, None, None
+            
+        except Exception as e:
+            self.error_message = f"Ошибка: {str(e)}"
+            self.check_in_progress = False
+            if callback:
+                callback(False, None, None, None, self.error_message)
+            return False, None, None, None
+    
+    def download_update(self, progress_callback=None, complete_callback=None):
+        """
+        Скачивание обновления с GitHub
+        
+        Args:
+            progress_callback: функция (progress_percent, status_text)
+            complete_callback: функция (success, file_path, error)
+        """
+        if not self.update_available or not self.download_url:
+            if complete_callback:
+                complete_callback(False, None, "Нет доступных обновлений")
+            return
+        
+        if self.is_downloading:
+            if complete_callback:
+                complete_callback(False, None, "Скачивание уже выполняется")
+            return
+        
+        self.is_downloading = True
+        self.download_progress = 0
+        
+        if progress_callback:
+            progress_callback(0, "Начинаем скачивание...")
+        
+        def download_thread():
+            try:
+                # Создаём имя файла
+                filename = f"bitos_update_{self.latest_version_raw}.zip"
+                filepath = os.path.join(self.temp_dir, filename)
+                
+                # Скачиваем с прогрессом
+                import requests
+                response = requests.get(self.download_url, stream=True, timeout=30)
+                total_size = int(response.headers.get('content-length', 0))
+                
+                if total_size == 0:
+                    self.is_downloading = False
+                    if complete_callback:
+                        complete_callback(False, None, "Не удалось определить размер файла")
+                    return
+                
+                if progress_callback:
+                    progress_callback(0, "Начинаем загрузку...")
+                
+                with open(filepath, 'wb') as f:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            percent = int((downloaded / total_size) * 100)
+                            if progress_callback:
+                                progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+                
+                # Проверяем, что файл скачался
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                    self.download_progress = 100
+                    self.is_downloading = False
+                    if complete_callback:
+                        complete_callback(True, filepath, None)
+                else:
+                    self.is_downloading = False
+                    if complete_callback:
+                        complete_callback(False, None, "Файл не скачан")
+                    
+            except Exception as e:
+                self.is_downloading = False
+                if complete_callback:
+                    complete_callback(False, None, str(e))
+        
+        # Запускаем скачивание в потоке
+        thread = threading.Thread(target=download_thread, daemon=True)
+        thread.start()
+    
+    def get_status(self):
+        """Получение статуса обновлений"""
+        return {
+            'current_version': self.current_version_raw,
+            'latest_version': self.latest_version_raw,
+            'update_available': self.update_available,
+            'is_downloading': self.is_downloading,
+            'download_progress': self.download_progress,
+            'last_check': self.last_check_time,
+            'error': self.error_message
+        }
+
+    # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     if not PIL_AVAILABLE:
         print("⚠️ Рекомендуется установить Pillow для работы галереи:")
