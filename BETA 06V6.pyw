@@ -6673,8 +6673,8 @@ class BITOS:
     """Ядро операционной системы BITOS"""
     
     def __init__(self):
-        self.version = "06V6_28.06"
-        self.build = "2026.06 BETA"
+        self.version = "06V6_21.07"
+        self.build = "2026.07 BETA"
         self.running = True
         self.start_time = time.time()
         self.current_user = "User"
@@ -12084,15 +12084,22 @@ if __name__ == "__main__":
     def __del__(self):
         self.stop()
 
-# ==================== КЛАСС: UpdateManager (ДЛЯ СИСТЕМЫ) ====================
+# ==================== КЛАСС: UpdateManager (С ВЫБОРОЧНЫМ БЭКАПОМ) ====================
 class UpdateManager:
     """
     Менеджер обновлений BITOS
     - Проверка обновлений на GitHub
     - Скачивание обновлений
     - Запуск отдельного установщика Installer.pyw
-    - Автоматическая перезагрузка
+    - Выборочное резервное копирование (только System/Config, System/Sounds, System/Security)
     """
+    
+    # Папки для резервного копирования (ТОЛЬКО ОНИ)
+    BACKUP_FOLDERS = [
+        "System/Config",      # Настройки, темы, обои
+        "System/Sounds",      # Звуки системы
+        "System/Security",    # PIN-код, лицензия, серийный номер
+    ]
     
     def __init__(self, bitos_instance):
         self.bitos = bitos_instance
@@ -12136,6 +12143,7 @@ class UpdateManager:
         
         print(f"[UpdateManager] ✅ Инициализирован. Версия: {self.current_version_raw}")
         print(f"[UpdateManager] 📌 Установщик: {'✅ найден' if os.path.exists(self.installer_path) else '❌ не найден'}")
+        print(f"[UpdateManager] 💾 Резервируются папки: {', '.join(self.BACKUP_FOLDERS)}")
     
     def _check_installer(self):
         """Проверка наличия Installer.pyw"""
@@ -12225,6 +12233,103 @@ class UpdateManager:
                 json.dump(self.status, f, indent=4, ensure_ascii=False)
         except:
             pass
+    
+    def _backup_important_folders(self, backup_path):
+        """
+        Создание резервной копии ТОЛЬКО важных папок
+        
+        Args:
+            backup_path: путь для сохранения бэкапа
+        
+        Returns:
+            list: список успешно скопированных папок
+        """
+        backed_up = []
+        
+        print(f"[UpdateManager] 💾 Создание резервной копии важных папок...")
+        
+        for folder in self.BACKUP_FOLDERS:
+            src = os.path.join(self.base_path, folder)
+            dst = os.path.join(backup_path, folder)
+            
+            if os.path.exists(src):
+                try:
+                    # Создаём родительскую папку
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    
+                    # Копируем папку
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                        print(f"[UpdateManager]   ✅ {folder} скопирован")
+                        backed_up.append(folder)
+                    else:
+                        shutil.copy2(src, dst)
+                        print(f"[UpdateManager]   ✅ {folder} скопирован")
+                        backed_up.append(folder)
+                        
+                except Exception as e:
+                    print(f"[UpdateManager]   ⚠️ Ошибка копирования {folder}: {e}")
+            else:
+                print(f"[UpdateManager]   ⚠️ {folder} не найден, пропущен")
+        
+        return backed_up
+    
+    def _backup_installer(self, backup_path):
+        """
+        Резервное копирование установщика (если есть)
+        
+        Args:
+            backup_path: путь для сохранения бэкапа
+        
+        Returns:
+            bool: True если скопирован
+        """
+        if os.path.exists(self.installer_path):
+            try:
+                dst = os.path.join(backup_path, "Installer.pyw")
+                shutil.copy2(self.installer_path, dst)
+                print(f"[UpdateManager]   ✅ Installer.pyw скопирован")
+                return True
+            except Exception as e:
+                print(f"[UpdateManager]   ⚠️ Ошибка копирования Installer.pyw: {e}")
+                return False
+        return False
+    
+    def _restore_important_folders(self, backup_path):
+        """
+        Восстановление важных папок из резервной копии
+        
+        Args:
+            backup_path: путь к бэкапу
+        
+        Returns:
+            list: список успешно восстановленных папок
+        """
+        restored = []
+        
+        print(f"[UpdateManager] 📂 Восстановление важных папок из бэкапа...")
+        
+        for folder in self.BACKUP_FOLDERS:
+            src = os.path.join(backup_path, folder)
+            dst = os.path.join(self.base_path, folder)
+            
+            if os.path.exists(src):
+                try:
+                    # Если папка существует - удаляем
+                    if os.path.exists(dst):
+                        shutil.rmtree(dst)
+                    
+                    # Копируем из бэкапа
+                    shutil.copytree(src, dst)
+                    print(f"[UpdateManager]   ✅ {folder} восстановлен")
+                    restored.append(folder)
+                    
+                except Exception as e:
+                    print(f"[UpdateManager]   ⚠️ Ошибка восстановления {folder}: {e}")
+            else:
+                print(f"[UpdateManager]   ⚠️ {folder} не найден в бэкапе, пропущен")
+        
+        return restored
     
     def check_for_updates(self, callback=None):
         """
@@ -12451,7 +12556,11 @@ class UpdateManager:
                 "• Система будет закрыта\n"
                 "• Запустится отдельный установщик\n"
                 "• После установки ПК перезагрузится через 10 секунд\n\n"
-                "✅ Все настройки и данные будут сохранены!"
+                "💾 БУДУТ СОХРАНЕНЫ:\n"
+                f"• Настройки (System/Config)\n"
+                f"• Звуки (System/Sounds)\n"
+                f"• Безопасность (System/Security)\n\n"
+                "✅ Все остальные файлы будут обновлены!"
             ):
                 return False
         
@@ -12550,7 +12659,11 @@ class UpdateManager:
                 f"Установить обновление v{self.latest_version_raw}?\n\n"
                 "⚠️ ВНИМАНИЕ: Используется встроенный установщик\n"
                 "• Установка может быть менее стабильной\n"
-                "• Рекомендуется установить Installer.pyw"
+                "• Рекомендуется установить Installer.pyw\n\n"
+                f"💾 БУДУТ СОХРАНЕНЫ:\n"
+                f"• Настройки (System/Config)\n"
+                f"• Звуки (System/Sounds)\n"
+                f"• Безопасность (System/Security)"
             ):
                 return False
         
@@ -12558,25 +12671,25 @@ class UpdateManager:
         
         def install_thread():
             try:
-                # Создаём резервную копию
+                # Создаём резервную копию ТОЛЬКО важных папок
                 backup_path = os.path.join(self.backup_dir, f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
                 os.makedirs(backup_path, exist_ok=True)
                 
-                # Копируем важные файлы
-                for item in ['06V6.py', 'System']:
-                    src = os.path.join(self.base_path, item)
-                    if os.path.exists(src):
-                        dst = os.path.join(backup_path, item)
-                        if os.path.isdir(src):
-                            shutil.copytree(src, dst)
-                        else:
-                            shutil.copy2(src, dst)
+                print(f"[UpdateManager] 💾 Создание выборочной резервной копии...")
+                
+                # Копируем важные папки
+                self._backup_important_folders(backup_path)
+                
+                # Копируем Installer.pyw если есть
+                self._backup_installer(backup_path)
                 
                 # Распаковка
                 extract_path = os.path.join(self.temp_dir, "extracted")
                 if os.path.exists(extract_path):
                     shutil.rmtree(extract_path)
                 os.makedirs(extract_path, exist_ok=True)
+                
+                print(f"[UpdateManager] 📂 Распаковка обновления...")
                 
                 with zipfile.ZipFile(filepath, 'r') as zip_ref:
                     zip_ref.extractall(extract_path)
@@ -12589,30 +12702,44 @@ class UpdateManager:
                         extracted_code = item_path
                         break
                 
-                # Замена файлов
+                # Замена файлов (НЕ трогаем System/)
+                print(f"[UpdateManager] ⚙️ Замена файлов (System/ не трогаем)...")
+                
                 for item in os.listdir(extracted_code):
+                    # Пропускаем System - она восстанавливается из бэкапа
                     if item == 'System':
+                        print(f"[UpdateManager]   ⏭ System/ пропущена (сохраняем настройки)")
                         continue
                     
                     src = os.path.join(extracted_code, item)
                     dst = os.path.join(self.base_path, item)
                     
-                    if os.path.exists(dst):
-                        if os.path.isdir(dst):
-                            shutil.rmtree(dst)
+                    try:
+                        if os.path.exists(dst):
+                            if os.path.isdir(dst):
+                                shutil.rmtree(dst)
+                            else:
+                                os.remove(dst)
+                        
+                        if os.path.isdir(src):
+                            shutil.copytree(src, dst)
+                            print(f"[UpdateManager]   📁 {item} скопирован")
                         else:
-                            os.remove(dst)
-                    
-                    if os.path.isdir(src):
-                        shutil.copytree(src, dst)
-                    else:
-                        shutil.copy2(src, dst)
+                            shutil.copy2(src, dst)
+                            print(f"[UpdateManager]   📄 {item} скопирован")
+                    except Exception as e:
+                        print(f"[UpdateManager]   ⚠️ Ошибка копирования {item}: {e}")
+                
+                # Восстанавливаем важные папки из бэкапа
+                self._restore_important_folders(backup_path)
                 
                 # Сохраняем статус
                 self.status['install_complete'] = True
                 self.status['installed_version'] = self.latest_version_raw
                 self.status['installed_at'] = datetime.now().isoformat()
                 self._save_status()
+                
+                print(f"[UpdateManager] ✅ Установка завершена!")
                 
                 # Перезагружаемся
                 if parent_window:
@@ -12625,6 +12752,7 @@ class UpdateManager:
                 
             except Exception as e:
                 self.is_installing = False
+                print(f"[UpdateManager] ❌ Ошибка: {e}")
                 if parent_window:
                     messagebox.showerror("Ошибка", f"Установка не удалась:\n{str(e)}")
         
@@ -12660,7 +12788,8 @@ class UpdateManager:
             'download_progress': self.download_progress,
             'last_check': self.last_check_time,
             'error': self.error_message,
-            'installer_exists': os.path.exists(self.installer_path)
+            'installer_exists': os.path.exists(self.installer_path),
+            'backup_folders': self.BACKUP_FOLDERS
         }
     
     def get_update_info(self):
