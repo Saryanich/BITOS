@@ -12084,23 +12084,24 @@ if __name__ == "__main__":
     def __del__(self):
         self.stop()
 
-# ==================== КЛАСС: UpdateManager (ИСПРАВЛЕННЫЙ) ====================
+# ==================== КЛАСС: UpdateManager (ДЛЯ СИСТЕМЫ) ====================
 class UpdateManager:
     """
     Менеджер обновлений BITOS
     - Проверка обновлений на GitHub
-    - Скачивание и установка
+    - Скачивание обновлений
+    - Запуск отдельного установщика Installer.pyw
     - Автоматическая перезагрузка
-    - Отслеживание статуса
     """
     
     def __init__(self, bitos_instance):
         self.bitos = bitos_instance
+        
         # Нормализуем текущую версию для сравнения
-        self.current_version = self._normalize_version(
-            bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
-        )
         self.current_version_raw = bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
+        self.current_version = self._normalize_version(self.current_version_raw)
+        
+        # URL для проверки обновлений
         self.repo_url = "https://api.github.com/repos/Saryanich/BITOS/releases/latest"
         
         # Состояние обновления
@@ -12112,66 +12113,60 @@ class UpdateManager:
         self.download_progress = 0
         self.is_downloading = False
         self.is_installing = False
+        self.check_in_progress = False
         
         # Пути
+        self.base_path = bitos_instance.base_path
         self.temp_dir = os.path.join(bitos_instance.system_paths["temp"], "updates")
         self.update_status_file = os.path.join(bitos_instance.system_paths["config"], "update_status.json")
         self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backup")
+        self.installer_path = os.path.join(self.base_path, "Installer.pyw")
         
+        # Создаём папки
         os.makedirs(self.temp_dir, exist_ok=True)
         os.makedirs(self.backup_dir, exist_ok=True)
         
         # Загрузка сохранённого статуса
         self.status = self._load_status()
-        
-        # Флаг для UI
-        self.check_in_progress = False
         self.last_check_time = None
         self.error_message = None
         
+        # Проверяем наличие установщика
+        self._check_installer()
+        
         print(f"[UpdateManager] ✅ Инициализирован. Версия: {self.current_version_raw}")
-        print(f"[UpdateManager] 📌 Нормализованная версия для сравнения: {self.current_version}")
+        print(f"[UpdateManager] 📌 Установщик: {'✅ найден' if os.path.exists(self.installer_path) else '❌ не найден'}")
+    
+    def _check_installer(self):
+        """Проверка наличия Installer.pyw"""
+        if not os.path.exists(self.installer_path):
+            print(f"[UpdateManager] ⚠️ Установщик не найден: {self.installer_path}")
+            print(f"[UpdateManager] ⚠️ Обновления будут устанавливаться встроенным методом")
+            return False
+        return True
     
     def _normalize_version(self, version):
         """
         Нормализация версии для сравнения
         Преобразует "06V6_20.06" и "06V6" в сопоставимый формат
-        
-        Примеры:
-        - "06V6_20.06" -> "6.6.20.06"
-        - "06V6" -> "6.6.0"
-        - "v1.2.3" -> "1.2.3"
         """
-        # Убираем префикс v
         v = version.replace('v', '').strip()
-        
-        # Заменяем V на точку (06V6 -> 06.6)
         v = v.replace('V', '.')
-        
-        # Если есть подчёркивание, заменяем на точку
         v = v.replace('_', '.')
         
-        # Разбиваем на части
         parts = v.split('.')
-        
-        # Нормализуем каждую часть (убираем ведущие нули)
         normalized_parts = []
         for part in parts:
             try:
-                # Пытаемся преобразовать в число
                 num = int(part)
                 normalized_parts.append(str(num))
             except ValueError:
-                # Если не число, оставляем как есть
                 normalized_parts.append(part)
         
-        # Собираем обратно
         return '.'.join(normalized_parts)
     
     def _parse_version_parts(self, version):
-        """
-        Разбор версии на числовые компоненты для сравнения
-        """
+        """Разбор версии на числовые компоненты для сравнения"""
         normalized = self._normalize_version(version)
         parts = normalized.split('.')
         result = []
@@ -12194,19 +12189,16 @@ class UpdateManager:
         parts1 = self._parse_version_parts(v1)
         parts2 = self._parse_version_parts(v2)
         
-        # Сравниваем по частям
         for i in range(max(len(parts1), len(parts2))):
             p1 = parts1[i] if i < len(parts1) else 0
             p2 = parts2[i] if i < len(parts2) else 0
             
-            # Если оба числа - сравниваем как числа
             if isinstance(p1, int) and isinstance(p2, int):
                 if p1 > p2:
                     return 1
                 elif p1 < p2:
                     return -1
             else:
-                # Если строки - сравниваем как строки
                 s1 = str(p1).lower()
                 s2 = str(p2).lower()
                 if s1 > s2:
@@ -12254,6 +12246,12 @@ class UpdateManager:
         
         try:
             # Проверяем наличие requests
+            try:
+                import requests
+                REQUESTS_AVAILABLE = True
+            except ImportError:
+                REQUESTS_AVAILABLE = False
+            
             if not REQUESTS_AVAILABLE:
                 self.error_message = "Библиотека requests не установлена. Установите: pip install requests"
                 self.check_in_progress = False
@@ -12262,6 +12260,7 @@ class UpdateManager:
                 return False, None, None, None
             
             # Запрос к GitHub API
+            import requests
             response = requests.get(self.repo_url, timeout=10)
             
             if response.status_code == 200:
@@ -12311,20 +12310,6 @@ class UpdateManager:
                     callback(False, None, None, None, self.error_message)
                 return False, None, None, None
                 
-        except requests.exceptions.Timeout:
-            self.error_message = "Таймаут подключения к GitHub"
-            self.check_in_progress = False
-            if callback:
-                callback(False, None, None, None, self.error_message)
-            return False, None, None, None
-            
-        except requests.exceptions.ConnectionError:
-            self.error_message = "Нет подключения к интернету"
-            self.check_in_progress = False
-            if callback:
-                callback(False, None, None, None, self.error_message)
-            return False, None, None, None
-            
         except Exception as e:
             self.error_message = f"Ошибка: {str(e)}"
             self.check_in_progress = False
@@ -12358,12 +12343,13 @@ class UpdateManager:
         
         def download_thread():
             try:
+                import requests
+                
                 # Создаём имя файла
                 filename = f"bitos_update_{self.latest_version_raw}.zip"
                 filepath = os.path.join(self.temp_dir, filename)
                 
                 # Скачиваем с прогрессом
-                import requests
                 response = requests.get(self.download_url, stream=True, timeout=30)
                 total_size = int(response.headers.get('content-length', 0))
                 
@@ -12390,6 +12376,11 @@ class UpdateManager:
                 if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                     self.download_progress = 100
                     self.is_downloading = False
+                    
+                    # Сохраняем путь к файлу в статус
+                    self.status['download_path'] = filepath
+                    self._save_status()
+                    
                     if complete_callback:
                         complete_callback(True, filepath, None)
                 else:
@@ -12406,6 +12397,258 @@ class UpdateManager:
         thread = threading.Thread(target=download_thread, daemon=True)
         thread.start()
     
+    def install_update(self, parent_window=None):
+        """
+        Установка обновления через отдельный установщик Installer.pyw
+        
+        Args:
+            parent_window: родительское окно для диалогов (опционально)
+        
+        Returns:
+            bool: True если установка запущена, False если ошибка
+        """
+        if self.is_installing:
+            if parent_window:
+                messagebox.showinfo("Информация", "Установка уже выполняется")
+            return False
+        
+        if self.download_progress < 100:
+            if parent_window:
+                messagebox.showinfo("Информация", "Сначала скачайте обновление")
+            return False
+        
+        # Проверяем наличие файла обновления
+        filename = f"bitos_update_{self.latest_version_raw}.zip"
+        filepath = os.path.join(self.temp_dir, filename)
+        
+        if not os.path.exists(filepath):
+            # Пробуем найти любой zip в папке
+            zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
+            if zip_files:
+                filepath = os.path.join(self.temp_dir, sorted(zip_files)[-1])
+            else:
+                if parent_window:
+                    messagebox.showerror("Ошибка", "Файл обновления не найден")
+                return False
+        
+        # Проверяем наличие установщика
+        if not os.path.exists(self.installer_path):
+            if parent_window:
+                messagebox.showerror("Ошибка", 
+                    "Установщик не найден!\n\n"
+                    "Файл Installer.pyw должен находиться в корневой папке BITOS.\n\n"
+                    "Установка будет выполнена встроенным методом (без отдельного окна).")
+            
+            # Используем встроенный метод установки (старый способ)
+            return self._install_internal(filepath, parent_window)
+        
+        # Спрашиваем пользователя
+        if parent_window:
+            if not messagebox.askyesno(
+                "Установка обновления",
+                f"Установить обновление v{self.latest_version_raw}?\n\n"
+                "⚠️ ВНИМАНИЕ:\n"
+                "• Система будет закрыта\n"
+                "• Запустится отдельный установщик\n"
+                "• После установки ПК перезагрузится через 10 секунд\n\n"
+                "✅ Все настройки и данные будут сохранены!"
+            ):
+                return False
+        
+        self.is_installing = True
+        
+        try:
+            # 1. Сохраняем состояние рабочего стола
+            if hasattr(self.bitos, 'desktop_instance'):
+                desktop = self.bitos.desktop_instance
+                try:
+                    desktop.save_desktop_shortcuts()
+                    desktop.save_widgets()
+                    print("[UpdateManager] 💾 Состояние рабочего стола сохранено")
+                except Exception as e:
+                    print(f"[UpdateManager] ⚠️ Ошибка сохранения состояния: {e}")
+            
+            # 2. Сохраняем статус перед установкой
+            self.status['install_started'] = True
+            self.status['install_started_at'] = datetime.now().isoformat()
+            self._save_status()
+            
+            # 3. Запускаем установщик в отдельном процессе
+            print(f"[UpdateManager] 🚀 Запуск установщика: {self.installer_path}")
+            print(f"[UpdateManager] 📦 Файл обновления: {filepath}")
+            
+            # Запускаем Installer.pyw с путём к архиву
+            if platform.system() == "Windows":
+                # На Windows используем pythonw для скрытия консоли
+                pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+                if os.path.exists(pythonw):
+                    subprocess.Popen(
+                        [pythonw, self.installer_path, filepath],
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                else:
+                    subprocess.Popen(
+                        [sys.executable, self.installer_path, filepath],
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+            else:
+                # На Linux/Mac
+                subprocess.Popen(
+                    [sys.executable, self.installer_path, filepath],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            
+            # 4. Закрываем основную систему через 1 секунду
+            def shutdown_system():
+                try:
+                    # Закрываем окна
+                    if parent_window:
+                        try:
+                            parent_window.destroy()
+                        except:
+                            pass
+                    
+                    # Закрываем все окна Tkinter
+                    try:
+                        for window in tk._default_root.winfo_children():
+                            window.destroy()
+                    except:
+                        pass
+                    
+                    # Завершаем процесс
+                    print("[UpdateManager] 🛑 Завершение системы...")
+                    sys.exit(0)
+                    
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    print(f"[UpdateManager] ⚠️ Ошибка при завершении: {e}")
+                    sys.exit(0)
+            
+            # Запускаем завершение через 1 секунду
+            threading.Timer(1.0, shutdown_system).start()
+            
+            return True
+            
+        except Exception as e:
+            self.is_installing = False
+            error_msg = f"Ошибка запуска установщика: {str(e)}"
+            print(f"[UpdateManager] ❌ {error_msg}")
+            if parent_window:
+                messagebox.showerror("Ошибка", error_msg)
+            return False
+    
+    def _install_internal(self, filepath, parent_window=None):
+        """
+        Встроенный метод установки (если Installer.pyw отсутствует)
+        Используется как запасной вариант
+        """
+        if parent_window:
+            if not messagebox.askyesno(
+                "Установка обновления (встроенная)",
+                f"Установить обновление v{self.latest_version_raw}?\n\n"
+                "⚠️ ВНИМАНИЕ: Используется встроенный установщик\n"
+                "• Установка может быть менее стабильной\n"
+                "• Рекомендуется установить Installer.pyw"
+            ):
+                return False
+        
+        self.is_installing = True
+        
+        def install_thread():
+            try:
+                # Создаём резервную копию
+                backup_path = os.path.join(self.backup_dir, f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+                os.makedirs(backup_path, exist_ok=True)
+                
+                # Копируем важные файлы
+                for item in ['06V6.py', 'System']:
+                    src = os.path.join(self.base_path, item)
+                    if os.path.exists(src):
+                        dst = os.path.join(backup_path, item)
+                        if os.path.isdir(src):
+                            shutil.copytree(src, dst)
+                        else:
+                            shutil.copy2(src, dst)
+                
+                # Распаковка
+                extract_path = os.path.join(self.temp_dir, "extracted")
+                if os.path.exists(extract_path):
+                    shutil.rmtree(extract_path)
+                os.makedirs(extract_path, exist_ok=True)
+                
+                with zipfile.ZipFile(filepath, 'r') as zip_ref:
+                    zip_ref.extractall(extract_path)
+                
+                # Находим папку с кодом
+                extracted_code = extract_path
+                for item in os.listdir(extract_path):
+                    item_path = os.path.join(extract_path, item)
+                    if os.path.isdir(item_path) and 'BITOS' in item:
+                        extracted_code = item_path
+                        break
+                
+                # Замена файлов
+                for item in os.listdir(extracted_code):
+                    if item == 'System':
+                        continue
+                    
+                    src = os.path.join(extracted_code, item)
+                    dst = os.path.join(self.base_path, item)
+                    
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+                    
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
+                
+                # Сохраняем статус
+                self.status['install_complete'] = True
+                self.status['installed_version'] = self.latest_version_raw
+                self.status['installed_at'] = datetime.now().isoformat()
+                self._save_status()
+                
+                # Перезагружаемся
+                if parent_window:
+                    messagebox.showinfo("Установка завершена", 
+                        f"Обновление v{self.latest_version_raw} установлено!\n\n"
+                        "Система будет перезагружена через 5 секунд.")
+                
+                time.sleep(5)
+                self._restart_system()
+                
+            except Exception as e:
+                self.is_installing = False
+                if parent_window:
+                    messagebox.showerror("Ошибка", f"Установка не удалась:\n{str(e)}")
+        
+        thread = threading.Thread(target=install_thread, daemon=True)
+        thread.start()
+        return True
+    
+    def _restart_system(self):
+        """Перезагрузка системы"""
+        try:
+            if platform.system() == "Windows":
+                subprocess.Popen(["shutdown", "/r", "/t", "2", "/f"],
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                subprocess.Popen(["reboot"])
+        except:
+            pass
+        
+        # Закрываем приложение
+        try:
+            sys.exit(0)
+        except:
+            pass
+    
     def get_status(self):
         """Получение статуса обновлений"""
         return {
@@ -12413,10 +12656,64 @@ class UpdateManager:
             'latest_version': self.latest_version_raw,
             'update_available': self.update_available,
             'is_downloading': self.is_downloading,
+            'is_installing': self.is_installing,
             'download_progress': self.download_progress,
             'last_check': self.last_check_time,
-            'error': self.error_message
+            'error': self.error_message,
+            'installer_exists': os.path.exists(self.installer_path)
         }
+    
+    def get_update_info(self):
+        """Получение информации об обновлении для UI"""
+        return {
+            'version': self.latest_version_raw,
+            'download_url': self.download_url,
+            'release_notes': self.release_notes,
+            'available': self.update_available
+        }
+    
+    def create_download_thread(self, progress_callback, complete_callback):
+        """Создание потока для скачивания (для UI)"""
+        def wrapper():
+            self.download_update(progress_callback, complete_callback)
+        
+        thread = threading.Thread(target=wrapper, daemon=True)
+        thread.start()
+        return thread
+    
+    def is_update_available(self):
+        """Проверка доступности обновления"""
+        return self.update_available
+    
+    def get_download_path(self):
+        """Получение пути к скачанному файлу"""
+        if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
+            return self.status.get('download_path')
+        
+        # Ищем в папке
+        zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
+        if zip_files:
+            return os.path.join(self.temp_dir, sorted(zip_files)[-1])
+        
+        return None
+    
+    def clear_download(self):
+        """Очистка скачанных обновлений"""
+        try:
+            for f in os.listdir(self.temp_dir):
+                if f.endswith('.zip'):
+                    os.remove(os.path.join(self.temp_dir, f))
+            self.download_progress = 0
+            self.update_available = False
+            self.status['download_path'] = None
+            self._save_status()
+            return True
+        except:
+            return False
+    
+    def __del__(self):
+        """Деструктор"""
+        pass
 
     # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
