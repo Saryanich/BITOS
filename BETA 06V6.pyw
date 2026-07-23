@@ -12084,14 +12084,17 @@ if __name__ == "__main__":
     def __del__(self):
         self.stop()
 
-# ==================== КЛАСС: UpdateManager (ИСПРАВЛЕННЫЙ) ====================
+# ==================== ОБНОВЛЕННЫЙ КЛАСС: UpdateManager ====================
 class UpdateManager:
     """
     Менеджер обновлений BITOS
     - Проверка обновлений на GitHub
     - Скачивание обновлений
-    - Запуск отдельного установщика Installer.pyw
-    - БЕЗОПАСНОЕ резервное копирование ТОЛЬКО системных файлов
+    - БЕЗОПАСНОЕ резервное копирование ТОЛЬКО:
+      1. System/Config   (настройки, темы)
+      2. System/Security (пин-коды, ключи)
+      3. System/Sounds   (звуки)
+      4. Старая версия 06V6.py (код перед обновлением)
     """
     
     def __init__(self, bitos_instance):
@@ -12122,6 +12125,16 @@ class UpdateManager:
         self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backup")
         self.installer_path = os.path.join(self.base_path, "Installer.pyw")
         
+        # Папки и файлы для бекапа
+        self.backup_folders = [
+            "System/Config",
+            "System/Security", 
+            "System/Sounds"
+        ]
+        self.backup_files = [
+            "06V6.py"
+        ]
+        
         # Создаём папки
         os.makedirs(self.temp_dir, exist_ok=True)
         os.makedirs(self.backup_dir, exist_ok=True)
@@ -12135,6 +12148,7 @@ class UpdateManager:
         self._check_installer()
         
         print(f"[UpdateManager] ✅ Инициализирован. Версия: {self.current_version_raw}")
+        print(f"[UpdateManager] 📁 Бекапятся: {', '.join(self.backup_folders)} + 06V6.py")
         print(f"[UpdateManager] 📌 Установщик: {'✅ найден' if os.path.exists(self.installer_path) else '❌ не найден'}")
     
     def _check_installer(self):
@@ -12146,10 +12160,7 @@ class UpdateManager:
         return True
     
     def _normalize_version(self, version):
-        """
-        Нормализация версии для сравнения
-        Преобразует "06V6_20.06" и "06V6" в сопоставимый формат
-        """
+        """Нормализация версии для сравнения"""
         v = version.replace('v', '').strip()
         v = v.replace('V', '.')
         v = v.replace('_', '.')
@@ -12178,14 +12189,7 @@ class UpdateManager:
         return result
     
     def _compare_versions(self, v1, v2):
-        """
-        Сравнение версий с поддержкой форматов:
-        - "06V6" и "06V6_20.06"
-        - "v1.2.3" и "1.2.3"
-        
-        Returns:
-            1 if v1 > v2, -1 if v1 < v2, 0 if equal
-        """
+        """Сравнение версий"""
         parts1 = self._parse_version_parts(v1)
         parts2 = self._parse_version_parts(v2)
         
@@ -12226,15 +12230,110 @@ class UpdateManager:
         except:
             pass
     
+    def _create_backup(self, callback=None):
+        """
+        Создание резервной копии перед обновлением
+        Сохраняет ТОЛЬКО:
+        1. System/Config
+        2. System/Security
+        3. System/Sounds
+        4. 06V6.py (старая версия)
+        """
+        if callback:
+            callback(0, "📦 Создание резервной копии...")
+        
+        # Имя бекапа с датой и версией
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"backup_{self.current_version_raw}_{timestamp}"
+        backup_path = os.path.join(self.backup_dir, backup_name)
+        os.makedirs(backup_path, exist_ok=True)
+        
+        copied_files = 0
+        total_size = 0
+        
+        # ===== 1. БЕКАП ПАПОК: Config, Security, Sounds =====
+        for folder_rel in self.backup_folders:
+            src = os.path.join(self.base_path, folder_rel.replace('/', os.sep))
+            if not os.path.exists(src):
+                if callback:
+                    callback(copied_files, f"⚠️ Папка не найдена: {folder_rel}")
+                continue
+            
+            dst = os.path.join(backup_path, folder_rel.replace('/', os.sep))
+            os.makedirs(dst, exist_ok=True)
+            
+            if callback:
+                callback(copied_files, f"📁 Копирование: {folder_rel}")
+            
+            # Копируем содержимое папки
+            for root, dirs, files in os.walk(src):
+                rel_path = os.path.relpath(root, src)
+                target_dir = os.path.join(dst, rel_path) if rel_path != '.' else dst
+                os.makedirs(target_dir, exist_ok=True)
+                
+                for file in files:
+                    src_file = os.path.join(root, file)
+                    dst_file = os.path.join(target_dir, file)
+                    try:
+                        shutil.copy2(src_file, dst_file)
+                        copied_files += 1
+                        total_size += os.path.getsize(src_file)
+                        if callback and copied_files % 5 == 0:
+                            callback(copied_files, f"📄 {file}")
+                    except Exception as e:
+                        print(f"[UpdateManager] ⚠️ Ошибка копирования {file}: {e}")
+        
+        # ===== 2. БЕКАП ФАЙЛА: 06V6.py =====
+        for filename in self.backup_files:
+            src = os.path.join(self.base_path, filename)
+            if os.path.exists(src):
+                dst = os.path.join(backup_path, filename)
+                try:
+                    shutil.copy2(src, dst)
+                    copied_files += 1
+                    total_size += os.path.getsize(src)
+                    if callback:
+                        callback(copied_files, f"📄 {filename}")
+                except Exception as e:
+                    print(f"[UpdateManager] ⚠️ Ошибка копирования {filename}: {e}")
+            else:
+                if callback:
+                    callback(copied_files, f"⚠️ Файл не найден: {filename}")
+        
+        # ===== 3. СОХРАНЕНИЕ МАНИФЕСТА =====
+        manifest = {
+            'backup_name': backup_name,
+            'created_at': datetime.now().isoformat(),
+            'version': self.current_version_raw,
+            'folders': self.backup_folders,
+            'files': self.backup_files,
+            'file_count': copied_files,
+            'total_size': total_size
+        }
+        
+        with open(os.path.join(backup_path, 'manifest.json'), 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, indent=4, ensure_ascii=False)
+        
+        if callback:
+            callback(copied_files, f"✅ Бекап создан! Файлов: {copied_files}")
+        
+        print(f"[UpdateManager] ✅ Бекап создан: {backup_name}")
+        print(f"[UpdateManager] 📁 Путь: {backup_path}")
+        print(f"[UpdateManager] 📄 Файлов: {copied_files}, Размер: {self._format_size(total_size)}")
+        
+        return backup_path, copied_files, total_size
+    
+    def _format_size(self, size):
+        """Форматирование размера"""
+        for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
+            if size < 1024:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} ТБ"
+    
     def check_for_updates(self, callback=None):
         """
         Проверка наличия обновлений на GitHub
-        
-        Args:
-            callback: функция обратного вызова (success, version, download_url, release_notes, error)
-        
-        Returns:
-            tuple: (has_update, version, download_url, release_notes)
         """
         if self.check_in_progress:
             if callback:
@@ -12245,37 +12344,27 @@ class UpdateManager:
         self.error_message = None
         
         try:
-            # Проверяем наличие requests
-            try:
-                import requests
-                REQUESTS_AVAILABLE = True
-            except ImportError:
-                REQUESTS_AVAILABLE = False
-            
-            if not REQUESTS_AVAILABLE:
-                self.error_message = "Библиотека requests не установлена. Установите: pip install requests"
-                self.check_in_progress = False
-                if callback:
-                    callback(False, None, None, None, self.error_message)
-                return False, None, None, None
-            
-            # Запрос к GitHub API
+            import requests
+        except ImportError:
+            self.error_message = "Библиотека requests не установлена. Установите: pip install requests"
+            self.check_in_progress = False
+            if callback:
+                callback(False, None, None, None, self.error_message)
+            return False, None, None, None
+        
+        try:
             import requests
             response = requests.get(self.repo_url, timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
                 
-                # Получаем версию (убираем 'v' если есть)
                 latest_tag_raw = data.get("tag_name", "").replace("v", "").strip()
                 self.latest_version_raw = latest_tag_raw
                 self.latest_version = self._normalize_version(latest_tag_raw)
                 self.download_url = data.get("zipball_url")
                 self.release_notes = data.get("body", "Нет описания релиза")
                 
-                print(f"[UpdateManager] 📌 Сравнение: текущая={self.current_version} vs новая={self.latest_version}")
-                
-                # Сравниваем версии
                 if self._compare_versions(self.latest_version, self.current_version) > 0:
                     self.update_available = True
                     self.status['update_available'] = True
@@ -12318,13 +12407,7 @@ class UpdateManager:
             return False, None, None, None
     
     def download_update(self, progress_callback=None, complete_callback=None):
-        """
-        Скачивание обновления с GitHub
-        
-        Args:
-            progress_callback: функция (progress_percent, status_text)
-            complete_callback: функция (success, file_path, error)
-        """
+        """Скачивание обновления с GitHub"""
         if not self.update_available or not self.download_url:
             if complete_callback:
                 complete_callback(False, None, "Нет доступных обновлений")
@@ -12345,11 +12428,9 @@ class UpdateManager:
             try:
                 import requests
                 
-                # Создаём имя файла
                 filename = f"bitos_update_{self.latest_version_raw}.zip"
                 filepath = os.path.join(self.temp_dir, filename)
                 
-                # Скачиваем с прогрессом
                 response = requests.get(self.download_url, stream=True, timeout=30)
                 total_size = int(response.headers.get('content-length', 0))
                 
@@ -12358,9 +12439,6 @@ class UpdateManager:
                     if complete_callback:
                         complete_callback(False, None, "Не удалось определить размер файла")
                     return
-                
-                if progress_callback:
-                    progress_callback(0, "Начинаем загрузку...")
                 
                 with open(filepath, 'wb') as f:
                     downloaded = 0
@@ -12372,12 +12450,9 @@ class UpdateManager:
                             if progress_callback:
                                 progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
                 
-                # Проверяем, что файл скачался
                 if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                     self.download_progress = 100
                     self.is_downloading = False
-                    
-                    # Сохраняем путь к файлу в статус
                     self.status['download_path'] = filepath
                     self._save_status()
                     
@@ -12393,19 +12468,13 @@ class UpdateManager:
                 if complete_callback:
                     complete_callback(False, None, str(e))
         
-        # Запускаем скачивание в потоке
         thread = threading.Thread(target=download_thread, daemon=True)
         thread.start()
     
     def install_update(self, parent_window=None):
         """
-        Установка обновления через отдельный установщик Installer.pyw
-        
-        Args:
-            parent_window: родительское окно для диалогов (опционально)
-        
-        Returns:
-            bool: True если установка запущена, False если ошибка
+        Установка обновления с БЕЗОПАСНЫМ бекапом
+        Сохраняет: Config, Security, Sounds, 06V6.py
         """
         if self.is_installing:
             if parent_window:
@@ -12422,7 +12491,6 @@ class UpdateManager:
         filepath = os.path.join(self.temp_dir, filename)
         
         if not os.path.exists(filepath):
-            # Пробуем найти любой zip в папке
             zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
             if zip_files:
                 filepath = os.path.join(self.temp_dir, sorted(zip_files)[-1])
@@ -12431,180 +12499,48 @@ class UpdateManager:
                     messagebox.showerror("Ошибка", "Файл обновления не найден")
                 return False
         
-        # Проверяем наличие установщика
-        if not os.path.exists(self.installer_path):
-            if parent_window:
-                messagebox.showerror("Ошибка", 
-                    "Установщик не найден!\n\n"
-                    "Файл Installer.pyw должен находиться в корневой папке BITOS.\n\n"
-                    "Установка будет выполнена встроенным методом (без отдельного окна).")
-            
-            # Используем встроенный метод установки (старый способ)
-            return self._install_internal(filepath, parent_window)
-        
         # Спрашиваем пользователя
         if parent_window:
             if not messagebox.askyesno(
                 "Установка обновления",
                 f"Установить обновление v{self.latest_version_raw}?\n\n"
                 "⚠️ ВНИМАНИЕ:\n"
-                "• Система будет закрыта\n"
-                "• Запустится отдельный установщик\n"
-                "• После установки ПК перезагрузится через 10 секунд\n\n"
+                "• Перед установкой будет создан БЕЗОПАСНЫЙ БЕКАП\n"
+                "• Сохраняются: Config, Security, Sounds, 06V6.py\n"
+                "• Система будет перезагружена\n\n"
                 "✅ Все настройки и данные будут сохранены!"
             ):
                 return False
         
         self.is_installing = True
         
-        try:
-            # 1. Сохраняем состояние рабочего стола
-            if hasattr(self.bitos, 'desktop_instance'):
-                desktop = self.bitos.desktop_instance
-                try:
-                    desktop.save_desktop_shortcuts()
-                    desktop.save_widgets()
-                    print("[UpdateManager] 💾 Состояние рабочего стола сохранено")
-                except Exception as e:
-                    print(f"[UpdateManager] ⚠️ Ошибка сохранения состояния: {e}")
-            
-            # 2. Сохраняем статус перед установкой
-            self.status['install_started'] = True
-            self.status['install_started_at'] = datetime.now().isoformat()
-            self._save_status()
-            
-            # 3. Запускаем установщик в отдельном процессе
-            print(f"[UpdateManager] 🚀 Запуск установщика: {self.installer_path}")
-            print(f"[UpdateManager] 📦 Файл обновления: {filepath}")
-            
-            # Запускаем Installer.pyw с путём к архиву
-            if platform.system() == "Windows":
-                # На Windows используем pythonw для скрытия консоли
-                pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-                if os.path.exists(pythonw):
-                    subprocess.Popen(
-                        [pythonw, self.installer_path, filepath],
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                else:
-                    subprocess.Popen(
-                        [sys.executable, self.installer_path, filepath],
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-            else:
-                # На Linux/Mac
-                subprocess.Popen(
-                    [sys.executable, self.installer_path, filepath],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-            
-            # 4. Закрываем основную систему через 1 секунду
-            def shutdown_system():
-                try:
-                    # Закрываем окна
-                    if parent_window:
-                        try:
-                            parent_window.destroy()
-                        except:
-                            pass
-                    
-                    # Закрываем все окна Tkinter
-                    try:
-                        for window in tk._default_root.winfo_children():
-                            window.destroy()
-                    except:
-                        pass
-                    
-                    # Завершаем процесс
-                    print("[UpdateManager] 🛑 Завершение системы...")
-                    sys.exit(0)
-                    
-                except SystemExit:
-                    raise
-                except Exception as e:
-                    print(f"[UpdateManager] ⚠️ Ошибка при завершении: {e}")
-                    sys.exit(0)
-            
-            # Запускаем завершение через 1 секунду
-            threading.Timer(1.0, shutdown_system).start()
-            
-            return True
-            
-        except Exception as e:
-            self.is_installing = False
-            error_msg = f"Ошибка запуска установщика: {str(e)}"
-            print(f"[UpdateManager] ❌ {error_msg}")
-            if parent_window:
-                messagebox.showerror("Ошибка", error_msg)
-            return False
-    
-    def _install_internal(self, filepath, parent_window=None):
-        """
-        Встроенный метод установки (если Installer.pyw отсутствует)
-        БЕЗОПАСНОЕ резервное копирование ТОЛЬКО системных файлов
-        """
-        if parent_window:
-            if not messagebox.askyesno(
-                "Установка обновления (встроенная)",
-                f"Установить обновление v{self.latest_version_raw}?\n\n"
-                "⚠️ ВНИМАНИЕ: Используется встроенный установщик\n"
-                "• Установка может быть менее стабильной\n"
-                "• Рекомендуется установить Installer.pyw"
-            ):
-                return False
-        
-        self.is_installing = True
-        
+        # Запускаем установку в потоке
         def install_thread():
             try:
-                # ===== СОЗДАНИЕ БЕЗОПАСНОГО БЕКАПА (ТОЛЬКО СИСТЕМНЫХ ФАЙЛОВ) =====
-                backup_path = os.path.join(self.backup_dir, f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-                os.makedirs(backup_path, exist_ok=True)
+                # ===== 1. СОЗДАНИЕ БЕЗОПАСНОГО БЕКАПА =====
+                def backup_progress(count, status):
+                    if parent_window:
+                        parent_window.after(0, lambda: self._show_progress(parent_window, count, status))
                 
-                print("[UpdateManager] 📁 Создание резервной копии системных файлов...")
+                backup_path, file_count, total_size = self._create_backup(backup_progress)
                 
-                # ===== ТОЛЬКО ЭТИ ФАЙЛЫ КОПИРУЕМ =====
-                system_files = [
-                    '06V6.py',
-                    'Installer.pyw' if os.path.exists(os.path.join(self.base_path, 'Installer.pyw')) else None,
-                ]
+                if parent_window:
+                    parent_window.after(0, lambda: self._show_progress(
+                        parent_window, file_count, 
+                        f"✅ Бекап создан! Файлов: {file_count}, Размер: {self._format_size(total_size)}"
+                    ))
                 
-                system_dirs = [
-                    'System/Config',
-                    'System/Security',
-                    'System/Apps',
-                    'System/DesktopFile',
-                    'System/Sounds',
-                ]
-                
-                # Копируем файлы
-                for file in system_files:
-                    if not file:
-                        continue
-                    src = os.path.join(self.base_path, file)
-                    if os.path.exists(src):
-                        shutil.copy2(src, backup_path)
-                        print(f"  ✅ {file} скопирован")
-                
-                # Копируем папки
-                for dir_path in system_dirs:
-                    src = os.path.join(self.base_path, dir_path)
-                    if os.path.exists(src):
-                        dst = os.path.join(backup_path, dir_path)
-                        os.makedirs(os.path.dirname(dst), exist_ok=True)
-                        shutil.copytree(src, dst)
-                        print(f"  ✅ {dir_path} скопирована")
-                
-                print(f"[UpdateManager] ✅ Резервная копия создана: {backup_path}")
-                
-                # ===== РАСПАКОВКА =====
+                # ===== 2. РАСПАКОВКА ОБНОВЛЕНИЯ =====
+                import zipfile
                 extract_path = os.path.join(self.temp_dir, "extracted")
                 if os.path.exists(extract_path):
                     shutil.rmtree(extract_path)
                 os.makedirs(extract_path, exist_ok=True)
                 
-                print("[UpdateManager] 📂 Распаковка обновления...")
+                if parent_window:
+                    parent_window.after(0, lambda: self._show_progress(
+                        parent_window, file_count, "📦 Распаковка обновления..."
+                    ))
                 
                 with zipfile.ZipFile(filepath, 'r') as zip_ref:
                     zip_ref.extractall(extract_path)
@@ -12617,13 +12553,16 @@ class UpdateManager:
                         extracted_code = item_path
                         break
                 
-                # ===== ЗАМЕНА ФАЙЛОВ =====
-                print("[UpdateManager] ⚙️ Замена системных файлов...")
+                # ===== 3. ЗАМЕНА ФАЙЛОВ (СОХРАНЯЕМ System!) =====
+                if parent_window:
+                    parent_window.after(0, lambda: self._show_progress(
+                        parent_window, file_count, "⚙️ Замена файлов..."
+                    ))
                 
                 for item in os.listdir(extracted_code):
-                    # ПРОПУСКАЕМ System - сохраняем настройки!
+                    # ПРОПУСКАЕМ System - настройки уже в бекапе!
                     if item == 'System':
-                        print("  ⏭ System/ пропущена (сохраняем настройки)")
+                        print("  ⏭ System/ пропущена (настройки сохранены)")
                         continue
                     
                     src = os.path.join(extracted_code, item)
@@ -12639,22 +12578,25 @@ class UpdateManager:
                         shutil.copytree(src, dst)
                     else:
                         shutil.copy2(src, dst)
-                    
-                    print(f"  ✅ {item} обновлён")
                 
-                # ===== ЗАВЕРШЕНИЕ =====
+                # ===== 4. ЗАВЕРШЕНИЕ =====
                 self.status['install_complete'] = True
                 self.status['installed_version'] = self.latest_version_raw
                 self.status['installed_at'] = datetime.now().isoformat()
+                self.status['backup_path'] = backup_path
                 self._save_status()
                 
-                print("[UpdateManager] ✅ Установка завершена!")
-                
-                # Перезагружаемся
                 if parent_window:
-                    messagebox.showinfo("Установка завершена", 
+                    parent_window.after(0, lambda: self._show_progress(
+                        parent_window, file_count, 
+                        f"✅ Установка v{self.latest_version_raw} завершена!"
+                    ))
+                    parent_window.after(1000, lambda: messagebox.showinfo(
+                        "Установка завершена", 
                         f"Обновление v{self.latest_version_raw} установлено!\n\n"
-                        "Система будет перезагружена через 5 секунд.")
+                        f"📁 Бекап сохранён в:\n{backup_path}\n\n"
+                        "Система будет перезагружена через 5 секунд."
+                    ))
                 
                 time.sleep(5)
                 self._restart_system()
@@ -12663,11 +12605,24 @@ class UpdateManager:
                 self.is_installing = False
                 print(f"[UpdateManager] ❌ Ошибка установки: {e}")
                 if parent_window:
-                    messagebox.showerror("Ошибка", f"Установка не удалась:\n{str(e)}")
+                    parent_window.after(0, lambda: messagebox.showerror(
+                        "Ошибка", f"Установка не удалась:\n{str(e)}\n\n"
+                        "💾 Бекап сохранён в:\n" + backup_path if 'backup_path' in locals() else "Неизвестно"
+                    ))
         
         thread = threading.Thread(target=install_thread, daemon=True)
         thread.start()
         return True
+    
+    def _show_progress(self, parent_window, count, status):
+        """Показывает прогресс в родительском окне"""
+        # Это упрощённая версия - в реальном UI нужно обновлять элементы
+        print(f"[UpdateManager] {status}")
+        if hasattr(parent_window, 'update_progress_label'):
+            try:
+                parent_window.update_progress_label.config(text=status)
+            except:
+                pass
     
     def _restart_system(self):
         """Перезагрузка системы"""
@@ -12680,7 +12635,6 @@ class UpdateManager:
         except:
             pass
         
-        # Закрываем приложение
         try:
             sys.exit(0)
         except:
@@ -12709,29 +12663,31 @@ class UpdateManager:
             'available': self.update_available
         }
     
-    def create_download_thread(self, progress_callback, complete_callback):
-        """Создание потока для скачивания (для UI)"""
-        def wrapper():
-            self.download_update(progress_callback, complete_callback)
-        
-        thread = threading.Thread(target=wrapper, daemon=True)
-        thread.start()
-        return thread
-    
     def is_update_available(self):
-        """Проверка доступности обновления"""
         return self.update_available
     
     def get_download_path(self):
-        """Получение пути к скачанному файлу"""
         if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
             return self.status.get('download_path')
         
-        # Ищем в папке
         zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
         if zip_files:
             return os.path.join(self.temp_dir, sorted(zip_files)[-1])
         
+        return None
+    
+    def get_backup_info(self):
+        """Получение информации о последнем бекапе"""
+        if self.status.get('backup_path') and os.path.exists(self.status.get('backup_path')):
+            backup_path = self.status['backup_path']
+            manifest_path = os.path.join(backup_path, 'manifest.json')
+            if os.path.exists(manifest_path):
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                except:
+                    return {'path': backup_path}
+            return {'path': backup_path}
         return None
     
     def clear_download(self):
@@ -12749,9 +12705,8 @@ class UpdateManager:
             return False
     
     def __del__(self):
-        """Деструктор"""
         pass
-
+       
     # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     if not PIL_AVAILABLE:
