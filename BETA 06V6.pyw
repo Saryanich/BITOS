@@ -12084,6 +12084,17 @@ if __name__ == "__main__":
     def __del__(self):
         self.stop()
 
+import os
+import sys
+import json
+import time
+import shutil
+import platform
+import threading
+import subprocess
+from datetime import datetime
+from tkinter import messagebox
+
 # ==================== ОБНОВЛЕННЫЙ КЛАСС: UpdateManager ====================
 class UpdateManager:
     """
@@ -12091,7 +12102,7 @@ class UpdateManager:
     - Проверка обновлений на GitHub
     - Скачивание обновлений
     - БЕЗОПАСНОЕ резервное копирование ТОЛЬКО:
-      1. System/Config   (настройки, темы)
+      1. System/Config    (настройки, темы)
       2. System/Security (пин-коды, ключи)
       3. System/Sounds   (звуки)
       4. Старая версия 06V6.py (код перед обновлением)
@@ -12125,11 +12136,11 @@ class UpdateManager:
         self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backup")
         self.installer_path = os.path.join(self.base_path, "Installer.pyw")
         
-        # Папки и файлы для бекапа
+        # Папки и файлы для бекапа (относительно base_path)
         self.backup_folders = [
-            "System/Config",
-            "System/Security", 
-            "System/Sounds"
+            os.path.join("System", "Config"),
+            os.path.join("System", "Security"), 
+            os.path.join("System", "Sounds")
         ]
         self.backup_files = [
             "06V6.py"
@@ -12161,9 +12172,7 @@ class UpdateManager:
     
     def _normalize_version(self, version):
         """Нормализация версии для сравнения"""
-        v = version.replace('v', '').strip()
-        v = v.replace('V', '.')
-        v = v.replace('_', '.')
+        v = str(version).replace('v', '').replace('V', '.').replace('_', '.').strip()
         
         parts = v.split('.')
         normalized_parts = []
@@ -12218,7 +12227,7 @@ class UpdateManager:
             try:
                 with open(self.update_status_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return {}
         return {}
     
@@ -12227,45 +12236,39 @@ class UpdateManager:
         try:
             with open(self.update_status_file, 'w', encoding='utf-8') as f:
                 json.dump(self.status, f, indent=4, ensure_ascii=False)
-        except:
+        except Exception:
             pass
     
     def _create_backup(self, callback=None):
         """
         Создание резервной копии перед обновлением
-        Сохраняет ТОЛЬКО:
-        1. System/Config
-        2. System/Security
-        3. System/Sounds
-        4. 06V6.py (старая версия)
+        Сохраняет ТОЛЬКО указанные папки и файлы
         """
         if callback:
             callback(0, "📦 Создание резервной копии...")
         
-        # Имя бекапа с датой и версией
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"backup_{self.current_version_raw}_{timestamp}"
+        backup_name = f"bitos_backup_{timestamp}"
         backup_path = os.path.join(self.backup_dir, backup_name)
         os.makedirs(backup_path, exist_ok=True)
         
         copied_files = 0
         total_size = 0
         
-        # ===== 1. БЕКАП ПАПОК: Config, Security, Sounds =====
+        # ===== 1. БЕКАП ПАПОК =====
         for folder_rel in self.backup_folders:
-            src = os.path.join(self.base_path, folder_rel.replace('/', os.sep))
+            src = os.path.abspath(os.path.join(self.base_path, folder_rel))
             if not os.path.exists(src):
                 if callback:
                     callback(copied_files, f"⚠️ Папка не найдена: {folder_rel}")
                 continue
             
-            dst = os.path.join(backup_path, folder_rel.replace('/', os.sep))
+            dst = os.path.abspath(os.path.join(backup_path, folder_rel))
             os.makedirs(dst, exist_ok=True)
             
             if callback:
                 callback(copied_files, f"📁 Копирование: {folder_rel}")
             
-            # Копируем содержимое папки
             for root, dirs, files in os.walk(src):
                 rel_path = os.path.relpath(root, src)
                 target_dir = os.path.join(dst, rel_path) if rel_path != '.' else dst
@@ -12283,11 +12286,11 @@ class UpdateManager:
                     except Exception as e:
                         print(f"[UpdateManager] ⚠️ Ошибка копирования {file}: {e}")
         
-        # ===== 2. БЕКАП ФАЙЛА: 06V6.py =====
+        # ===== 2. БЕКАП ОТДЕЛЬНЫХ ФАЙЛОВ =====
         for filename in self.backup_files:
-            src = os.path.join(self.base_path, filename)
-            if os.path.exists(src):
-                dst = os.path.join(backup_path, filename)
+            src = os.path.abspath(os.path.join(self.base_path, filename))
+            if os.path.exists(src) and os.path.isfile(src):
+                dst = os.path.abspath(os.path.join(backup_path, filename))
                 try:
                     shutil.copy2(src, dst)
                     copied_files += 1
@@ -12311,8 +12314,11 @@ class UpdateManager:
             'total_size': total_size
         }
         
-        with open(os.path.join(backup_path, 'manifest.json'), 'w', encoding='utf-8') as f:
-            json.dump(manifest, f, indent=4, ensure_ascii=False)
+        try:
+            with open(os.path.join(backup_path, 'manifest.json'), 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[UpdateManager] ⚠️ Не удалось сохранить манифест: {e}")
         
         if callback:
             callback(copied_files, f"✅ Бекап создан! Файлов: {copied_files}")
@@ -12332,9 +12338,7 @@ class UpdateManager:
         return f"{size:.1f} ТБ"
     
     def check_for_updates(self, callback=None):
-        """
-        Проверка наличия обновлений на GitHub
-        """
+        """Проверка наличия обновлений на GitHub"""
         if self.check_in_progress:
             if callback:
                 callback(False, None, None, None, "Проверка уже выполняется")
@@ -12346,14 +12350,13 @@ class UpdateManager:
         try:
             import requests
         except ImportError:
-            self.error_message = "Библиотека requests не установлена. Установите: pip install requests"
+            self.error_message = "Библиотека requests не установлена."
             self.check_in_progress = False
             if callback:
                 callback(False, None, None, None, self.error_message)
             return False, None, None, None
         
         try:
-            import requests
             response = requests.get(self.repo_url, timeout=10)
             
             if response.status_code == 200:
@@ -12472,10 +12475,7 @@ class UpdateManager:
         thread.start()
     
     def install_update(self, parent_window=None):
-        """
-        Установка обновления с БЕЗОПАСНЫМ бекапом
-        Сохраняет: Config, Security, Sounds, 06V6.py
-        """
+        """Установка обновления с БЕЗОПАСНЫМ бекапом"""
         if self.is_installing:
             if parent_window:
                 messagebox.showinfo("Информация", "Установка уже выполняется")
@@ -12486,7 +12486,6 @@ class UpdateManager:
                 messagebox.showinfo("Информация", "Сначала скачайте обновление")
             return False
         
-        # Проверяем наличие файла обновления
         filename = f"bitos_update_{self.latest_version_raw}.zip"
         filepath = os.path.join(self.temp_dir, filename)
         
@@ -12499,7 +12498,6 @@ class UpdateManager:
                     messagebox.showerror("Ошибка", "Файл обновления не найден")
                 return False
         
-        # Спрашиваем пользователя
         if parent_window:
             if not messagebox.askyesno(
                 "Установка обновления",
@@ -12514,10 +12512,9 @@ class UpdateManager:
         
         self.is_installing = True
         
-        # Запускаем установку в потоке
         def install_thread():
+            backup_path = ""
             try:
-                # ===== 1. СОЗДАНИЕ БЕЗОПАСНОГО БЕКАПА =====
                 def backup_progress(count, status):
                     if parent_window:
                         parent_window.after(0, lambda: self._show_progress(parent_window, count, status))
@@ -12530,7 +12527,6 @@ class UpdateManager:
                         f"✅ Бекап создан! Файлов: {file_count}, Размер: {self._format_size(total_size)}"
                     ))
                 
-                # ===== 2. РАСПАКОВКА ОБНОВЛЕНИЯ =====
                 import zipfile
                 extract_path = os.path.join(self.temp_dir, "extracted")
                 if os.path.exists(extract_path):
@@ -12545,7 +12541,6 @@ class UpdateManager:
                 with zipfile.ZipFile(filepath, 'r') as zip_ref:
                     zip_ref.extractall(extract_path)
                 
-                # Находим папку с кодом
                 extracted_code = extract_path
                 for item in os.listdir(extract_path):
                     item_path = os.path.join(extract_path, item)
@@ -12553,14 +12548,12 @@ class UpdateManager:
                         extracted_code = item_path
                         break
                 
-                # ===== 3. ЗАМЕНА ФАЙЛОВ (СОХРАНЯЕМ System!) =====
                 if parent_window:
                     parent_window.after(0, lambda: self._show_progress(
                         parent_window, file_count, "⚙️ Замена файлов..."
                     ))
                 
                 for item in os.listdir(extracted_code):
-                    # ПРОПУСКАЕМ System - настройки уже в бекапе!
                     if item == 'System':
                         print("  ⏭ System/ пропущена (настройки сохранены)")
                         continue
@@ -12579,7 +12572,6 @@ class UpdateManager:
                     else:
                         shutil.copy2(src, dst)
                 
-                # ===== 4. ЗАВЕРШЕНИЕ =====
                 self.status['install_complete'] = True
                 self.status['installed_version'] = self.latest_version_raw
                 self.status['installed_at'] = datetime.now().isoformat()
@@ -12607,7 +12599,7 @@ class UpdateManager:
                 if parent_window:
                     parent_window.after(0, lambda: messagebox.showerror(
                         "Ошибка", f"Установка не удалась:\n{str(e)}\n\n"
-                        "💾 Бекап сохранён в:\n" + backup_path if 'backup_path' in locals() else "Неизвестно"
+                        f"💾 Бекап сохранён в:\n{backup_path}" if backup_path else "Бекап не создан"
                     ))
         
         thread = threading.Thread(target=install_thread, daemon=True)
@@ -12616,12 +12608,11 @@ class UpdateManager:
     
     def _show_progress(self, parent_window, count, status):
         """Показывает прогресс в родительском окне"""
-        # Это упрощённая версия - в реальном UI нужно обновлять элементы
         print(f"[UpdateManager] {status}")
         if hasattr(parent_window, 'update_progress_label'):
             try:
                 parent_window.update_progress_label.config(text=status)
-            except:
+            except Exception:
                 pass
     
     def _restart_system(self):
@@ -12632,12 +12623,12 @@ class UpdateManager:
                                creationflags=subprocess.CREATE_NO_WINDOW)
             else:
                 subprocess.Popen(["reboot"])
-        except:
+        except Exception:
             pass
         
         try:
             sys.exit(0)
-        except:
+        except Exception:
             pass
     
     def get_status(self):
@@ -12685,7 +12676,7 @@ class UpdateManager:
                 try:
                     with open(manifest_path, 'r', encoding='utf-8') as f:
                         return json.load(f)
-                except:
+                except Exception:
                     return {'path': backup_path}
             return {'path': backup_path}
         return None
@@ -12701,7 +12692,7 @@ class UpdateManager:
             self.status['download_path'] = None
             self._save_status()
             return True
-        except:
+        except Exception:
             return False
     
     def __del__(self):
