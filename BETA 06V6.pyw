@@ -6673,7 +6673,7 @@ class BITOS:
     """Ядро операционной системы BITOS"""
     
     def __init__(self):
-        self.version = "06V6_21.07"
+        self.version = "06V6_20.07"
         self.build = "2026.07 BETA"
         self.running = True
         self.start_time = time.time()
@@ -12084,109 +12084,113 @@ if __name__ == "__main__":
     def __del__(self):
         self.stop()
 
+# ==================== ИСПРАВЛЕННЫЙ КЛАСС: UpdateManager ====================
 import os
 import sys
 import json
 import time
-import shutil
-import platform
 import threading
 import subprocess
+import platform
 from datetime import datetime
 from tkinter import messagebox
 
-# ==================== ОБНОВЛЕННЫЙ КЛАСС: UpdateManager ====================
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+
 class UpdateManager:
     """
     Менеджер обновлений BITOS
-    - Проверка обновлений на GitHub
-    - Скачивание обновлений
-    - БЕЗОПАСНОЕ резервное копирование ТОЛЬКО:
-      1. System/Config    (настройки, темы)
-      2. System/Security (пин-коды, ключи)
-      3. System/Sounds   (звуки)
-      4. Старая версия 06V6.py (код перед обновлением)
+    Простая и надежная версия без бекапов
     """
     
     def __init__(self, bitos_instance):
         self.bitos = bitos_instance
         
-        # Нормализуем текущую версию для сравнения
+        # Версии
         self.current_version_raw = bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
         self.current_version = self._normalize_version(self.current_version_raw)
         
-        # URL для проверки обновлений
+        # GitHub API
         self.repo_url = "https://api.github.com/repos/Saryanich/BITOS/releases/latest"
         
-        # Состояние обновления
+        # Состояние
         self.latest_version = None
         self.latest_version_raw = None
         self.download_url = None
         self.release_notes = None
         self.update_available = False
-        self.download_progress = 0
         self.is_downloading = False
         self.is_installing = False
+        self.download_progress = 0
+        self.error_message = None
         self.check_in_progress = False
+        self.last_check_time = None
         
         # Пути
         self.base_path = bitos_instance.base_path
         self.temp_dir = os.path.join(bitos_instance.system_paths["temp"], "updates")
+        self.restart_script = os.path.join(bitos_instance.base_path, "System", "restart.pyw")
         self.update_status_file = os.path.join(bitos_instance.system_paths["config"], "update_status.json")
-        self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backup")
-        self.installer_path = os.path.join(self.base_path, "Installer.pyw")
         
-        # Папки и файлы для бекапа (относительно base_path)
-        self.backup_folders = [
-            os.path.join("System", "Config"),
-            os.path.join("System", "Security"), 
-            os.path.join("System", "Sounds")
-        ]
-        self.backup_files = [
-            "06V6.py"
-        ]
-        
-        # Создаём папки
+        # Создаем папки
         os.makedirs(self.temp_dir, exist_ok=True)
-        os.makedirs(self.backup_dir, exist_ok=True)
         
-        # Загрузка сохранённого статуса
+        # Создаем/обновляем скрипт перезапуска
+        # (пересоздаём всегда, чтобы исправления логики установки
+        # доходили и до систем, где скрипт уже был создан ранее)
+        self._create_restart_script()
+        
+        # Загружаем статус
         self.status = self._load_status()
-        self.last_check_time = None
-        self.error_message = None
         
-        # Проверяем наличие установщика
-        self._check_installer()
+        # Ищем главное окно для after()
+        self._root = self._find_root()
         
-        print(f"[UpdateManager] ✅ Инициализирован. Версия: {self.current_version_raw}")
-        print(f"[UpdateManager] 📁 Бекапятся: {', '.join(self.backup_folders)} + 06V6.py")
-        print(f"[UpdateManager] 📌 Установщик: {'✅ найден' if os.path.exists(self.installer_path) else '❌ не найден'}")
+        print(f"[UpdateManager] ✅ Инициализирован (v{self.current_version_raw})")
     
-    def _check_installer(self):
-        """Проверка наличия Installer.pyw"""
-        if not os.path.exists(self.installer_path):
-            print(f"[UpdateManager] ⚠️ Установщик не найден: {self.installer_path}")
-            print(f"[UpdateManager] ⚠️ Обновления будут устанавливаться встроенным методом")
-            return False
-        return True
+    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+    
+    def _find_root(self):
+        """Поиск главного окна tkinter"""
+        # Пробуем разные варианты
+        for attr in ['root', 'window', 'master', 'main_window', 'app', 'gui', 'tk_root']:
+            if hasattr(self.bitos, attr):
+                obj = getattr(self.bitos, attr)
+                if hasattr(obj, 'after'):
+                    print(f"[UpdateManager] ✅ Найдено главное окно: {attr}")
+                    return obj
+        
+        # Если не нашли - пробуем найти через tkinter
+        try:
+            import tkinter as tk
+            if tk._default_root:
+                print("[UpdateManager] ✅ Используем tk._default_root")
+                return tk._default_root
+        except:
+            pass
+        
+        print("[UpdateManager] ⚠️ Главное окно не найдено, callback будут вызываться напрямую")
+        return None
     
     def _normalize_version(self, version):
         """Нормализация версии для сравнения"""
         v = str(version).replace('v', '').replace('V', '.').replace('_', '.').strip()
-        
         parts = v.split('.')
-        normalized_parts = []
+        normalized = []
         for part in parts:
             try:
-                num = int(part)
-                normalized_parts.append(str(num))
+                normalized.append(str(int(part)))
             except ValueError:
-                normalized_parts.append(part)
-        
-        return '.'.join(normalized_parts)
+                normalized.append(part)
+        return '.'.join(normalized)
     
     def _parse_version_parts(self, version):
-        """Разбор версии на числовые компоненты для сравнения"""
+        """Разбор версии на части"""
         normalized = self._normalize_version(version)
         parts = normalized.split('.')
         result = []
@@ -12198,7 +12202,7 @@ class UpdateManager:
         return result
     
     def _compare_versions(self, v1, v2):
-        """Сравнение версий"""
+        """Сравнение версий: 1 если v1 > v2, -1 если v1 < v2, 0 если равны"""
         parts1 = self._parse_version_parts(v1)
         parts2 = self._parse_version_parts(v2)
         
@@ -12218,202 +12222,272 @@ class UpdateManager:
                     return 1
                 elif s1 < s2:
                     return -1
-        
         return 0
     
     def _load_status(self):
-        """Загрузка статуса обновления"""
+        """Загрузка статуса обновлений"""
         if os.path.exists(self.update_status_file):
             try:
                 with open(self.update_status_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except Exception:
-                return {}
+            except:
+                pass
         return {}
     
     def _save_status(self):
-        """Сохранение статуса обновления"""
+        """Сохранение статуса обновлений"""
         try:
             with open(self.update_status_file, 'w', encoding='utf-8') as f:
                 json.dump(self.status, f, indent=4, ensure_ascii=False)
-        except Exception:
+        except:
             pass
     
-    def _create_backup(self, callback=None):
-        """
-        Создание резервной копии перед обновлением
-        Сохраняет ТОЛЬКО указанные папки и файлы
-        """
-        if callback:
-            callback(0, "📦 Создание резервной копии...")
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"bitos_backup_{timestamp}"
-        backup_path = os.path.join(self.backup_dir, backup_name)
-        os.makedirs(backup_path, exist_ok=True)
-        
-        copied_files = 0
-        total_size = 0
-        
-        # ===== 1. БЕКАП ПАПОК =====
-        for folder_rel in self.backup_folders:
-            src = os.path.abspath(os.path.join(self.base_path, folder_rel))
-            if not os.path.exists(src):
-                if callback:
-                    callback(copied_files, f"⚠️ Папка не найдена: {folder_rel}")
-                continue
-            
-            dst = os.path.abspath(os.path.join(backup_path, folder_rel))
-            os.makedirs(dst, exist_ok=True)
-            
-            if callback:
-                callback(copied_files, f"📁 Копирование: {folder_rel}")
-            
-            for root, dirs, files in os.walk(src):
-                rel_path = os.path.relpath(root, src)
-                target_dir = os.path.join(dst, rel_path) if rel_path != '.' else dst
-                os.makedirs(target_dir, exist_ok=True)
-                
-                for file in files:
-                    src_file = os.path.join(root, file)
-                    dst_file = os.path.join(target_dir, file)
-                    try:
-                        shutil.copy2(src_file, dst_file)
-                        copied_files += 1
-                        total_size += os.path.getsize(src_file)
-                        if callback and copied_files % 5 == 0:
-                            callback(copied_files, f"📄 {file}")
-                    except Exception as e:
-                        print(f"[UpdateManager] ⚠️ Ошибка копирования {file}: {e}")
-        
-        # ===== 2. БЕКАП ОТДЕЛЬНЫХ ФАЙЛОВ =====
-        for filename in self.backup_files:
-            src = os.path.abspath(os.path.join(self.base_path, filename))
-            if os.path.exists(src) and os.path.isfile(src):
-                dst = os.path.abspath(os.path.join(backup_path, filename))
-                try:
-                    shutil.copy2(src, dst)
-                    copied_files += 1
-                    total_size += os.path.getsize(src)
-                    if callback:
-                        callback(copied_files, f"📄 {filename}")
-                except Exception as e:
-                    print(f"[UpdateManager] ⚠️ Ошибка копирования {filename}: {e}")
-            else:
-                if callback:
-                    callback(copied_files, f"⚠️ Файл не найден: {filename}")
-        
-        # ===== 3. СОХРАНЕНИЕ МАНИФЕСТА =====
-        manifest = {
-            'backup_name': backup_name,
-            'created_at': datetime.now().isoformat(),
-            'version': self.current_version_raw,
-            'folders': self.backup_folders,
-            'files': self.backup_files,
-            'file_count': copied_files,
-            'total_size': total_size
-        }
+    def _safe_callback(self, callback, *args):
+        """Безопасный вызов callback"""
+        if not callback:
+            return
         
         try:
-            with open(os.path.join(backup_path, 'manifest.json'), 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=4, ensure_ascii=False)
+            if self._root and hasattr(self._root, 'after'):
+                self._root.after(0, lambda c=callback, a=args: c(*a))
+            else:
+                callback(*args)
         except Exception as e:
-            print(f"[UpdateManager] ⚠️ Не удалось сохранить манифест: {e}")
-        
-        if callback:
-            callback(copied_files, f"✅ Бекап создан! Файлов: {copied_files}")
-        
-        print(f"[UpdateManager] ✅ Бекап создан: {backup_name}")
-        print(f"[UpdateManager] 📁 Путь: {backup_path}")
-        print(f"[UpdateManager] 📄 Файлов: {copied_files}, Размер: {self._format_size(total_size)}")
-        
-        return backup_path, copied_files, total_size
+            print(f"[UpdateManager] Ошибка callback: {e}")
+            try:
+                callback(*args)
+            except:
+                pass
     
-    def _format_size(self, size):
-        """Форматирование размера"""
-        for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} ТБ"
+    def _create_restart_script(self):
+        """Создание скрипта для установки обновления после перезапуска"""
+        script = '''# -*- coding: utf-8 -*-
+import os, sys, time, shutil, zipfile, subprocess, platform
+
+BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMP_DIR = os.path.join(BASE_PATH, "System", "Temp", "updates")
+
+def main():
+    print("=" * 50)
+    print("УСТАНОВКА ОБНОВЛЕНИЯ BITOS")
+    print("=" * 50)
+    
+    # Ждем чтобы основная программа закрылась
+    print("\\nОжидание 10 секунд...")
+    for i in range(10, 0, -1):
+        print(f"Осталось {i} сек...", end='\\r')
+        time.sleep(1)
+    print("\\n")
+    
+    # Ищем zip файл обновления (берём самый свежий по времени изменения,
+    # а не по алфавитной сортировке имён — иначе можно взять не тот файл)
+    zip_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.zip')]
+    if not zip_files:
+        print("❌ Файл обновления не найден!")
+        input("Нажмите Enter для выхода...")
+        sys.exit(1)
+    
+    zip_candidates = [os.path.join(TEMP_DIR, f) for f in zip_files]
+    zip_path = max(zip_candidates, key=os.path.getmtime)
+    print(f"📦 Найден файл: {os.path.basename(zip_path)}")
+    
+    # Извлекаем архив
+    extract_path = os.path.join(TEMP_DIR, "extracted")
+    if os.path.exists(extract_path):
+        shutil.rmtree(extract_path)
+    os.makedirs(extract_path)
+    
+    print("📦 Извлечение обновления...")
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(extract_path)
+    
+    # Находим корневую папку с кодом
+    code_path = extract_path
+    for item in os.listdir(extract_path):
+        full_path = os.path.join(extract_path, item)
+        if os.path.isdir(full_path) and ('BITOS' in item or '06V' in item or 'bitos' in item.lower()):
+            code_path = full_path
+            break
+    
+    print(f"📁 Папка с кодом: {os.path.basename(code_path)}")
+    
+    # Копируем файлы (пропускаем System для сохранения настроек)
+    print("\\n⚙️ Установка файлов...")
+    updated = 0
+    errors = 0
+    
+    for item in os.listdir(code_path):
+        if item == 'System':
+            print(f"  ⏭ Пропущено: {item}/ (настройки сохранены)")
+            continue
+        
+        src = os.path.join(code_path, item)
+        dst = os.path.join(BASE_PATH, item)
+        
+        try:
+            # Удаляем старый файл/папку
+            if os.path.exists(dst):
+                if os.path.isdir(dst):
+                    shutil.rmtree(dst)
+                else:
+                    os.remove(dst)
+            
+            # Копируем новый
+            if os.path.isdir(src):
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            
+            print(f"  ✅ {item}")
+            updated += 1
+        except Exception as e:
+            print(f"  ❌ {item}: {e}")
+            errors += 1
+    
+    print(f"\\n{'=' * 50}")
+    print(f"✅ Установлено: {updated} файлов")
+    if errors > 0:
+        print(f"❌ Ошибок: {errors}")
+    print(f"{'=' * 50}")
+    
+    # Удаляем архив и временные файлы
+    try:
+        os.remove(zip_path)
+        if os.path.exists(extract_path):
+            shutil.rmtree(extract_path)
+    except:
+        pass
+    
+    # Перезагрузка
+    print("\\n🔄 Перезагрузка через 5 секунд...")
+    time.sleep(5)
+    
+    try:
+        if platform.system() == "Windows":
+            subprocess.Popen(["shutdown", "/r", "/t", "3", "/f"], shell=True)
+        else:
+            subprocess.Popen(["reboot"])
+    except Exception as e:
+        print(f"❌ Не удалось перезагрузить: {e}")
+        print("Пожалуйста, перезагрузите систему вручную.")
+        input("Нажмите Enter для выхода...")
+    
+    sys.exit(0)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"\\n❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        import traceback
+        traceback.print_exc()
+        input("\\nНажмите Enter для выхода...")
+        sys.exit(1)
+'''
+        try:
+            with open(self.restart_script, 'w', encoding='utf-8') as f:
+                f.write(script)
+            print(f"[UpdateManager] ✅ Скрипт перезапуска создан: {self.restart_script}")
+        except Exception as e:
+            print(f"[UpdateManager] ❌ Ошибка создания скрипта: {e}")
+    
+    # ==================== ОСНОВНЫЕ МЕТОДЫ ====================
     
     def check_for_updates(self, callback=None):
-        """Проверка наличия обновлений на GitHub"""
+        """
+        Проверка обновлений
+        callback(available, version, url, notes, error)
+        """
         if self.check_in_progress:
             if callback:
                 callback(False, None, None, None, "Проверка уже выполняется")
-            return False, None, None, None
+            return False
         
         self.check_in_progress = True
         self.error_message = None
         
-        try:
-            import requests
-        except ImportError:
-            self.error_message = "Библиотека requests не установлена."
+        if not REQUESTS_AVAILABLE:
+            self.error_message = "Библиотека requests не установлена"
             self.check_in_progress = False
             if callback:
                 callback(False, None, None, None, self.error_message)
-            return False, None, None, None
+            return False
         
-        try:
-            response = requests.get(self.repo_url, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
+        def check_thread():
+            try:
+                print("[UpdateManager] 🔍 Проверка обновлений...")
+                headers = {
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "BITOS-UpdateManager"
+                }
+                response = requests.get(self.repo_url, timeout=10, headers=headers)
                 
-                latest_tag_raw = data.get("tag_name", "").replace("v", "").strip()
-                self.latest_version_raw = latest_tag_raw
-                self.latest_version = self._normalize_version(latest_tag_raw)
-                self.download_url = data.get("zipball_url")
-                self.release_notes = data.get("body", "Нет описания релиза")
-                
-                if self._compare_versions(self.latest_version, self.current_version) > 0:
-                    self.update_available = True
-                    self.status['update_available'] = True
-                    self.status['latest_version'] = latest_tag_raw
-                    self.status['checked_at'] = datetime.now().isoformat()
-                    self._save_status()
+                if response.status_code == 200:
+                    data = response.json()
                     
-                    self.last_check_time = datetime.now()
-                    self.check_in_progress = False
+                    latest_tag_raw = data.get("tag_name", "").replace("v", "").strip()
+                    self.latest_version_raw = latest_tag_raw
+                    self.latest_version = self._normalize_version(latest_tag_raw)
+                    self.download_url = data.get("zipball_url")
+                    self.release_notes = data.get("body", "Нет описания")
                     
-                    if callback:
-                        callback(True, latest_tag_raw, self.download_url, self.release_notes, None)
+                    print(f"[UpdateManager] Текущая: {self.current_version_raw}")
+                    print(f"[UpdateManager] Последняя: {latest_tag_raw}")
                     
-                    return True, latest_tag_raw, self.download_url, self.release_notes
+                    if self._compare_versions(self.latest_version, self.current_version) > 0:
+                        self.update_available = True
+                        print(f"[UpdateManager] ✅ Доступно обновление!")
+                        
+                        self.status['update_available'] = True
+                        self.status['latest_version'] = latest_tag_raw
+                        self.status['checked_at'] = datetime.now().isoformat()
+                        self._save_status()
+                        
+                        self.last_check_time = datetime.now()
+                        self.check_in_progress = False
+                        
+                        if callback:
+                            self._safe_callback(callback, True, latest_tag_raw, self.download_url, self.release_notes, None)
+                    else:
+                        self.update_available = False
+                        print(f"[UpdateManager] ✅ Система актуальна")
+                        
+                        self.status['update_available'] = False
+                        self.status['checked_at'] = datetime.now().isoformat()
+                        self._save_status()
+                        
+                        self.last_check_time = datetime.now()
+                        self.check_in_progress = False
+                        
+                        if callback:
+                            self._safe_callback(callback, False, None, None, None, "Обновлений нет")
                 else:
-                    self.update_available = False
-                    self.status['update_available'] = False
-                    self.status['checked_at'] = datetime.now().isoformat()
-                    self._save_status()
-                    
-                    self.last_check_time = datetime.now()
+                    self.error_message = f"Ошибка API: {response.status_code}"
+                    print(f"[UpdateManager] ❌ {self.error_message}")
                     self.check_in_progress = False
-                    
                     if callback:
-                        callback(False, None, None, None, None)
+                        self._safe_callback(callback, False, None, None, None, self.error_message)
                     
-                    return False, None, None, None
-            else:
-                self.error_message = f"Ошибка API: {response.status_code}"
+            except Exception as e:
+                self.error_message = f"Ошибка проверки: {str(e)}"
+                print(f"[UpdateManager] ❌ {self.error_message}")
                 self.check_in_progress = False
                 if callback:
-                    callback(False, None, None, None, self.error_message)
-                return False, None, None, None
-                
-        except Exception as e:
-            self.error_message = f"Ошибка: {str(e)}"
-            self.check_in_progress = False
-            if callback:
-                callback(False, None, None, None, self.error_message)
-            return False, None, None, None
+                    self._safe_callback(callback, False, None, None, None, self.error_message)
+        
+        thread = threading.Thread(target=check_thread, daemon=True)
+        thread.start()
+        return True
     
     def download_update(self, progress_callback=None, complete_callback=None):
-        """Скачивание обновления с GitHub"""
-        if not self.update_available or not self.download_url:
+        """
+        Скачивание обновления
+        progress_callback(percent, status_text)
+        complete_callback(success, filepath, error)
+        """
+        if not self.download_url:
             if complete_callback:
-                complete_callback(False, None, "Нет доступных обновлений")
+                complete_callback(False, None, "Нет URL для скачивания")
             return
         
         if self.is_downloading:
@@ -12429,210 +12503,155 @@ class UpdateManager:
         
         def download_thread():
             try:
-                import requests
-                
                 filename = f"bitos_update_{self.latest_version_raw}.zip"
                 filepath = os.path.join(self.temp_dir, filename)
                 
-                response = requests.get(self.download_url, stream=True, timeout=30)
-                total_size = int(response.headers.get('content-length', 0))
+                print(f"[UpdateManager] 📥 Скачивание: {filename}")
                 
-                if total_size == 0:
-                    self.is_downloading = False
-                    if complete_callback:
-                        complete_callback(False, None, "Не удалось определить размер файла")
-                    return
+                headers = {"User-Agent": "BITOS-UpdateManager"}
+                response = requests.get(self.download_url, stream=True, timeout=30,
+                                         headers=headers, allow_redirects=True)
+                response.raise_for_status()
                 
+                # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и не всегда
+                # присылает заголовок Content-Length. Раньше при total_size == 0
+                # скачивание сразу считалось ошибкой — обновления никогда не
+                # скачивались. Теперь при неизвестном размере просто показываем
+                # объём уже скачанных данных вместо процента.
+                total_size = int(response.headers.get('content-length', 0) or 0)
+                
+                downloaded = 0
+                last_reported_percent = -1
                 with open(filepath, 'wb') as f:
-                    downloaded = 0
                     for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        if total_size > 0:
                             percent = int((downloaded / total_size) * 100)
+                            self.download_progress = percent
+                            if percent != last_reported_percent and progress_callback:
+                                last_reported_percent = percent
+                                self._safe_callback(progress_callback, percent, f"Скачивание: {percent}%")
+                        else:
+                            mb_downloaded = downloaded / (1024 * 1024)
+                            # прогресс неизвестен заранее — плавно ползём к 99%,
+                            # чтобы UI не выглядел зависшим
+                            self.download_progress = min(99, self.download_progress + 1)
                             if progress_callback:
-                                progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+                                self._safe_callback(
+                                    progress_callback, self.download_progress,
+                                    f"Скачано: {mb_downloaded:.1f} МБ"
+                                )
                 
+                self.is_downloading = False
+                
+                # Проверяем файл
                 if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                     self.download_progress = 100
-                    self.is_downloading = False
+                    print(f"[UpdateManager] ✅ Скачано: {filepath}")
+                    
                     self.status['download_path'] = filepath
                     self._save_status()
                     
+                    if progress_callback:
+                        self._safe_callback(progress_callback, 100, "Скачивание завершено")
                     if complete_callback:
-                        complete_callback(True, filepath, None)
+                        self._safe_callback(complete_callback, True, filepath, None)
                 else:
-                    self.is_downloading = False
+                    print(f"[UpdateManager] ❌ Файл не создан")
                     if complete_callback:
-                        complete_callback(False, None, "Файл не скачан")
+                        self._safe_callback(complete_callback, False, None, "Файл не был создан")
                     
             except Exception as e:
                 self.is_downloading = False
+                print(f"[UpdateManager] ❌ Ошибка скачивания: {e}")
                 if complete_callback:
-                    complete_callback(False, None, str(e))
+                    self._safe_callback(complete_callback, False, None, str(e))
         
         thread = threading.Thread(target=download_thread, daemon=True)
         thread.start()
     
-    def install_update(self, parent_window=None):
-        """Установка обновления с БЕЗОПАСНЫМ бекапом"""
+    def install_update(self):
+        """
+        Установка обновления
+        Возвращает True если установка запущена
+        """
         if self.is_installing:
-            if parent_window:
-                messagebox.showinfo("Информация", "Установка уже выполняется")
+            messagebox.showinfo("Информация", "Установка уже выполняется")
             return False
         
-        if self.download_progress < 100:
-            if parent_window:
-                messagebox.showinfo("Информация", "Сначала скачайте обновление")
-            return False
+        # Ищем файл обновления
+        filepath = None
+        if self.latest_version_raw:
+            candidate = os.path.join(self.temp_dir, f"bitos_update_{self.latest_version_raw}.zip")
+            if os.path.exists(candidate):
+                filepath = candidate
         
-        filename = f"bitos_update_{self.latest_version_raw}.zip"
-        filepath = os.path.join(self.temp_dir, filename)
-        
-        if not os.path.exists(filepath):
+        if not filepath:
+            # Берём самый свежий по времени изменения, а не по алфавитной
+            # сортировке имён — иначе можно случайно подхватить старый файл
             zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
             if zip_files:
-                filepath = os.path.join(self.temp_dir, sorted(zip_files)[-1])
+                zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
+                filepath = max(zip_candidates, key=os.path.getmtime)
             else:
-                if parent_window:
-                    messagebox.showerror("Ошибка", "Файл обновления не найден")
+                messagebox.showerror("Ошибка", "Файл обновления не найден\nСначала скачайте обновление")
                 return False
         
-        if parent_window:
-            if not messagebox.askyesno(
-                "Установка обновления",
-                f"Установить обновление v{self.latest_version_raw}?\n\n"
-                "⚠️ ВНИМАНИЕ:\n"
-                "• Перед установкой будет создан БЕЗОПАСНЫЙ БЕКАП\n"
-                "• Сохраняются: Config, Security, Sounds, 06V6.py\n"
-                "• Система будет перезагружена\n\n"
-                "✅ Все настройки и данные будут сохранены!"
-            ):
-                return False
+        # Запрашиваем подтверждение
+        if not messagebox.askyesno(
+            "Установка обновления",
+            f"Установить обновление v{self.latest_version_raw}?\n\n"
+            "⚠️ ВНИМАНИЕ:\n"
+            "• Система будет перезагружена\n"
+            "• Ваши настройки будут сохранены\n"
+            "• Личные файлы не будут затронуты\n\n"
+            "Продолжить?"
+        ):
+            return False
         
         self.is_installing = True
         
-        def install_thread():
-            backup_path = ""
-            try:
-                def backup_progress(count, status):
-                    if parent_window:
-                        parent_window.after(0, lambda: self._show_progress(parent_window, count, status))
-                
-                backup_path, file_count, total_size = self._create_backup(backup_progress)
-                
-                if parent_window:
-                    parent_window.after(0, lambda: self._show_progress(
-                        parent_window, file_count, 
-                        f"✅ Бекап создан! Файлов: {file_count}, Размер: {self._format_size(total_size)}"
-                    ))
-                
-                import zipfile
-                extract_path = os.path.join(self.temp_dir, "extracted")
-                if os.path.exists(extract_path):
-                    shutil.rmtree(extract_path)
-                os.makedirs(extract_path, exist_ok=True)
-                
-                if parent_window:
-                    parent_window.after(0, lambda: self._show_progress(
-                        parent_window, file_count, "📦 Распаковка обновления..."
-                    ))
-                
-                with zipfile.ZipFile(filepath, 'r') as zip_ref:
-                    zip_ref.extractall(extract_path)
-                
-                extracted_code = extract_path
-                for item in os.listdir(extract_path):
-                    item_path = os.path.join(extract_path, item)
-                    if os.path.isdir(item_path) and ('BITOS' in item or '06V6' in item):
-                        extracted_code = item_path
-                        break
-                
-                if parent_window:
-                    parent_window.after(0, lambda: self._show_progress(
-                        parent_window, file_count, "⚙️ Замена файлов..."
-                    ))
-                
-                for item in os.listdir(extracted_code):
-                    if item == 'System':
-                        print("  ⏭ System/ пропущена (настройки сохранены)")
-                        continue
-                    
-                    src = os.path.join(extracted_code, item)
-                    dst = os.path.join(self.base_path, item)
-                    
-                    if os.path.exists(dst):
-                        if os.path.isdir(dst):
-                            shutil.rmtree(dst)
-                        else:
-                            os.remove(dst)
-                    
-                    if os.path.isdir(src):
-                        shutil.copytree(src, dst)
-                    else:
-                        shutil.copy2(src, dst)
-                
-                self.status['install_complete'] = True
-                self.status['installed_version'] = self.latest_version_raw
-                self.status['installed_at'] = datetime.now().isoformat()
-                self.status['backup_path'] = backup_path
-                self._save_status()
-                
-                if parent_window:
-                    parent_window.after(0, lambda: self._show_progress(
-                        parent_window, file_count, 
-                        f"✅ Установка v{self.latest_version_raw} завершена!"
-                    ))
-                    parent_window.after(1000, lambda: messagebox.showinfo(
-                        "Установка завершена", 
-                        f"Обновление v{self.latest_version_raw} установлено!\n\n"
-                        f"📁 Бекап сохранён в:\n{backup_path}\n\n"
-                        "Система будет перезагружена через 5 секунд."
-                    ))
-                
-                time.sleep(5)
-                self._restart_system()
-                
-            except Exception as e:
-                self.is_installing = False
-                print(f"[UpdateManager] ❌ Ошибка установки: {e}")
-                if parent_window:
-                    parent_window.after(0, lambda: messagebox.showerror(
-                        "Ошибка", f"Установка не удалась:\n{str(e)}\n\n"
-                        f"💾 Бекап сохранён в:\n{backup_path}" if backup_path else "Бекап не создан"
-                    ))
-        
-        thread = threading.Thread(target=install_thread, daemon=True)
-        thread.start()
-        return True
-    
-    def _show_progress(self, parent_window, count, status):
-        """Показывает прогресс в родительском окне"""
-        print(f"[UpdateManager] {status}")
-        if hasattr(parent_window, 'update_progress_label'):
-            try:
-                parent_window.update_progress_label.config(text=status)
-            except Exception:
-                pass
-    
-    def _restart_system(self):
-        """Перезагрузка системы"""
         try:
+            # Запускаем скрипт обновления
             if platform.system() == "Windows":
-                subprocess.Popen(["shutdown", "/r", "/t", "2", "/f"],
-                               creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen(
+                    [sys.executable, self.restart_script],
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
             else:
-                subprocess.Popen(["reboot"])
-        except Exception:
+                subprocess.Popen([sys.executable, self.restart_script])
+            
+            # Закрываем приложение
+            self._close_application()
+            return True
+            
+        except Exception as e:
+            self.is_installing = False
+            messagebox.showerror("Ошибка", f"Не удалось запустить установку:\n{e}")
+            return False
+    
+    def _close_application(self):
+        """Корректное закрытие приложения"""
+        try:
+            import tkinter as tk
+            if tk._default_root:
+                tk._default_root.destroy()
+        except:
             pass
         
         try:
             sys.exit(0)
-        except Exception:
-            pass
+        except:
+            os._exit(0)
+    
+    # ==================== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ====================
     
     def get_status(self):
-        """Получение статуса обновлений"""
+        """Получение статуса"""
         return {
             'current_version': self.current_version_raw,
             'latest_version': self.latest_version_raw,
@@ -12641,12 +12660,11 @@ class UpdateManager:
             'is_installing': self.is_installing,
             'download_progress': self.download_progress,
             'last_check': self.last_check_time,
-            'error': self.error_message,
-            'installer_exists': os.path.exists(self.installer_path)
+            'error': self.error_message
         }
     
     def get_update_info(self):
-        """Получение информации об обновлении для UI"""
+        """Получение информации об обновлении"""
         return {
             'version': self.latest_version_raw,
             'download_url': self.download_url,
@@ -12655,49 +12673,44 @@ class UpdateManager:
         }
     
     def is_update_available(self):
+        """Проверка доступности обновления"""
         return self.update_available
     
     def get_download_path(self):
+        """Получение пути к скачанному файлу"""
         if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
             return self.status.get('download_path')
         
         zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
         if zip_files:
-            return os.path.join(self.temp_dir, sorted(zip_files)[-1])
+            zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
+            return max(zip_candidates, key=os.path.getmtime)
         
         return None
     
-    def get_backup_info(self):
-        """Получение информации о последнем бекапе"""
-        if self.status.get('backup_path') and os.path.exists(self.status.get('backup_path')):
-            backup_path = self.status['backup_path']
-            manifest_path = os.path.join(backup_path, 'manifest.json')
-            if os.path.exists(manifest_path):
-                try:
-                    with open(manifest_path, 'r', encoding='utf-8') as f:
-                        return json.load(f)
-                except Exception:
-                    return {'path': backup_path}
-            return {'path': backup_path}
-        return None
-    
     def clear_download(self):
-        """Очистка скачанных обновлений"""
+        """Очистка скачанных файлов"""
         try:
             for f in os.listdir(self.temp_dir):
-                if f.endswith('.zip'):
-                    os.remove(os.path.join(self.temp_dir, f))
+                filepath = os.path.join(self.temp_dir, f)
+                try:
+                    if os.path.isfile(filepath):
+                        os.remove(filepath)
+                    elif os.path.isdir(filepath):
+                        shutil.rmtree(filepath)
+                except:
+                    pass
+            
             self.download_progress = 0
             self.update_available = False
             self.status['download_path'] = None
             self._save_status()
+            print("[UpdateManager] ✅ Файлы обновлений очищены")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"[UpdateManager] ❌ Ошибка очистки: {e}")
             return False
-    
-    def __del__(self):
-        pass
-       
+        
     # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     if not PIL_AVAILABLE:
