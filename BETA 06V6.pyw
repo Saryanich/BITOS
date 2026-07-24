@@ -6673,7 +6673,7 @@ class BITOS:
     """Ядро операционной системы BITOS"""
     
     def __init__(self):
-        self.version = "06V6_24.07"
+        self.version = "06V6_20.07"
         self.build = "2026.07 BETA"
         self.running = True
         self.start_time = time.time()
@@ -9571,6 +9571,7 @@ class SettingsWindow:
         self._create_security_tab()
         self._create_account_tab()
         self._create_updates_tab()  # <--- ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВКЛАДКА
+        self._create_recovery_tab()
         self._create_system_tab()
         
         # Нижняя панель
@@ -10451,6 +10452,26 @@ class SettingsWindow:
             except:
                 pass
         
+        # ===== ПЕРЕКЛЮЧАТЕЛЬ РЕЗЕРВНОГО КОПИРОВАНИЯ =====
+        backup_toggle_frame = tk.Frame(main_frame, bg='#FDF6E3', relief=tk.RIDGE, bd=1)
+        backup_toggle_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.backup_before_install_var = tk.BooleanVar(value=True)
+        
+        backup_check = tk.Checkbutton(
+            backup_toggle_frame,
+            text="🗄️ Сделать бекап системы перед установкой?",
+            variable=self.backup_before_install_var,
+            bg='#FDF6E3', fg='#2C3E50', font=('Segoe UI', 11, 'bold'),
+            activebackground='#FDF6E3', selectcolor='#FDF6E3',
+            cursor='hand2'
+        )
+        backup_check.pack(side=tk.LEFT, padx=10, pady=8)
+        
+        tk.Label(backup_toggle_frame,
+                text="(да — сохранятся старая версия, config, security и sounds; нет — установка без бекапа)",
+                bg='#FDF6E3', fg='#7F8C8D', font=('Segoe UI', 9)).pack(side=tk.LEFT, padx=(0, 10))
+        
         # ===== КНОПКИ УПРАВЛЕНИЯ =====
         btn_frame = tk.Frame(main_frame, bg='white')
         btn_frame.pack(fill=tk.X, pady=5)
@@ -10712,26 +10733,34 @@ class SettingsWindow:
             filepath = os.path.join(self.update_manager.temp_dir, filename)
             
             # Скачиваем с прогрессом
-            response = requests.get(url, stream=True, timeout=30)
-            total_size = int(response.headers.get('content-length', 0))
+            headers = {"User-Agent": "BITOS-UpdateManager"}
+            response = requests.get(url, stream=True, timeout=30, headers=headers, allow_redirects=True)
+            response.raise_for_status()
             
-            if total_size == 0:
-                complete_callback(False, None, "Не удалось определить размер файла")
-                return
+            # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и часто НЕ
+            # присылает Content-Length. Раньше это сразу считалось ошибкой,
+            # и скачивание почти всегда обрывалось. Теперь при неизвестном
+            # размере просто показываем объём скачанного вместо процента.
+            total_size = int(response.headers.get('content-length', 0) or 0)
             
             progress_callback(0, "Начинаем загрузку...")
             
+            downloaded = 0
             with open(filepath, 'wb') as f:
-                downloaded = 0
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
-                        percent = int((downloaded / total_size) * 100)
-                        progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+                        if total_size > 0:
+                            percent = int((downloaded / total_size) * 100)
+                            progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+                        else:
+                            progress_callback(min(99, downloaded // 1024 % 100),
+                                               f"Скачивание: {downloaded//1024} KB")
             
             # Проверяем, что файл скачался
             if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                progress_callback(100, "Скачивание завершено")
                 complete_callback(True, filepath, None)
             else:
                 complete_callback(False, None, "Файл не скачан")
@@ -10826,33 +10855,74 @@ class SettingsWindow:
         try:
             self.update_manager.is_installing = True
             
-            # Создаём резервную копию текущей версии
-            backup_path = os.path.join(self.update_manager.backup_dir, 
-                                      f"bitos_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-            os.makedirs(backup_path, exist_ok=True)
+            make_backup = True
+            if hasattr(self, 'backup_before_install_var'):
+                make_backup = self.backup_before_install_var.get()
             
-            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Создание резервной копии..."))
-            self._log_update("📦 Создание резервной копии текущей версии...", "INSTALL")
-            
-            # Копируем текущие файлы в резерв
             base_path = self.bitos.base_path
-            for item in os.listdir(base_path):
-                if item in ['System', 'venv', '__pycache__', '.git']:
-                    continue
-                src = os.path.join(base_path, item)
-                dst = os.path.join(backup_path, item)
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst, ignore_dangling_symlinks=True)
-                else:
-                    shutil.copy2(src, dst)
+            backup_path = None
+            
+            if make_backup:
+                # Создаём резервную копию: старая версия кода + Config/Security/Sounds
+                backup_path = os.path.join(self.update_manager.backup_dir, 
+                                          f"bitos_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+                os.makedirs(backup_path, exist_ok=True)
+                
+                self.window.after(0, lambda: self.update_progress_label.config(text="📦 Создание резервной копии..."))
+                self.window.after(0, lambda: self._log_update("📦 Создание резервной копии текущей версии...", "INSTALL"))
+                
+                # Копируем текущие файлы (старую версию кода) в резерв.
+                # Каждый элемент копируем в своём try/except: если один файл
+                # заблокирован (открыт, проверяется антивирусом и т.п.), это
+                # не должно обрывать весь процесс резервного копирования.
+                backup_errors = 0
+                for item in os.listdir(base_path):
+                    if item in ['System', 'venv', '__pycache__', '.git']:
+                        continue
+                    src = os.path.join(base_path, item)
+                    dst = os.path.join(backup_path, item)
+                    try:
+                        if os.path.isdir(src):
+                            shutil.copytree(src, dst, ignore_dangling_symlinks=True)
+                        else:
+                            shutil.copy2(src, dst)
+                    except Exception as copy_err:
+                        backup_errors += 1
+                        print(f"[Install] ⚠️ Не удалось сохранить в бэкап {item}: {copy_err}")
+                
+                # Дополнительно бекапим Config, Security и Sounds — именно
+                # их можно будет восстановить или пересоздать на вкладке
+                # "Восстановление системы", отдельно от кода приложения.
+                self.window.after(0, lambda: self._log_update("📦 Резервное копирование Config/Security/Sounds...", "INSTALL"))
+                for folder_key in ("config", "security", "sounds"):
+                    folder_src = self.bitos.system_paths.get(folder_key)
+                    if not folder_src or not os.path.exists(folder_src):
+                        continue
+                    folder_dst = os.path.join(backup_path, "System", os.path.basename(folder_src))
+                    try:
+                        shutil.copytree(folder_src, folder_dst)
+                    except Exception as copy_err:
+                        backup_errors += 1
+                        print(f"[Install] ⚠️ Не удалось сохранить в бэкап {folder_key}: {copy_err}")
+                
+                # Запоминаем, где лежит бекап, чтобы вкладка восстановления
+                # могла им воспользоваться
+                self.update_manager.status['last_backup_path'] = backup_path
+                self.update_manager.status['last_backup_time'] = datetime.now().isoformat()
+                self.update_manager.status['last_backup_from_version'] = self.update_manager.current_version_raw
+                self.update_manager._save_status()
+            else:
+                self.window.after(0, lambda: self._log_update("⏭️ Бекап отключён пользователем — устанавливаем без резервной копии", "WARNING"))
             
             self.window.after(0, lambda: self.update_progress_label.config(text="📦 Распаковка обновления..."))
             self.window.after(0, lambda: self.update_progress_bar.config(value=70))
-            self._log_update("📦 Распаковка обновления...", "INSTALL")
+            self.window.after(0, lambda: self._log_update("📦 Распаковка обновления...", "INSTALL"))
             
             # Распаковываем архив
             import zipfile
             extract_path = os.path.join(self.update_manager.temp_dir, "extracted")
+            if os.path.exists(extract_path):
+                shutil.rmtree(extract_path, ignore_errors=True)
             os.makedirs(extract_path, exist_ok=True)
             
             with zipfile.ZipFile(filepath, 'r') as zip_ref:
@@ -10867,32 +10937,46 @@ class SettingsWindow:
                     break
             
             if not extracted_dir:
-                self.window.after(0, lambda: self._install_error("Не удалось найти распакованные файлы"))
+                error_text = "Не удалось найти распакованные файлы"
+                self.window.after(0, lambda err=error_text: self._install_error(err))
                 return
             
             self.window.after(0, lambda: self.update_progress_label.config(text="📦 Замена файлов..."))
             self.window.after(0, lambda: self.update_progress_bar.config(value=85))
-            self._log_update("📦 Замена файлов...", "INSTALL")
+            self.window.after(0, lambda: self._log_update("📦 Замена файлов...", "INSTALL"))
             
-            # Копируем новые файлы поверх старых (кроме System)
+            # Копируем новые файлы поверх старых (кроме System).
+            # Опять же — ошибка на одном файле не должна убивать всю
+            # установку; собираем список проблемных файлов и сообщаем о них.
+            install_errors = []
             for item in os.listdir(extracted_dir):
                 if item == 'System':
                     continue
                 src = os.path.join(extracted_dir, item)
                 dst = os.path.join(base_path, item)
-                if os.path.exists(dst):
-                    if os.path.isdir(dst):
-                        shutil.rmtree(dst)
+                try:
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst)
                     else:
-                        os.remove(dst)
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst)
-                else:
-                    shutil.copy2(src, dst)
+                        shutil.copy2(src, dst)
+                except Exception as copy_err:
+                    install_errors.append(f"{item}: {copy_err}")
+                    print(f"[Install] ❌ Не удалось заменить {item}: {copy_err}")
+            
+            if install_errors:
+                errors_text = "; ".join(install_errors)
+                error_text = f"Не удалось заменить некоторые файлы: {errors_text}"
+                self.window.after(0, lambda err=error_text: self._install_error(err))
+                return
             
             self.window.after(0, lambda: self.update_progress_label.config(text="✅ Установка завершена!"))
             self.window.after(0, lambda: self.update_progress_bar.config(value=100))
-            self._log_update("✅ Установка завершена!", "SUCCESS")
+            self.window.after(0, lambda: self._log_update("✅ Установка завершена!", "SUCCESS"))
             
             # Сохраняем статус
             self.update_manager.status['install_complete'] = True
@@ -10904,7 +10988,13 @@ class SettingsWindow:
             self.window.after(1000, self._restart_after_update)
             
         except Exception as e:
-            self.window.after(0, lambda: self._install_error(str(e)))
+            # ВАЖНО: нельзя использовать 'e' внутри lambda, вызываемого
+            # асинхронно через .after() — Python автоматически удаляет
+            # переменную исключения сразу после выхода из блока except,
+            # из-за чего раньше вылетал NameError, маскируя настоящую
+            # причину ошибки установки. Сохраняем текст сразу же.
+            error_text = str(e)
+            self.window.after(0, lambda err=error_text: self._install_error(err))
     
     def _install_error(self, error):
         """Ошибка установки"""
@@ -10951,23 +11041,31 @@ class SettingsWindow:
     def _restart_application(self):
         """Перезапуск приложения"""
         try:
+            # ВАЖНО: путь к главному скрипту нужно подставить как готовую
+            # строку СЕЙЧАС, из текущего процесса. Раньше в шаблоне
+            # использовался sys.argv[0] внутри самого restart.pyw — но при
+            # его запуске sys.argv[0] указывает на сам restart.pyw, а не на
+            # BITOS. В итоге скрипт бесконечно перезапускал сам себя, а
+            # приложение так и не открывалось заново (выглядело как
+            # "зависание" после установки).
+            main_script_path = os.path.abspath(sys.argv[0])
+            
             # Создаём скрипт для перезапуска
-            restart_script = f'''
-import sys, os, subprocess, time, json
-import sys
-import os
-import subprocess
-import time
+            restart_script = f'''# -*- coding: utf-8 -*-
+import sys, os, subprocess, time
 
 # Ждём закрытия основного процесса
 time.sleep(2)
 
-# Запускаем заново
 python_exe = sys.executable
-script_path = sys.argv[0]
+script_path = r"{main_script_path}"
 
 if os.path.exists(script_path):
-    subprocess.Popen([python_exe, script_path], creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+    subprocess.Popen([python_exe, script_path],
+                      creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+else:
+    # Если файл почему-то не найден - хотя бы не завершаемся молча
+    print(f"[restart] Не найден файл для перезапуска: {{script_path}}")
 '''
             restart_path = os.path.join(self.update_manager.temp_dir, "restart.pyw")
             with open(restart_path, 'w', encoding='utf-8') as f:
@@ -10981,7 +11079,8 @@ if os.path.exists(script_path):
             sys.exit(0)
             
         except Exception as e:
-            self._log_update(f"⚠️ Ошибка перезапуска: {e}", "WARNING")
+            error_text = str(e)
+            self.window.after(0, lambda err=error_text: self._log_update(f"⚠️ Ошибка перезапуска: {err}", "WARNING"))
             # Если не удалось перезапустить, просто закрываемся
             sys.exit(0)
     
@@ -10998,6 +11097,308 @@ if os.path.exists(script_path):
         messagebox.showinfo("В разработке", 
             "🚧 Эта функция находится в разработке.\n\n"
             "В ближайшее время будет добавлена.")
+
+    # ==================== ВКЛАДКА: ВОССТАНОВЛЕНИЕ СИСТЕМЫ ====================
+
+    def _get_available_backups(self):
+        """Список доступных бекапов (папки bitos_backup_* в backup_dir), новые сверху"""
+        backups = []
+        backup_dir = self.update_manager.backup_dir
+        if not os.path.exists(backup_dir):
+            return backups
+        
+        for name in os.listdir(backup_dir):
+            full_path = os.path.join(backup_dir, name)
+            if os.path.isdir(full_path) and name.startswith("bitos_backup_"):
+                backups.append((name, full_path, os.path.getmtime(full_path)))
+        
+        backups.sort(key=lambda b: b[2], reverse=True)
+        return backups
+    
+    def _create_recovery_tab(self):
+        """Вкладка восстановления системы: бекапы, пересоздание файлов, откат версии"""
+        recovery_frame = ttk.Frame(self.notebook)
+        self.notebook.add(recovery_frame, text="🩹 Восстановление системы")
+        
+        main_frame = tk.Frame(recovery_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # ===== ЗАГОЛОВОК =====
+        tk.Label(main_frame, text="🩹 Восстановление системы", 
+                font=('Segoe UI', 18, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 5))
+        
+        tk.Label(main_frame,
+                text="Здесь можно восстановить систему из резервной копии, созданной перед установкой обновления,\n"
+                     "пересоздать повреждённые системные файлы заново или полностью откатиться к прошлой версии.",
+                font=('Segoe UI', 10), bg='white', fg='#7F8C8D', justify=tk.LEFT).pack(anchor='w', pady=(0, 15))
+        
+        # ===== ВЫБОР БЕКАПА =====
+        backup_select_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        backup_select_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        tk.Label(backup_select_frame, text="📦 Доступные резервные копии:", 
+                font=('Segoe UI', 11, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=12, pady=(10, 5))
+        
+        list_row = tk.Frame(backup_select_frame, bg='#F0F3F4')
+        list_row.pack(fill=tk.X, padx=12, pady=(0, 10))
+        
+        self.recovery_backup_combo = ttk.Combobox(list_row, state='readonly', font=('Segoe UI', 10), width=60)
+        self.recovery_backup_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        tk.Button(list_row, text="🔄 Обновить список", bg='#3498DB', fg='white',
+                 font=('Segoe UI', 9, 'bold'), bd=0, padx=12, pady=6,
+                 cursor='hand2', command=self._refresh_recovery_backups).pack(side=tk.LEFT, padx=(10, 0))
+        
+        self._recovery_backup_map = {}
+        self._refresh_recovery_backups()
+        
+        # ===== ДЕЙСТВИЯ =====
+        actions_frame = tk.Frame(main_frame, bg='white')
+        actions_frame.pack(fill=tk.BOTH, expand=True)
+        
+        def make_action_card(parent, icon_title, description, btn_text, btn_color, command):
+            card = tk.Frame(parent, bg='#FAFBFC', relief=tk.RIDGE, bd=1)
+            card.pack(fill=tk.X, pady=6)
+            
+            text_col = tk.Frame(card, bg='#FAFBFC')
+            text_col.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=15, pady=12)
+            
+            tk.Label(text_col, text=icon_title, font=('Segoe UI', 12, 'bold'),
+                    bg='#FAFBFC', fg='#2C3E50').pack(anchor='w')
+            tk.Label(text_col, text=description, font=('Segoe UI', 9),
+                    bg='#FAFBFC', fg='#7F8C8D', justify=tk.LEFT, wraplength=560).pack(anchor='w', pady=(3, 0))
+            
+            tk.Button(card, text=btn_text, bg=btn_color, fg='white',
+                     font=('Segoe UI', 10, 'bold'), bd=0, padx=18, pady=10,
+                     cursor='hand2', command=command).pack(side=tk.RIGHT, padx=15, pady=12)
+        
+        make_action_card(
+            actions_frame,
+            "1️⃣ Восстановить системные файлы из бекапа",
+            "Вернёт Config, Security и Sounds из выбранной резервной копии поверх текущих. "
+            "Код приложения (сама версия) не затрагивается.",
+            "♻️ Восстановить", "#E67E22",
+            self._recovery_restore_system_files
+        )
+        
+        make_action_card(
+            actions_frame,
+            "2️⃣ Пересоздать системные файлы",
+            "Удалит текущие Config, Security и Sounds и создаст их заново со значениями по умолчанию "
+            "(PIN сбросится на 1234, тема — на «Базовая», лицензия и серийный номер будут перевыпущены). "
+            "Используйте, если файлы повреждены, а бекапа нет.",
+            "🧹 Пересоздать", "#C0392B",
+            self._recovery_recreate_system_files
+        )
+        
+        make_action_card(
+            actions_frame,
+            "3️⃣ Вернуться в прошлую версию",
+            "Полностью откатит код приложения к версии из выбранной резервной копии и перезапустит BITOS. "
+            "Config, Security и Sounds не затрагиваются (если явно не выбрано восстановить их тоже).",
+            "⏪ Откатить версию", "#8E44AD",
+            self._recovery_revert_previous_version
+        )
+        
+        # ===== ЛОГ ВОССТАНОВЛЕНИЯ =====
+        log_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=1)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        
+        tk.Label(log_frame, text="📝 Лог восстановления:", 
+                font=('Segoe UI', 10, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', padx=10, pady=5)
+        
+        self.recovery_log_text = scrolledtext.ScrolledText(log_frame, font=('Consolas', 9), 
+                                                           bg='#1E1E1E', fg='#00FF00',
+                                                           height=6, wrap=tk.WORD)
+        self.recovery_log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.recovery_log_text.insert('1.0', "[INFO] Выберите резервную копию и действие выше\n")
+        self.recovery_log_text.config(state='disabled')
+    
+    def _refresh_recovery_backups(self):
+        """Обновление списка бекапов в выпадающем списке"""
+        backups = self._get_available_backups()
+        self._recovery_backup_map = {}
+        
+        values = []
+        for name, full_path, mtime in backups:
+            label = f"{datetime.fromtimestamp(mtime).strftime('%d.%m.%Y %H:%M:%S')} — {name}"
+            values.append(label)
+            self._recovery_backup_map[label] = full_path
+        
+        self.recovery_backup_combo['values'] = values
+        if values:
+            self.recovery_backup_combo.current(0)
+        else:
+            self.recovery_backup_combo.set("")
+    
+    def _log_recovery(self, message, log_type="INFO"):
+        """Запись в лог восстановления (безопасно вызывать только из главного потока)"""
+        if not hasattr(self, 'recovery_log_text') or not self.recovery_log_text:
+            return
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.recovery_log_text.config(state='normal')
+        self.recovery_log_text.insert('end', f"[{timestamp}] [{log_type}] {message}\n")
+        self.recovery_log_text.see('end')
+        self.recovery_log_text.config(state='disabled')
+    
+    def _get_selected_backup_path(self):
+        """Путь к выбранному в комбобоксе бекапу, либо None"""
+        selected = self.recovery_backup_combo.get()
+        if not selected:
+            messagebox.showinfo("Информация", "Сначала выберите резервную копию из списка")
+            return None
+        backup_path = self._recovery_backup_map.get(selected)
+        if not backup_path or not os.path.exists(backup_path):
+            messagebox.showerror("Ошибка", "Выбранная резервная копия не найдена на диске")
+            return None
+        return backup_path
+    
+    def _recovery_restore_system_files(self):
+        """Действие 1: восстановить Config/Security/Sounds из выбранного бекапа"""
+        backup_path = self._get_selected_backup_path()
+        if not backup_path:
+            return
+        
+        backup_system_dir = os.path.join(backup_path, "System")
+        available = [f for f in ("Config", "Security", "Sounds")
+                     if os.path.exists(os.path.join(backup_system_dir, f))]
+        
+        if not available:
+            messagebox.showerror("Ошибка", 
+                "В этой резервной копии нет сохранённых Config/Security/Sounds.\n"
+                "Она могла быть создана при отключённом переключателе бекапа.")
+            return
+        
+        if not messagebox.askyesno("Восстановление системных файлов",
+                f"Будут заменены текущие: {', '.join(available)}\n\n"
+                "⚠️ Текущие настройки, темы, PIN и звуки будут заменены версией из бекапа.\n"
+                "Продолжить?"):
+            return
+        
+        self._log_recovery(f"Восстановление из бекапа: {os.path.basename(backup_path)}", "INSTALL")
+        
+        restored, errors = [], []
+        for folder_name in available:
+            src = os.path.join(backup_system_dir, folder_name)
+            dst = self.bitos.system_paths.get(folder_name.lower())
+            if not dst:
+                continue
+            try:
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+                restored.append(folder_name)
+                self._log_recovery(f"✅ Восстановлено: {folder_name}", "SUCCESS")
+            except Exception as e:
+                errors.append(f"{folder_name}: {e}")
+                self._log_recovery(f"❌ Ошибка восстановления {folder_name}: {e}", "ERROR")
+        
+        if errors:
+            messagebox.showerror("Восстановление завершено с ошибками",
+                "Восстановлено: " + (", ".join(restored) or "ничего") + "\n\n"
+                "Ошибки:\n" + "\n".join(errors))
+        else:
+            messagebox.showinfo("Готово",
+                f"Восстановлены: {', '.join(restored)}.\n\n"
+                "Рекомендуется перезапустить BITOS, чтобы изменения точно применились.")
+    
+    def _recovery_recreate_system_files(self):
+        """Действие 2: удалить и пересоздать Config/Security/Sounds со значениями по умолчанию"""
+        if not messagebox.askyesno("Пересоздание системных файлов",
+                "⚠️ ВНИМАНИЕ! Это действие:\n\n"
+                "• Удалит текущие темы, настройки и ярлыки (Config)\n"
+                "• Сбросит PIN-код на 1234 и перевыпустит лицензию/серийный номер (Security)\n"
+                "• Удалит и заново сгенерирует системные звуки (Sounds)\n\n"
+                "Это необратимо, если у вас нет резервной копии.\n"
+                "Продолжить?", icon='warning'):
+            return
+        
+        if not messagebox.askyesno("Подтверждение",
+                "Вы точно уверены? Настройки и текущий PIN будут потеряны безвозвратно " 
+                "(если не сделан бекап)."):
+            return
+        
+        self._log_recovery("Пересоздание системных файлов...", "INSTALL")
+        
+        try:
+            for folder_key in ("config", "security", "sounds"):
+                folder_path = self.bitos.system_paths.get(folder_key)
+                if folder_path and os.path.exists(folder_path):
+                    shutil.rmtree(folder_path)
+                if folder_path:
+                    os.makedirs(folder_path, exist_ok=True)
+            
+            # Переиспользуем штатную логику BITOS для создания файлов по умолчанию
+            self.bitos.create_system_files()
+            self.bitos._create_sound_files()
+            
+            self._log_recovery("✅ Системные файлы пересозданы", "SUCCESS")
+            messagebox.showinfo("Готово",
+                "Системные файлы пересозданы со значениями по умолчанию.\n\n"
+                "PIN-код по умолчанию: 1234\n"
+                "Рекомендуется перезапустить BITOS.")
+        except Exception as e:
+            self._log_recovery(f"❌ Ошибка пересоздания: {e}", "ERROR")
+            messagebox.showerror("Ошибка", f"Не удалось пересоздать системные файлы:\n{e}")
+    
+    def _recovery_revert_previous_version(self):
+        """Действие 3: откатить код приложения к версии из выбранного бекапа и перезапустить"""
+        backup_path = self._get_selected_backup_path()
+        if not backup_path:
+            return
+        
+        # В бекапе код лежит рядом с папкой System (System копируется отдельно)
+        code_items = [item for item in os.listdir(backup_path) if item != 'System']
+        if not code_items:
+            messagebox.showerror("Ошибка",
+                "В этой резервной копии не сохранён код приложения (только System).\n"
+                "Откат версии невозможен из этого бекапа.")
+            return
+        
+        if not messagebox.askyesno("Откат к прошлой версии",
+                f"Код приложения будет заменён версией из:\n{os.path.basename(backup_path)}\n\n"
+                "⚠️ BITOS перезапустится сразу после отката.\n"
+                "Config/Security/Sounds останутся текущими (не откатятся).\n\n"
+                "Продолжить?", icon='warning'):
+            return
+        
+        self._log_recovery(f"Откат к версии из бекапа: {os.path.basename(backup_path)}", "INSTALL")
+        
+        base_path = self.bitos.base_path
+        errors = []
+        for item in code_items:
+            src = os.path.join(backup_path, item)
+            dst = os.path.join(base_path, item)
+            try:
+                if os.path.exists(dst):
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    else:
+                        os.remove(dst)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+                self._log_recovery(f"✅ Откачен: {item}", "SUCCESS")
+            except Exception as e:
+                errors.append(f"{item}: {e}")
+                self._log_recovery(f"❌ Не удалось откатить {item}: {e}", "ERROR")
+        
+        if errors:
+            messagebox.showerror("Откат завершён с ошибками",
+                "Не удалось откатить некоторые файлы:\n" + "\n".join(errors))
+            return
+        
+        messagebox.showinfo("Готово", "Откат выполнен. BITOS сейчас перезапустится.")
+        
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
+        
+        # Переиспользуем ту же безопасную логику перезапуска приложения,
+        # что и после установки обновления
+        self._restart_application()
 
     # ==================== ВКЛАДКА 6: СИСТЕМА (БЕЗ ИЗМЕНЕНИЙ) ====================
     
@@ -12134,11 +12535,13 @@ class UpdateManager:
         # Пути
         self.base_path = bitos_instance.base_path
         self.temp_dir = os.path.join(bitos_instance.system_paths["temp"], "updates")
+        self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backups")
         self.restart_script = os.path.join(bitos_instance.base_path, "System", "restart.pyw")
         self.update_status_file = os.path.join(bitos_instance.system_paths["config"], "update_status.json")
         
         # Создаем папки
         os.makedirs(self.temp_dir, exist_ok=True)
+        os.makedirs(self.backup_dir, exist_ok=True)
         
         # Создаем/обновляем скрипт перезапуска
         # (пересоздаём всегда, чтобы исправления логики установки
