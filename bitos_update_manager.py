@@ -300,6 +300,8 @@ def main():
                 shutil.copy2(src, dst)
             print("  ✅ " + item)
             updated += 1
+        if updated == 0:
+            raise RuntimeError("Архив не содержит обновляемых файлов")
     except Exception as install_error:
         print("  ❌ Ошибка установки, выполняется откат: " + str(install_error))
         for dst, backup, had_original in reversed(replaced):
@@ -319,9 +321,6 @@ def main():
     
     print(f"\\n{'=' * 50}")
     print(f"✅ Установлено: {updated} файлов")
-    if errors > 0:
-        print(f"❌ Ошибок: {errors}")
-        raise RuntimeError("Обновление завершилось с ошибками")
     print(f"{'=' * 50}")
     
     # Удаляем архив и временные файлы
