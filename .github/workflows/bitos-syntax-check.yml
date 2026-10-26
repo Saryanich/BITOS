@@ -16,8 +16,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compile BITOS source without running the application
-        run: python -c "import py_compile; py_compile.compile('BITOS 06V6.pyw', doraise=True)"
+      - name: Compile BITOS source and updater module without running the application
+        run: python -c "import py_compile; py_compile.compile('BITOS 06V6.pyw', doraise=True); py_compile.compile('bitos_update_manager.py', doraise=True)"
       - name: Check key security and updater guards
         run: |
-          python -c "from pathlib import Path; s=Path('BITOS 06V6.pyw').read_text(encoding='utf-8'); assert 'extractall(' not in s; assert 'BIT642Os' not in s; assert 'pbkdf2_sha256' in s; assert 'BITOS_DEV_PASSWORD' in s; assert 'rollback_dir' in s; assert 'safe_version_token' in s"
+          python -c "from pathlib import Path; s=Path('BITOS 06V6.pyw').read_text(encoding='utf-8'); u=Path('bitos_update_manager.py').read_text(encoding='utf-8'); all_source=s+u; assert 'extractall(' not in all_source; assert 'BIT642Os' not in all_source; assert 'pbkdf2_sha256' in s; assert 'BITOS_DEV_PASSWORD' in s; assert 'rollback_dir' in all_source; assert 'safe_version_token' in all_source"
