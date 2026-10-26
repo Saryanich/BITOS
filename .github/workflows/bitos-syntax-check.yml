@@ -1,4 +1,4 @@
-name: BITOS syntax check
+name: BITOS syntax and updater checks
 
 on:
   push:
@@ -18,3 +18,6 @@ jobs:
           python-version: "3.12"
       - name: Compile BITOS source without running the application
         run: python -c "import py_compile; py_compile.compile('BITOS 06V6.pyw', doraise=True)"
+      - name: Check key security and updater guards
+        run: |
+          python -c "from pathlib import Path; s=Path('BITOS 06V6.pyw').read_text(encoding='utf-8'); assert 'extractall(' not in s; assert 'BIT642Os' not in s; assert 'pbkdf2_sha256' in s; assert 'BITOS_DEV_PASSWORD' in s; assert 'rollback_dir' in s; assert 'safe_version_token' in s"
