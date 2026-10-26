@@ -794,17 +794,24 @@ class LoginScreen:
         else:
             pin_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System", "Security", "pin.hash")
         
-        default_pin = "1234"
         if os.path.exists(pin_file):
             try:
-                with open(pin_file, 'r') as f:
+                with open(pin_file, 'r', encoding='utf-8') as f:
                     saved_hash = f.read().strip()
-                    if saved_hash:
-                        return saved_hash
-            except:
-                pass
-        self.save_pin(default_pin)
-        return self.get_pin_hash(default_pin)
+                # Известный стандартный PIN 1234 больше не принимается:
+                # просим владельца задать свой PIN при следующем входе.
+                legacy_default = hashlib.sha256(b"1234").hexdigest()
+                if saved_hash == legacy_default:
+                    try:
+                        os.remove(pin_file)
+                    except OSError:
+                        pass
+                    return None
+                if saved_hash:
+                    return saved_hash
+            except (OSError, UnicodeError):
+                return None
+        return None
     
     def save_pin(self, new_pin):
         if self.bitos and hasattr(self.bitos, 'system_paths'):
@@ -820,6 +827,53 @@ class LoginScreen:
         except:
             return False
     
+    def setup_pin_dialog(self):
+        """Первичная настройка собственного PIN вместо общего значения 1234."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Настройка PIN-кода BITOS")
+        dialog.geometry("400x290")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        bg = self.theme_colors.get("panel_bg", "#0a0a2a")
+        fg = self.theme_colors.get("fg", "#00D4FF")
+        entry_bg = self.theme_colors.get("input_bg", "#1a1a3e")
+        entry_fg = self.theme_colors.get("input_fg", "#A8D8EA")
+        tk.Label(dialog, text="🔐 Создайте личный PIN-код", font=("Segoe UI", 15, "bold"),
+                 bg=bg, fg=fg).pack(pady=(20, 10))
+        tk.Label(dialog, text="Используйте 4–8 цифр. Общий PIN 1234 больше не используется.",
+                 font=("Segoe UI", 9), bg=bg, fg=entry_fg, wraplength=350).pack(pady=5)
+        first = tk.Entry(dialog, show="●", font=("Segoe UI", 12), bg=entry_bg, fg=entry_fg)
+        first.pack(fill=tk.X, padx=35, pady=(12, 6), ipady=6)
+        first.insert(0, "")
+        first.focus_set()
+        second = tk.Entry(dialog, show="●", font=("Segoe UI", 12), bg=entry_bg, fg=entry_fg)
+        second.pack(fill=tk.X, padx=35, pady=6, ipady=6)
+        status = tk.Label(dialog, text="", bg=bg, fg="#E74C3C", font=("Segoe UI", 9))
+        status.pack(pady=5)
+
+        def save_new_pin():
+            pin = first.get().strip()
+            confirmation = second.get().strip()
+            if not pin.isdigit() or not 4 <= len(pin) <= 8:
+                status.config(text="PIN должен состоять из 4–8 цифр")
+                return
+            if pin == "1234":
+                status.config(text="Выберите PIN, отличный от 1234")
+                return
+            if pin != confirmation:
+                status.config(text="PIN-коды не совпадают")
+                return
+            if not self.save_pin(pin):
+                status.config(text="Не удалось сохранить PIN-код")
+                return
+            self.status_label.config(text="✅ PIN создан. Теперь войдите с новым PIN-кодом")
+            self.pin_entry.delete(0, tk.END)
+            dialog.destroy()
+
+        tk.Button(dialog, text="Сохранить PIN", command=save_new_pin,
+                  bg=fg, fg=bg, bd=0, padx=25, pady=8).pack(pady=8)
+
     def change_pin_dialog(self):
         """Диалог смены PIN-кода с цветами темы"""
         dialog = tk.Toplevel(self.root)
@@ -935,6 +989,9 @@ class LoginScreen:
             return
         
         saved_hash = self.load_pin()
+        if not saved_hash:
+            self.setup_pin_dialog()
+            return
         if not self.verify_pin(pin, saved_hash):
             self.failed_attempts += 1
             remaining = self.max_attempts - self.failed_attempts
@@ -7155,11 +7212,8 @@ class BITOS:
                 json.dump(license_data, f, indent=4, ensure_ascii=False)
             print(f"  ✅ Создан license.key")
         
-        if not os.path.exists(self.system_files["pin_db"]):
-            default_pin_hash = hash_pin("1234")
-            with open(self.system_files["pin_db"], "w") as f:
-                f.write(default_pin_hash)
-            print("  ✅ Создан защищённый pin.hash")
+        # PIN не создаётся со стандартным значением. При первом входе
+        # LoginScreen запросит владельца задать личный PIN.
         
         if not os.path.exists(self.system_files["icons_db"]):
             default_icons = {
@@ -7293,10 +7347,11 @@ class BITOS:
                     json.dump(license_data, f, indent=4)
                 print(f"  🔄 Восстановлен license.key")
             elif filename == "pin.hash":
-                default_pin_hash = hash_pin("1234")
-                with open(filepath, 'w') as f:
-                    f.write(default_pin_hash)
-                print(f"  🔄 Восстановлен pin.hash (сброшен до 1234)")
+                # Не сбрасываем защиту до известного PIN 1234. Удаление
+                # повреждённого хеша заставит BITOS запросить новый PIN.
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                print("  🔄 PIN-хеш сброшен; при следующем входе потребуется создать новый PIN")
             elif filename == "icons.json":
                 default_icons = {
                     "shortcuts": [],
@@ -10344,9 +10399,7 @@ class SettingsWindow:
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
                  cursor='hand2', command=self._change_pin).pack(side=tk.LEFT, padx=5)
         
-        tk.Button(btn_frame, text="🔄 Сбросить PIN (1234)", bg='#E67E22', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._reset_pin).pack(side=tk.LEFT, padx=5)
+        # Сброс к известному PIN 1234 удалён; смена PIN доступна выше.
     
     def _change_pin(self):
         """Изменение PIN-кода"""
@@ -10385,18 +10438,6 @@ class SettingsWindow:
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_pin_change(self.desktop.username)
     
-    def _reset_pin(self):
-        """Сброс PIN-кода до 1234"""
-        if messagebox.askyesno("Сброс PIN", "Сбросить PIN-код до значения по умолчанию (1234)?"):
-            pin_file = os.path.join(self.bitos.base_path, "System", "Security", "pin.hash")
-            os.makedirs(os.path.dirname(pin_file), exist_ok=True)
-            with open(pin_file, 'w') as f:
-                f.write(hash_pin("1234"))
-            
-            self.pin_status.config(text="✅ PIN-код сброшен до 1234", fg='#27AE60')
-            for entry in self.pin_entries:
-                entry.delete(0, tk.END)
-
     # ==================== ВКЛАДКА 4: АККАУНТ (УПРОЩЁННАЯ) ====================
     
     def _create_account_tab(self):
