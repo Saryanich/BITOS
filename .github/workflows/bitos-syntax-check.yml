@@ -17,9 +17,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile BITOS source and updater module without running the application
-        run: python -c "import py_compile, pathlib; py_compile.compile('06V6/main.pyw', doraise=True); py_compile.compile('bitos_update_manager.py', doraise=True); [py_compile.compile(str(p), doraise=True) for p in pathlib.Path('06V6/modules').glob('part_*.py')]"
+        run: python -c "import py_compile, pathlib; py_compile.compile('06V6/main.pyw', doraise=True); py_compile.compile('bitos_update_manager.py', doraise=True); [py_compile.compile(str(p), doraise=True) for p in pathlib.Path('06V6/modules').glob('*.py')]"
       - name: Check key security and updater guards
         run: |
-          python -c "from pathlib import Path; s='\\n'.join(p.read_text(encoding='utf-8') for p in Path('06V6/modules').glob('part_*.py')); u=Path('bitos_update_manager.py').read_text(encoding='utf-8'); all_source=s+u; assert 'extractall(' not in all_source; assert 'BIT642Os' not in all_source; assert 'pbkdf2_sha256' in s; assert 'BITOS_DEV_PASSWORD' in s; assert 'rollback_dir' in all_source; assert 'safe_version_token' in all_source"
+          python -c "from pathlib import Path; s='\\n'.join(p.read_text(encoding='utf-8') for p in Path('06V6/modules').glob('*.py')); u=Path('bitos_update_manager.py').read_text(encoding='utf-8'); all_source=s+u; assert 'extractall(' not in all_source; assert 'BIT642Os' not in all_source; assert 'pbkdf2_sha256' in s; assert 'BITOS_DEV_PASSWORD' in s; assert 'rollback_dir' in all_source; assert 'safe_version_token' in all_source"
       - name: Run updater regression tests
         run: python -m unittest discover -s tests -v
