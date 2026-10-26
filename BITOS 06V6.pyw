@@ -10751,6 +10751,7 @@ class SettingsWindow:
                                   f"Время: зависит от скорости интернета"):
             return
         
+        self.update_manager.is_downloading = True
         self._log_update(f"📥 Начинаем скачивание v{self.update_manager.latest_version}...", "DOWNLOAD")
         self.download_btn.config(state='disabled', text="⏳ Скачивание...")
         self.check_btn.config(state='disabled')
@@ -10823,11 +10824,14 @@ class SettingsWindow:
 
                 import zipfile
                 with zipfile.ZipFile(part_path, "r") as archive:
-                    if not archive.infolist():
-                        raise ValueError("Скачан пустой ZIP-архив")
-                    bad_member = archive.testzip()
-                    if bad_member:
-                        raise ValueError(f"Повреждённый ZIP-архив: {bad_member}")
+                    entries = archive.infolist()
+                    if not entries or len(entries) > 20000:
+                        raise ValueError("Архив пуст или содержит слишком много элементов")
+                    total_uncompressed = sum(info.file_size for info in entries)
+                    if total_uncompressed > 1024 * 1024 * 1024:
+                        raise ValueError("Распакованный архив превышает лимит 1 ГБ")
+                    if any(info.file_size > 256 * 1024 * 1024 for info in entries):
+                        raise ValueError("В архиве найден файл больше 256 МБ")
                 os.replace(part_path, filepath)
                 progress_callback(100, "Скачивание завершено")
                 complete_callback(True, filepath, None)
@@ -10850,6 +10854,7 @@ class SettingsWindow:
     
     def _download_complete(self, success, file_path, error):
         """Завершение скачивания"""
+        self.update_manager.is_downloading = False
         self.download_btn.config(state='normal', text="⬇️ Скачать обновление")
         self.check_btn.config(state='normal')
         
@@ -10919,19 +10924,21 @@ class SettingsWindow:
         self.update_progress_label.config(text="⏳ Установка обновления...")
         self.update_progress_bar['value'] = 50
         
+        # Считываем Tk-переменную в основном потоке: обращаться к ней из
+        # рабочего потока Tkinter небезопасно.
+        make_backup = True
+        if hasattr(self, 'backup_before_install_var'):
+            make_backup = bool(self.backup_before_install_var.get())
+
         # Запускаем установку в потоке
-        thread = threading.Thread(target=self._install_thread, args=(filepath,))
+        thread = threading.Thread(target=self._install_thread, args=(filepath, make_backup))
         thread.daemon = True
         thread.start()
     
-    def _install_thread(self, filepath):
+    def _install_thread(self, filepath, make_backup=True):
         """Поток для установки обновления"""
         try:
             self.update_manager.is_installing = True
-            
-            make_backup = True
-            if hasattr(self, 'backup_before_install_var'):
-                make_backup = self.backup_before_install_var.get()
             
             base_path = self.bitos.base_path
             backup_path = None
