@@ -30,6 +30,35 @@ except ImportError:
     KEYBOARD_AVAILABLE = False
     print("⚠️ Для блокировки клавиш установите: pip install keyboard")
 
+def hash_pin(pin):
+    """Создаёт PBKDF2-хеш PIN с уникальной криптографической солью."""
+    import secrets
+    salt = secrets.token_bytes(16)
+    iterations = 310000
+    digest = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
+    return "pbkdf2_sha256$%s$%s$%s" % (iterations, salt.hex(), digest.hex())
+
+
+def verify_pin_hash(pin, saved_hash):
+    """Проверяет PBKDF2 и поддерживает старые SHA-256-хеши."""
+    if not saved_hash:
+        return False
+    if saved_hash.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations, salt_hex, digest_hex = saved_hash.split("$", 3)
+            iterations = int(iterations)
+            if iterations < 100000 or iterations > 2000000:
+                return False
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", str(pin).encode("utf-8"), bytes.fromhex(salt_hex), iterations
+            )
+            return hmac.compare_digest(actual, bytes.fromhex(digest_hex))
+        except (ValueError, TypeError):
+            return False
+    legacy_digest = hashlib.sha256(str(pin).encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy_digest, saved_hash)
+
+
 def shutdown_windows():
     """Реальное выключение Windows"""
     if platform.system() == "Windows":
@@ -741,35 +770,15 @@ class LoginScreen:
         restart_btn.pack(side=tk.RIGHT, padx=4)
     
     def get_pin_hash(self, pin):
-        """PBKDF2-HMAC-SHA256 с уникальной солью для каждого PIN."""
-        import secrets
-        salt = secrets.token_bytes(16)
-        iterations = 310000
-        digest = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
-        return "pbkdf2_sha256$%s$%s$%s" % (iterations, salt.hex(), digest.hex())
+        return hash_pin(pin)
 
     def verify_pin(self, pin, saved_hash):
-        """Проверяет современный хеш и мигрирует старые SHA-256-хеши после успеха."""
-        if not saved_hash:
+        """Проверяет PIN и мигрирует устаревший хеш после успешного входа."""
+        if not verify_pin_hash(pin, saved_hash):
             return False
-        if saved_hash.startswith("pbkdf2_sha256$"):
-            try:
-                _, iterations, salt_hex, digest_hex = saved_hash.split("$", 3)
-                iterations = int(iterations)
-                if iterations < 100000 or iterations > 2000000:
-                    return False
-                salt = bytes.fromhex(salt_hex)
-                expected = bytes.fromhex(digest_hex)
-                actual = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
-                return hmac.compare_digest(actual, expected)
-            except (ValueError, TypeError):
-                return False
-
-        legacy_digest = hashlib.sha256(str(pin).encode("utf-8")).hexdigest()
-        if hmac.compare_digest(legacy_digest, saved_hash):
+        if not saved_hash.startswith("pbkdf2_sha256$"):
             self.save_pin(pin)
-            return True
-        return False
+        return True
     
     def load_pin(self):
         if self.bitos and hasattr(self.bitos, 'system_paths'):
@@ -7136,10 +7145,10 @@ class BITOS:
             print(f"  ✅ Создан license.key")
         
         if not os.path.exists(self.system_files["pin_db"]):
-            default_pin_hash = hashlib.sha256("1234".encode()).hexdigest()
+            default_pin_hash = hash_pin("1234")
             with open(self.system_files["pin_db"], "w") as f:
                 f.write(default_pin_hash)
-            print(f"  ✅ Создан pin.hash (PIN по умолчанию: 1234)")
+            print("  ✅ Создан защищённый pin.hash")
         
         if not os.path.exists(self.system_files["icons_db"]):
             default_icons = {
@@ -7273,7 +7282,7 @@ class BITOS:
                     json.dump(license_data, f, indent=4)
                 print(f"  🔄 Восстановлен license.key")
             elif filename == "pin.hash":
-                default_pin_hash = hashlib.sha256("1234".encode()).hexdigest()
+                default_pin_hash = hash_pin("1234")
                 with open(filepath, 'w') as f:
                     f.write(default_pin_hash)
                 print(f"  🔄 Восстановлен pin.hash (сброшен до 1234)")
@@ -10340,7 +10349,7 @@ class SettingsWindow:
             with open(pin_file, 'r') as f:
                 saved_hash = f.read().strip()
         
-        if not self.login_screen.verify_pin(old_pin, saved_hash):
+        if not verify_pin_hash(old_pin, saved_hash):
             self.pin_status.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
             return
         if not new_pin.isdigit():
@@ -10355,7 +10364,7 @@ class SettingsWindow:
         
         os.makedirs(os.path.dirname(pin_file), exist_ok=True)
         with open(pin_file, 'w') as f:
-            f.write(hashlib.sha256(new_pin.encode()).hexdigest())
+            f.write(hash_pin(new_pin))
         
         self.pin_status.config(text="✅ PIN-код успешно изменён!", fg='#27AE60')
         
@@ -10371,7 +10380,7 @@ class SettingsWindow:
             pin_file = os.path.join(self.bitos.base_path, "System", "Security", "pin.hash")
             os.makedirs(os.path.dirname(pin_file), exist_ok=True)
             with open(pin_file, 'w') as f:
-                f.write(hashlib.sha256("1234".encode()).hexdigest())
+                f.write(hash_pin("1234"))
             
             self.pin_status.config(text="✅ PIN-код сброшен до 1234", fg='#27AE60')
             for entry in self.pin_entries:
