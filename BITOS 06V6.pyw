@@ -9,6 +9,7 @@ import random
 import json
 import hashlib
 import hmac
+import re
 import string
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,13 @@ try:
 except ImportError:
     KEYBOARD_AVAILABLE = False
     print("⚠️ Для блокировки клавиш установите: pip install keyboard")
+
+def safe_version_token(value):
+    """Возвращает безопасный фрагмент имени файла для версии обновления."""
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", str(value or "unknown"))
+    token = token.strip("._-")
+    return (token or "unknown")[:80]
+
 
 def hash_pin(pin):
     """Создаёт PBKDF2-хеш PIN с уникальной криптографической солью."""
@@ -10782,7 +10790,7 @@ class SettingsWindow:
             url = self.update_manager.download_url
             
             # Создаём имя файла
-            filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+            filename = f"bitos_update_{safe_version_token(self.update_manager.latest_version)}.zip"
             filepath = os.path.join(self.update_manager.temp_dir, filename)
             
             from urllib.parse import urlparse
@@ -10904,7 +10912,7 @@ class SettingsWindow:
             return
         
         # Проверяем, есть ли файл
-        filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+        filename = f"bitos_update_{safe_version_token(self.update_manager.latest_version)}.zip"
         filepath = os.path.join(self.update_manager.temp_dir, filename)
         
         if not os.path.exists(filepath):
@@ -13098,70 +13106,80 @@ if __name__ == "__main__":
         
         def download_thread():
             try:
-                filename = f"bitos_update_{self.latest_version_raw}.zip"
+                filename = f"bitos_update_{safe_version_token(self.latest_version_raw)}.zip"
                 filepath = os.path.join(self.temp_dir, filename)
                 
                 print(f"[UpdateManager] 📥 Скачивание: {filename}")
                 
+                from urllib.parse import urlparse
+                allowed_hosts = {
+                    "api.github.com", "github.com", "codeload.github.com",
+                    "objects.githubusercontent.com", "release-assets.githubusercontent.com"
+                }
+                parsed = urlparse(self.download_url)
+                if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+                    raise ValueError("Недоверенный адрес обновления")
                 headers = {"User-Agent": "BITOS-UpdateManager"}
-                response = requests.get(self.download_url, stream=True, timeout=30,
-                                         headers=headers, allow_redirects=True)
-                response.raise_for_status()
-                
-                # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и не всегда
-                # присылает заголовок Content-Length. Раньше при total_size == 0
-                # скачивание сразу считалось ошибкой — обновления никогда не
-                # скачивались. Теперь при неизвестном размере просто показываем
-                # объём уже скачанных данных вместо процента.
-                total_size = int(response.headers.get('content-length', 0) or 0)
-                
-                downloaded = 0
-                last_reported_percent = -1
-                with open(filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        if total_size > 0:
-                            percent = int((downloaded / total_size) * 100)
-                            self.download_progress = percent
-                            if percent != last_reported_percent and progress_callback:
-                                last_reported_percent = percent
-                                self._safe_callback(progress_callback, percent, f"Скачивание: {percent}%")
-                        else:
-                            mb_downloaded = downloaded / (1024 * 1024)
-                            # прогресс неизвестен заранее — плавно ползём к 99%,
-                            # чтобы UI не выглядел зависшим
-                            self.download_progress = min(99, self.download_progress + 1)
-                            if progress_callback:
-                                self._safe_callback(
-                                    progress_callback, self.download_progress,
-                                    f"Скачано: {mb_downloaded:.1f} МБ"
-                                )
-                
+                part_path = filepath + ".part"
+                max_download_size = 1024 * 1024 * 1024
+                with requests.get(self.download_url, stream=True, timeout=(10, 60),
+                                  headers=headers, allow_redirects=True) as response:
+                    response.raise_for_status()
+                    final_url = urlparse(response.url)
+                    if final_url.scheme != "https" or final_url.hostname not in allowed_hosts:
+                        raise ValueError("Перенаправление ведёт на недоверенный адрес")
+                    total_size = int(response.headers.get("content-length", 0) or 0)
+                    if total_size > max_download_size:
+                        raise ValueError("Архив обновления превышает лимит 1 ГБ")
+                    downloaded = 0
+                    last_reported_percent = -1
+                    with open(part_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if not chunk:
+                                continue
+                            downloaded += len(chunk)
+                            if downloaded > max_download_size:
+                                raise ValueError("Загрузка превышает лимит 1 ГБ")
+                            f.write(chunk)
+                            if total_size > 0:
+                                percent = min(99, int(downloaded * 100 / total_size))
+                                self.download_progress = percent
+                                if percent != last_reported_percent and progress_callback:
+                                    last_reported_percent = percent
+                                    self._safe_callback(progress_callback, percent, f"Скачивание: {percent}%")
+                            else:
+                                self.download_progress = min(99, self.download_progress + 1)
+                                if progress_callback:
+                                    self._safe_callback(
+                                        progress_callback, self.download_progress,
+                                        f"Скачано: {downloaded / (1024 * 1024):.1f} МБ"
+                                    )
+                import zipfile
+                with zipfile.ZipFile(part_path, "r") as archive:
+                    entries = archive.infolist()
+                    if not entries or len(entries) > 20000:
+                        raise ValueError("Архив пуст или содержит слишком много элементов")
+                    if sum(info.file_size for info in entries) > 1024 * 1024 * 1024:
+                        raise ValueError("Распакованный архив превышает лимит 1 ГБ")
+                    if any(info.file_size > 256 * 1024 * 1024 for info in entries):
+                        raise ValueError("Файл в архиве превышает лимит 256 МБ")
+                os.replace(part_path, filepath)
                 self.is_downloading = False
-                
-                # Проверяем файл
-                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                    self.download_progress = 100
-                    print(f"[UpdateManager] ✅ Скачано: {filepath}")
-                    
-                    self.status['download_path'] = filepath
-                    self._save_status()
-                    
-                    if progress_callback:
-                        self._safe_callback(progress_callback, 100, "Скачивание завершено")
-                    if complete_callback:
-                        self._safe_callback(complete_callback, True, filepath, None)
-                else:
-                    print(f"[UpdateManager] ❌ Файл не создан")
-                    if complete_callback:
-                        self._safe_callback(complete_callback, False, None, "Файл не был создан")
+                self.download_progress = 100
+                self.status["download_path"] = filepath
+                self._save_status()
+                if progress_callback:
+                    self._safe_callback(progress_callback, 100, "Скачивание завершено")
+                if complete_callback:
+                    self._safe_callback(complete_callback, True, filepath, None)
                     
             except Exception as e:
                 self.is_downloading = False
+                try:
+                    if "part_path" in locals() and os.path.exists(part_path):
+                        os.remove(part_path)
+                except OSError:
+                    pass
                 print(f"[UpdateManager] ❌ Ошибка скачивания: {e}")
                 if complete_callback:
                     self._safe_callback(complete_callback, False, None, str(e))
@@ -13181,7 +13199,7 @@ if __name__ == "__main__":
         # Ищем файл обновления
         filepath = None
         if self.latest_version_raw:
-            candidate = os.path.join(self.temp_dir, f"bitos_update_{self.latest_version_raw}.zip")
+            candidate = os.path.join(self.temp_dir, f"bitos_update_{safe_version_token(self.latest_version_raw)}.zip")
             if os.path.exists(candidate):
                 filepath = candidate
         
