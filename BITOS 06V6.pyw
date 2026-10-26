@@ -8,12 +8,15 @@ import math
 import random
 import json
 import hashlib
+import hmac
+import re
 import string
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 import threading
+from bitos_update_manager import UpdateManager, safe_version_token
 
 try:
     import ctypes
@@ -29,11 +32,43 @@ except ImportError:
     KEYBOARD_AVAILABLE = False
     print("⚠️ Для блокировки клавиш установите: pip install keyboard")
 
+
+
+
+def hash_pin(pin):
+    """Создаёт PBKDF2-хеш PIN с уникальной криптографической солью."""
+    import secrets
+    salt = secrets.token_bytes(16)
+    iterations = 310000
+    digest = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
+    return "pbkdf2_sha256$%s$%s$%s" % (iterations, salt.hex(), digest.hex())
+
+
+def verify_pin_hash(pin, saved_hash):
+    """Проверяет PBKDF2 и поддерживает старые SHA-256-хеши."""
+    if not saved_hash:
+        return False
+    if saved_hash.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations, salt_hex, digest_hex = saved_hash.split("$", 3)
+            iterations = int(iterations)
+            if iterations < 100000 or iterations > 2000000:
+                return False
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", str(pin).encode("utf-8"), bytes.fromhex(salt_hex), iterations
+            )
+            return hmac.compare_digest(actual, bytes.fromhex(digest_hex))
+        except (ValueError, TypeError):
+            return False
+    legacy_digest = hashlib.sha256(str(pin).encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy_digest, saved_hash)
+
+
 def shutdown_windows():
     """Реальное выключение Windows"""
     if platform.system() == "Windows":
         try:
-            subprocess.run(["shutdown", "/s", "/t", "1", "/f"], shell=True)
+            subprocess.run(["shutdown", "/s", "/t", "1", "/f"])
         except:
             try:
                 os.system("shutdown /s /t 1 /f")
@@ -44,7 +79,7 @@ def restart_windows():
     """Реальная перезагрузка Windows"""
     if platform.system() == "Windows":
         try:
-            subprocess.run(["shutdown", "/r", "/t", "1", "/f"], shell=True)
+            subprocess.run(["shutdown", "/r", "/t", "1", "/f"])
         except:
             try:
                 os.system("shutdown /r /t 1 /f")
@@ -740,7 +775,15 @@ class LoginScreen:
         restart_btn.pack(side=tk.RIGHT, padx=4)
     
     def get_pin_hash(self, pin):
-        return hashlib.sha256(pin.encode()).hexdigest()
+        return hash_pin(pin)
+
+    def verify_pin(self, pin, saved_hash):
+        """Проверяет PIN и мигрирует устаревший хеш после успешного входа."""
+        if not verify_pin_hash(pin, saved_hash):
+            return False
+        if not saved_hash.startswith("pbkdf2_sha256$"):
+            self.save_pin(pin)
+        return True
     
     def load_pin(self):
         if self.bitos and hasattr(self.bitos, 'system_paths'):
@@ -748,17 +791,24 @@ class LoginScreen:
         else:
             pin_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "System", "Security", "pin.hash")
         
-        default_pin = "1234"
         if os.path.exists(pin_file):
             try:
-                with open(pin_file, 'r') as f:
+                with open(pin_file, 'r', encoding='utf-8') as f:
                     saved_hash = f.read().strip()
-                    if saved_hash:
-                        return saved_hash
-            except:
-                pass
-        self.save_pin(default_pin)
-        return self.get_pin_hash(default_pin)
+                # Известный стандартный PIN 1234 больше не принимается:
+                # просим владельца задать свой PIN при следующем входе.
+                legacy_default = hashlib.sha256(b"1234").hexdigest()
+                if saved_hash == legacy_default:
+                    try:
+                        os.remove(pin_file)
+                    except OSError:
+                        pass
+                    return None
+                if saved_hash:
+                    return saved_hash
+            except (OSError, UnicodeError):
+                return None
+        return None
     
     def save_pin(self, new_pin):
         if self.bitos and hasattr(self.bitos, 'system_paths'):
@@ -774,6 +824,53 @@ class LoginScreen:
         except:
             return False
     
+    def setup_pin_dialog(self):
+        """Первичная настройка собственного PIN вместо общего значения 1234."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Настройка PIN-кода BITOS")
+        dialog.geometry("400x290")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        bg = self.theme_colors.get("panel_bg", "#0a0a2a")
+        fg = self.theme_colors.get("fg", "#00D4FF")
+        entry_bg = self.theme_colors.get("input_bg", "#1a1a3e")
+        entry_fg = self.theme_colors.get("input_fg", "#A8D8EA")
+        tk.Label(dialog, text="🔐 Создайте личный PIN-код", font=("Segoe UI", 15, "bold"),
+                 bg=bg, fg=fg).pack(pady=(20, 10))
+        tk.Label(dialog, text="Используйте 4–8 цифр. Общий PIN 1234 больше не используется.",
+                 font=("Segoe UI", 9), bg=bg, fg=entry_fg, wraplength=350).pack(pady=5)
+        first = tk.Entry(dialog, show="●", font=("Segoe UI", 12), bg=entry_bg, fg=entry_fg)
+        first.pack(fill=tk.X, padx=35, pady=(12, 6), ipady=6)
+        first.insert(0, "")
+        first.focus_set()
+        second = tk.Entry(dialog, show="●", font=("Segoe UI", 12), bg=entry_bg, fg=entry_fg)
+        second.pack(fill=tk.X, padx=35, pady=6, ipady=6)
+        status = tk.Label(dialog, text="", bg=bg, fg="#E74C3C", font=("Segoe UI", 9))
+        status.pack(pady=5)
+
+        def save_new_pin():
+            pin = first.get().strip()
+            confirmation = second.get().strip()
+            if not pin.isdigit() or not 4 <= len(pin) <= 8:
+                status.config(text="PIN должен состоять из 4–8 цифр")
+                return
+            if pin == "1234":
+                status.config(text="Выберите PIN, отличный от 1234")
+                return
+            if pin != confirmation:
+                status.config(text="PIN-коды не совпадают")
+                return
+            if not self.save_pin(pin):
+                status.config(text="Не удалось сохранить PIN-код")
+                return
+            self.status_label.config(text="✅ PIN создан. Теперь войдите с новым PIN-кодом")
+            self.pin_entry.delete(0, tk.END)
+            dialog.destroy()
+
+        tk.Button(dialog, text="Сохранить PIN", command=save_new_pin,
+                  bg=fg, fg=bg, bd=0, padx=25, pady=8).pack(pady=8)
+
     def change_pin_dialog(self):
         """Диалог смены PIN-кода с цветами темы"""
         dialog = tk.Toplevel(self.root)
@@ -828,7 +925,7 @@ class LoginScreen:
             confirm_pin = entries['confirm'].get().strip()
             saved_hash = self.load_pin()
             
-            if self.get_pin_hash(old_pin) != saved_hash:
+            if not self.verify_pin(old_pin, saved_hash):
                 status_label.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
                 return
             if not new_pin.isdigit():
@@ -889,7 +986,10 @@ class LoginScreen:
             return
         
         saved_hash = self.load_pin()
-        if self.get_pin_hash(pin) != saved_hash:
+        if not saved_hash:
+            self.setup_pin_dialog()
+            return
+        if not self.verify_pin(pin, saved_hash):
             self.failed_attempts += 1
             remaining = self.max_attempts - self.failed_attempts
             
@@ -4347,9 +4447,11 @@ class DevModeDialog:
         self.password_entry.bind('<Return>', lambda e: self.check_password())
         self.password_entry.focus_set()
         
-        info_label = tk.Label(self.dialog, text="Подсказка: стандартный пароль BIT642Os", font=('Segoe UI', 9), bg='#F5F7FA', fg='#3498DB', cursor='hand2')
-        info_label.pack(pady=5)
-        info_label.bind('<Button-1>', lambda e: self.show_hint())
+        tk.Label(
+            self.dialog,
+            text="Пароль задаётся через переменную среды BITOS_DEV_PASSWORD",
+            font=('Segoe UI', 9), bg='#F5F7FA', fg='#3498DB', wraplength=350
+        ).pack(pady=5)
         
         button_frame = tk.Frame(self.dialog, bg='#F5F7FA')
         button_frame.pack(fill=tk.X, padx=20, pady=10)
@@ -4363,11 +4465,21 @@ class DevModeDialog:
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
     
     def show_hint(self):
-        messagebox.showinfo("Подсказка", "Пароль режима разработчика: BIT642Os\n\nПосле входа используйте терминал для команд:\nhedev - полная справка\nsystem - команды системы\nuser - команды пользователей\nnetwork - сетевые команды\ndiag - диагностика\nutil - утилиты")
+        messagebox.showinfo(
+            "Режим разработчика",
+            "Для включения задайте переменную среды BITOS_DEV_PASSWORD и перезапустите BITOS."
+        )
     
     def check_password(self):
         password = self.password_entry.get().strip()
-        if password == self.bitos.dev_password:
+        if not self.bitos.dev_password:
+            self.message_label.config(text='Режим разработчика не настроен')
+            messagebox.showwarning(
+                "Режим разработчика",
+                "Для включения задайте переменную среды BITOS_DEV_PASSWORD и перезапустите BITOS."
+            )
+            return
+        if hmac.compare_digest(password, self.bitos.dev_password):
             self.bitos.dev_mode = True
             self.bitos.dev_log("DEV MODE ACTIVATED")
             self.result = True
@@ -6067,7 +6179,7 @@ class Desktop:
                 
                 def open_app(p=app_path):
                     try:
-                        subprocess.Popen([p], shell=True)
+                        subprocess.Popen([p])
                         if hasattr(self.bitos, 'security'):
                             self.bitos.security.log_app_launch(f"App: {os.path.basename(p)}", self.username)
                     except Exception as e:
@@ -6685,7 +6797,9 @@ class BITOS:
         self.input_blocker = InputBlocker()
          
         self.dev_mode = False
-        self.dev_password = "BIT642Os"
+        # Общий пароль режима разработчика не должен находиться в исходниках.
+        # Задайте BITOS_DEV_PASSWORD в переменных среды перед запуском.
+        self.dev_password = os.environ.get("BITOS_DEV_PASSWORD", "")
         self.dev_commands_history = []
         self.protected_files = []
         
@@ -7095,11 +7209,8 @@ class BITOS:
                 json.dump(license_data, f, indent=4, ensure_ascii=False)
             print(f"  ✅ Создан license.key")
         
-        if not os.path.exists(self.system_files["pin_db"]):
-            default_pin_hash = hashlib.sha256("1234".encode()).hexdigest()
-            with open(self.system_files["pin_db"], "w") as f:
-                f.write(default_pin_hash)
-            print(f"  ✅ Создан pin.hash (PIN по умолчанию: 1234)")
+        # PIN не создаётся со стандартным значением. При первом входе
+        # LoginScreen запросит владельца задать личный PIN.
         
         if not os.path.exists(self.system_files["icons_db"]):
             default_icons = {
@@ -7233,10 +7344,11 @@ class BITOS:
                     json.dump(license_data, f, indent=4)
                 print(f"  🔄 Восстановлен license.key")
             elif filename == "pin.hash":
-                default_pin_hash = hashlib.sha256("1234".encode()).hexdigest()
-                with open(filepath, 'w') as f:
-                    f.write(default_pin_hash)
-                print(f"  🔄 Восстановлен pin.hash (сброшен до 1234)")
+                # Не сбрасываем защиту до известного PIN 1234. Удаление
+                # повреждённого хеша заставит BITOS запросить новый PIN.
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                print("  🔄 PIN-хеш сброшен; при следующем входе потребуется создать новый PIN")
             elif filename == "icons.json":
                 default_icons = {
                     "shortcuts": [],
@@ -10284,9 +10396,7 @@ class SettingsWindow:
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
                  cursor='hand2', command=self._change_pin).pack(side=tk.LEFT, padx=5)
         
-        tk.Button(btn_frame, text="🔄 Сбросить PIN (1234)", bg='#E67E22', fg='white',
-                 font=('Segoe UI', 10), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._reset_pin).pack(side=tk.LEFT, padx=5)
+        # Сброс к известному PIN 1234 удалён; смена PIN доступна выше.
     
     def _change_pin(self):
         """Изменение PIN-кода"""
@@ -10300,7 +10410,7 @@ class SettingsWindow:
             with open(pin_file, 'r') as f:
                 saved_hash = f.read().strip()
         
-        if hashlib.sha256(old_pin.encode()).hexdigest() != saved_hash:
+        if not verify_pin_hash(old_pin, saved_hash):
             self.pin_status.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
             return
         if not new_pin.isdigit():
@@ -10315,7 +10425,7 @@ class SettingsWindow:
         
         os.makedirs(os.path.dirname(pin_file), exist_ok=True)
         with open(pin_file, 'w') as f:
-            f.write(hashlib.sha256(new_pin.encode()).hexdigest())
+            f.write(hash_pin(new_pin))
         
         self.pin_status.config(text="✅ PIN-код успешно изменён!", fg='#27AE60')
         
@@ -10325,18 +10435,6 @@ class SettingsWindow:
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_pin_change(self.desktop.username)
     
-    def _reset_pin(self):
-        """Сброс PIN-кода до 1234"""
-        if messagebox.askyesno("Сброс PIN", "Сбросить PIN-код до значения по умолчанию (1234)?"):
-            pin_file = os.path.join(self.bitos.base_path, "System", "Security", "pin.hash")
-            os.makedirs(os.path.dirname(pin_file), exist_ok=True)
-            with open(pin_file, 'w') as f:
-                f.write(hashlib.sha256("1234".encode()).hexdigest())
-            
-            self.pin_status.config(text="✅ PIN-код сброшен до 1234", fg='#27AE60')
-            for entry in self.pin_entries:
-                entry.delete(0, tk.END)
-
     # ==================== ВКЛАДКА 4: АККАУНТ (УПРОЩЁННАЯ) ====================
     
     def _create_account_tab(self):
@@ -10702,6 +10800,7 @@ class SettingsWindow:
                                   f"Время: зависит от скорости интернета"):
             return
         
+        self.update_manager.is_downloading = True
         self._log_update(f"📥 Начинаем скачивание v{self.update_manager.latest_version}...", "DOWNLOAD")
         self.download_btn.config(state='disabled', text="⏳ Скачивание...")
         self.check_btn.config(state='disabled')
@@ -10729,41 +10828,69 @@ class SettingsWindow:
             url = self.update_manager.download_url
             
             # Создаём имя файла
-            filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+            filename = f"bitos_update_{safe_version_token(self.update_manager.latest_version)}.zip"
             filepath = os.path.join(self.update_manager.temp_dir, filename)
             
-            # Скачиваем с прогрессом
+            from urllib.parse import urlparse
+            allowed_hosts = {
+                "api.github.com", "github.com", "codeload.github.com",
+                "objects.githubusercontent.com", "release-assets.githubusercontent.com"
+            }
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+                raise ValueError("Недоверенный адрес обновления: разрешены только HTTPS-ссылки GitHub")
+
             headers = {"User-Agent": "BITOS-UpdateManager"}
-            response = requests.get(url, stream=True, timeout=30, headers=headers, allow_redirects=True)
-            response.raise_for_status()
-            
-            # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и часто НЕ
-            # присылает Content-Length. Раньше это сразу считалось ошибкой,
-            # и скачивание почти всегда обрывалось. Теперь при неизвестном
-            # размере просто показываем объём скачанного вместо процента.
-            total_size = int(response.headers.get('content-length', 0) or 0)
-            
-            progress_callback(0, "Начинаем загрузку...")
-            
-            downloaded = 0
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            percent = int((downloaded / total_size) * 100)
-                            progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
-                        else:
-                            progress_callback(min(99, downloaded // 1024 % 100),
-                                               f"Скачивание: {downloaded//1024} KB")
-            
-            # Проверяем, что файл скачался
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            part_path = filepath + ".part"
+            max_download_size = 1024 * 1024 * 1024
+            try:
+                with requests.get(url, stream=True, timeout=(10, 60), headers=headers,
+                                  allow_redirects=True) as response:
+                    response.raise_for_status()
+                    final_url = urlparse(response.url)
+                    if final_url.scheme != "https" or final_url.hostname not in allowed_hosts:
+                        raise ValueError("Перенаправление ведёт на недоверенный адрес")
+                    total_size = int(response.headers.get("content-length", 0) or 0)
+                    if total_size > max_download_size:
+                        raise ValueError("Архив обновления превышает лимит 1 ГБ")
+
+                    progress_callback(0, "Начинаем загрузку...")
+                    downloaded = 0
+                    with open(part_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if not chunk:
+                                continue
+                            downloaded += len(chunk)
+                            if downloaded > max_download_size:
+                                raise ValueError("Загрузка превышает лимит 1 ГБ")
+                            f.write(chunk)
+                            if total_size > 0:
+                                percent = min(99, int(downloaded * 100 / total_size))
+                                progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+                            else:
+                                progress_callback(min(99, downloaded // (1024 * 1024)),
+                                                  f"Скачано: {downloaded//1024} KB")
+
+                import zipfile
+                with zipfile.ZipFile(part_path, "r") as archive:
+                    entries = archive.infolist()
+                    if not entries or len(entries) > 20000:
+                        raise ValueError("Архив пуст или содержит слишком много элементов")
+                    total_uncompressed = sum(info.file_size for info in entries)
+                    if total_uncompressed > 1024 * 1024 * 1024:
+                        raise ValueError("Распакованный архив превышает лимит 1 ГБ")
+                    if any(info.file_size > 256 * 1024 * 1024 for info in entries):
+                        raise ValueError("В архиве найден файл больше 256 МБ")
+                os.replace(part_path, filepath)
                 progress_callback(100, "Скачивание завершено")
                 complete_callback(True, filepath, None)
-            else:
-                complete_callback(False, None, "Файл не скачан")
+            except Exception:
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except OSError:
+                    pass
+                raise
                 
         except Exception as e:
             complete_callback(False, None, str(e))
@@ -10776,6 +10903,7 @@ class SettingsWindow:
     
     def _download_complete(self, success, file_path, error):
         """Завершение скачивания"""
+        self.update_manager.is_downloading = False
         self.download_btn.config(state='normal', text="⬇️ Скачать обновление")
         self.check_btn.config(state='normal')
         
@@ -10822,7 +10950,7 @@ class SettingsWindow:
             return
         
         # Проверяем, есть ли файл
-        filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+        filename = f"bitos_update_{safe_version_token(self.update_manager.latest_version)}.zip"
         filepath = os.path.join(self.update_manager.temp_dir, filename)
         
         if not os.path.exists(filepath):
@@ -10845,19 +10973,21 @@ class SettingsWindow:
         self.update_progress_label.config(text="⏳ Установка обновления...")
         self.update_progress_bar['value'] = 50
         
+        # Считываем Tk-переменную в основном потоке: обращаться к ней из
+        # рабочего потока Tkinter небезопасно.
+        make_backup = True
+        if hasattr(self, 'backup_before_install_var'):
+            make_backup = bool(self.backup_before_install_var.get())
+
         # Запускаем установку в потоке
-        thread = threading.Thread(target=self._install_thread, args=(filepath,))
+        thread = threading.Thread(target=self._install_thread, args=(filepath, make_backup))
         thread.daemon = True
         thread.start()
     
-    def _install_thread(self, filepath):
+    def _install_thread(self, filepath, make_backup=True):
         """Поток для установки обновления"""
         try:
             self.update_manager.is_installing = True
-            
-            make_backup = True
-            if hasattr(self, 'backup_before_install_var'):
-                make_backup = self.backup_before_install_var.get()
             
             base_path = self.bitos.base_path
             backup_path = None
@@ -10905,6 +11035,12 @@ class SettingsWindow:
                         backup_errors += 1
                         print(f"[Install] ⚠️ Не удалось сохранить в бэкап {folder_key}: {copy_err}")
                 
+                if backup_errors:
+                    raise RuntimeError(
+                        f"Резервная копия неполная: не удалось сохранить {backup_errors} элементов. "
+                        "Установка отменена, чтобы не рисковать текущей версией."
+                    )
+
                 # Запоминаем, где лежит бекап, чтобы вкладка восстановления
                 # могла им воспользоваться
                 self.update_manager.status['last_backup_path'] = backup_path
@@ -10918,61 +11054,130 @@ class SettingsWindow:
             self.window.after(0, lambda: self.update_progress_bar.config(value=70))
             self.window.after(0, lambda: self._log_update("📦 Распаковка обновления...", "INSTALL"))
             
-            # Распаковываем архив
+            # Безопасная распаковка: запрещаем Zip Slip, symlink entries,
+            # архивы чрезмерного размера и подозрительно большие файлы.
             import zipfile
+            import stat
             extract_path = os.path.join(self.update_manager.temp_dir, "extracted")
             if os.path.exists(extract_path):
                 shutil.rmtree(extract_path, ignore_errors=True)
             os.makedirs(extract_path, exist_ok=True)
-            
+
+            max_entries = 20000
+            max_total_uncompressed = 1024 * 1024 * 1024
+            max_single_file = 256 * 1024 * 1024
+            total_uncompressed = 0
+
             with zipfile.ZipFile(filepath, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
-            
-            # Находим папку с кодом (обычно она имеет имя вида Saryanich-BITOS-xxxxxxx)
+                entries = zip_ref.infolist()
+                if not entries or len(entries) > max_entries:
+                    raise ValueError("Архив пуст или содержит слишком много элементов")
+
+                for info in entries:
+                    raw_name = info.filename.replace("\\", "/")
+                    parts = raw_name.split("/")
+                    mode = (info.external_attr >> 16) & 0o170000
+                    if (raw_name.startswith("/") or
+                            (parts and ":" in parts[0]) or
+                            any(part in ("..", "") for part in parts[:-1]) or
+                            mode == stat.S_IFLNK):
+                        raise ValueError(f"Недопустимый путь в архиве: {info.filename}")
+                    if info.file_size > max_single_file:
+                        raise ValueError(f"Слишком большой файл в архиве: {info.filename}")
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > max_total_uncompressed:
+                        raise ValueError("Распакованный архив превышает допустимый размер")
+
+                bad_member = zip_ref.testzip()
+                if bad_member:
+                    raise ValueError(f"Повреждённый файл в архиве: {bad_member}")
+
+                for info in entries:
+                    target = os.path.realpath(os.path.join(extract_path, *info.filename.replace("\\", "/").split("/")))
+                    if os.path.commonpath([os.path.realpath(extract_path), target]) != os.path.realpath(extract_path):
+                        raise ValueError(f"Путь выходит за пределы архива: {info.filename}")
+                    zip_ref.extract(info, extract_path)
+
+            # В релизном ZIP ожидается одна корневая папка проекта.
             extracted_items = os.listdir(extract_path)
-            extracted_dir = None
-            for item in extracted_items:
-                if os.path.isdir(os.path.join(extract_path, item)):
-                    extracted_dir = os.path.join(extract_path, item)
-                    break
-            
-            if not extracted_dir:
-                error_text = "Не удалось найти распакованные файлы"
-                self.window.after(0, lambda err=error_text: self._install_error(err))
-                return
-            
-            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Замена файлов..."))
+            extracted_dirs = [
+                os.path.join(extract_path, item) for item in extracted_items
+                if os.path.isdir(os.path.join(extract_path, item)) and
+                not os.path.islink(os.path.join(extract_path, item))
+            ]
+            if len(extracted_dirs) != 1:
+                raise ValueError("В архиве должна находиться ровно одна корневая папка проекта")
+            extracted_dir = extracted_dirs[0]
+
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Проверка и замена файлов..."))
             self.window.after(0, lambda: self.update_progress_bar.config(value=85))
-            self.window.after(0, lambda: self._log_update("📦 Замена файлов...", "INSTALL"))
-            
-            # Копируем новые файлы поверх старых (кроме System).
-            # Опять же — ошибка на одном файле не должна убивать всю
-            # установку; собираем список проблемных файлов и сообщаем о них.
+            self.window.after(0, lambda: self._log_update("📦 Проверка и замена файлов...", "INSTALL"))
+
+            # Транзакционная замена верхнеуровневых элементов: каждый старый
+            # элемент сохраняется до замены; при любой ошибке уже заменённые
+            # элементы восстанавливаются в обратном порядке.
             install_errors = []
-            for item in os.listdir(extracted_dir):
-                if item == 'System':
-                    continue
-                src = os.path.join(extracted_dir, item)
-                dst = os.path.join(base_path, item)
-                try:
-                    if os.path.exists(dst):
+            rollback_dir = os.path.join(
+                self.update_manager.backup_dir,
+                "rollback_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            )
+            os.makedirs(rollback_dir, exist_ok=True)
+            replaced = []
+            try:
+                for item in os.listdir(extracted_dir):
+                    if item == "System":
+                        continue
+                    src = os.path.join(extracted_dir, item)
+                    dst = os.path.join(base_path, item)
+                    rollback_item = os.path.join(rollback_dir, item)
+
+                    if os.path.islink(src):
+                        raise ValueError(f"Символическая ссылка запрещена: {item}")
+                    if os.path.islink(dst):
+                        raise ValueError(f"Нельзя безопасно заменить символическую ссылку: {item}")
+
+                    had_original = os.path.lexists(dst)
+                    if had_original:
                         if os.path.isdir(dst):
-                            shutil.rmtree(dst)
+                            shutil.copytree(dst, rollback_item, symlinks=True)
                         else:
-                            os.remove(dst)
+                            shutil.copy2(dst, rollback_item)
+                    replaced.append((dst, rollback_item, had_original))
+
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    elif os.path.lexists(dst):
+                        os.remove(dst)
+
                     if os.path.isdir(src):
                         shutil.copytree(src, dst)
                     else:
                         shutil.copy2(src, dst)
-                except Exception as copy_err:
-                    install_errors.append(f"{item}: {copy_err}")
-                    print(f"[Install] ❌ Не удалось заменить {item}: {copy_err}")
-            
-            if install_errors:
-                errors_text = "; ".join(install_errors)
-                error_text = f"Не удалось заменить некоторые файлы: {errors_text}"
-                self.window.after(0, lambda err=error_text: self._install_error(err))
-                return
+
+                # Успешная установка: оставляем резервную копию для ручного отката.
+                self.update_manager.status["last_transactional_rollback"] = rollback_dir
+                self.update_manager._save_status()
+            except Exception as install_error:
+                for dst, rollback_item, had_original in reversed(replaced):
+                    try:
+                        if os.path.isdir(dst) and not os.path.islink(dst):
+                            shutil.rmtree(dst)
+                        elif os.path.lexists(dst):
+                            os.remove(dst)
+                        if had_original and os.path.lexists(rollback_item):
+                            if os.path.isdir(rollback_item) and not os.path.islink(rollback_item):
+                                shutil.copytree(rollback_item, dst, symlinks=True)
+                            else:
+                                shutil.copy2(rollback_item, dst)
+                    except Exception as rollback_error:
+                        install_errors.append(
+                            f"Не удалось откатить {os.path.basename(dst)}: {rollback_error}"
+                        )
+                if install_errors:
+                    raise RuntimeError(
+                        f"{install_error}; ОШИБКИ ОТКАТА: " + "; ".join(install_errors)
+                    ) from install_error
+                raise
             
             self.window.after(0, lambda: self.update_progress_label.config(text="✅ Установка завершена!"))
             self.window.after(0, lambda: self.update_progress_bar.config(value=100))
@@ -12503,617 +12708,6 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 
 
-class UpdateManager:
-    """
-    Менеджер обновлений BITOS
-    Простая и надежная версия без бекапов
-    """
-    
-    def __init__(self, bitos_instance):
-        self.bitos = bitos_instance
-        
-        # Версии
-        self.current_version_raw = bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
-        self.current_version = self._normalize_version(self.current_version_raw)
-        
-        # GitHub API
-        self.repo_url = "https://api.github.com/repos/Saryanich/BITOS/releases/latest"
-        
-        # Состояние
-        self.latest_version = None
-        self.latest_version_raw = None
-        self.download_url = None
-        self.release_notes = None
-        self.update_available = False
-        self.is_downloading = False
-        self.is_installing = False
-        self.download_progress = 0
-        self.error_message = None
-        self.check_in_progress = False
-        self.last_check_time = None
-        
-        # Пути
-        self.base_path = bitos_instance.base_path
-        self.temp_dir = os.path.join(bitos_instance.system_paths["temp"], "updates")
-        self.backup_dir = os.path.join(bitos_instance.system_paths["temp"], "backups")
-        self.restart_script = os.path.join(bitos_instance.base_path, "System", "restart.pyw")
-        self.update_status_file = os.path.join(bitos_instance.system_paths["config"], "update_status.json")
-        
-        # Создаем папки
-        os.makedirs(self.temp_dir, exist_ok=True)
-        os.makedirs(self.backup_dir, exist_ok=True)
-        
-        # Создаем/обновляем скрипт перезапуска
-        # (пересоздаём всегда, чтобы исправления логики установки
-        # доходили и до систем, где скрипт уже был создан ранее)
-        self._create_restart_script()
-        
-        # Загружаем статус
-        self.status = self._load_status()
-        
-        # Ищем главное окно для after()
-        self._root = self._find_root()
-        
-        print(f"[UpdateManager] ✅ Инициализирован (v{self.current_version_raw})")
-    
-    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
-    
-    def _find_root(self):
-        """Поиск главного окна tkinter"""
-        # Пробуем разные варианты
-        for attr in ['root', 'window', 'master', 'main_window', 'app', 'gui', 'tk_root']:
-            if hasattr(self.bitos, attr):
-                obj = getattr(self.bitos, attr)
-                if hasattr(obj, 'after'):
-                    print(f"[UpdateManager] ✅ Найдено главное окно: {attr}")
-                    return obj
-        
-        # Если не нашли - пробуем найти через tkinter
-        try:
-            import tkinter as tk
-            if tk._default_root:
-                print("[UpdateManager] ✅ Используем tk._default_root")
-                return tk._default_root
-        except:
-            pass
-        
-        print("[UpdateManager] ⚠️ Главное окно не найдено, callback будут вызываться напрямую")
-        return None
-    
-    def _normalize_version(self, version):
-        """Нормализация версии для сравнения"""
-        v = str(version).replace('v', '').replace('V', '.').replace('_', '.').strip()
-        parts = v.split('.')
-        normalized = []
-        for part in parts:
-            try:
-                normalized.append(str(int(part)))
-            except ValueError:
-                normalized.append(part)
-        return '.'.join(normalized)
-    
-    def _parse_version_parts(self, version):
-        """Разбор версии на части"""
-        normalized = self._normalize_version(version)
-        parts = normalized.split('.')
-        result = []
-        for p in parts:
-            try:
-                result.append(int(p))
-            except ValueError:
-                result.append(p)
-        return result
-    
-    def _compare_versions(self, v1, v2):
-        """Сравнение версий: 1 если v1 > v2, -1 если v1 < v2, 0 если равны"""
-        parts1 = self._parse_version_parts(v1)
-        parts2 = self._parse_version_parts(v2)
-        
-        for i in range(max(len(parts1), len(parts2))):
-            p1 = parts1[i] if i < len(parts1) else 0
-            p2 = parts2[i] if i < len(parts2) else 0
-            
-            if isinstance(p1, int) and isinstance(p2, int):
-                if p1 > p2:
-                    return 1
-                elif p1 < p2:
-                    return -1
-            else:
-                s1 = str(p1).lower()
-                s2 = str(p2).lower()
-                if s1 > s2:
-                    return 1
-                elif s1 < s2:
-                    return -1
-        return 0
-    
-    def _load_status(self):
-        """Загрузка статуса обновлений"""
-        if os.path.exists(self.update_status_file):
-            try:
-                with open(self.update_status_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except:
-                pass
-        return {}
-    
-    def _save_status(self):
-        """Сохранение статуса обновлений"""
-        try:
-            with open(self.update_status_file, 'w', encoding='utf-8') as f:
-                json.dump(self.status, f, indent=4, ensure_ascii=False)
-        except:
-            pass
-    
-    def _safe_callback(self, callback, *args):
-        """Безопасный вызов callback"""
-        if not callback:
-            return
-        
-        try:
-            if self._root and hasattr(self._root, 'after'):
-                self._root.after(0, lambda c=callback, a=args: c(*a))
-            else:
-                callback(*args)
-        except Exception as e:
-            print(f"[UpdateManager] Ошибка callback: {e}")
-            try:
-                callback(*args)
-            except:
-                pass
-    
-    def _create_restart_script(self):
-        """Создание скрипта для установки обновления после перезапуска"""
-        script = '''# -*- coding: utf-8 -*-
-import os, sys, time, shutil, zipfile, subprocess, platform
-
-BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMP_DIR = os.path.join(BASE_PATH, "System", "Temp", "updates")
-
-def main():
-    print("=" * 50)
-    print("УСТАНОВКА ОБНОВЛЕНИЯ BITOS")
-    print("=" * 50)
-    
-    # Ждем чтобы основная программа закрылась
-    print("\\nОжидание 10 секунд...")
-    for i in range(10, 0, -1):
-        print(f"Осталось {i} сек...", end='\\r')
-        time.sleep(1)
-    print("\\n")
-    
-    # Ищем zip файл обновления (берём самый свежий по времени изменения,
-    # а не по алфавитной сортировке имён — иначе можно взять не тот файл)
-    zip_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.zip')]
-    if not zip_files:
-        print("❌ Файл обновления не найден!")
-        input("Нажмите Enter для выхода...")
-        sys.exit(1)
-    
-    zip_candidates = [os.path.join(TEMP_DIR, f) for f in zip_files]
-    zip_path = max(zip_candidates, key=os.path.getmtime)
-    print(f"📦 Найден файл: {os.path.basename(zip_path)}")
-    
-    # Извлекаем архив
-    extract_path = os.path.join(TEMP_DIR, "extracted")
-    if os.path.exists(extract_path):
-        shutil.rmtree(extract_path)
-    os.makedirs(extract_path)
-    
-    print("📦 Извлечение обновления...")
-    with zipfile.ZipFile(zip_path, 'r') as z:
-        z.extractall(extract_path)
-    
-    # Находим корневую папку с кодом
-    code_path = extract_path
-    for item in os.listdir(extract_path):
-        full_path = os.path.join(extract_path, item)
-        if os.path.isdir(full_path) and ('BITOS' in item or '06V' in item or 'bitos' in item.lower()):
-            code_path = full_path
-            break
-    
-    print(f"📁 Папка с кодом: {os.path.basename(code_path)}")
-    
-    # Копируем файлы (пропускаем System для сохранения настроек)
-    print("\\n⚙️ Установка файлов...")
-    updated = 0
-    errors = 0
-    
-    for item in os.listdir(code_path):
-        if item == 'System':
-            print(f"  ⏭ Пропущено: {item}/ (настройки сохранены)")
-            continue
-        
-        src = os.path.join(code_path, item)
-        dst = os.path.join(BASE_PATH, item)
-        
-        try:
-            # Удаляем старый файл/папку
-            if os.path.exists(dst):
-                if os.path.isdir(dst):
-                    shutil.rmtree(dst)
-                else:
-                    os.remove(dst)
-            
-            # Копируем новый
-            if os.path.isdir(src):
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
-            
-            print(f"  ✅ {item}")
-            updated += 1
-        except Exception as e:
-            print(f"  ❌ {item}: {e}")
-            errors += 1
-    
-    print(f"\\n{'=' * 50}")
-    print(f"✅ Установлено: {updated} файлов")
-    if errors > 0:
-        print(f"❌ Ошибок: {errors}")
-    print(f"{'=' * 50}")
-    
-    # Удаляем архив и временные файлы
-    try:
-        os.remove(zip_path)
-        if os.path.exists(extract_path):
-            shutil.rmtree(extract_path)
-    except:
-        pass
-    
-    # Перезагрузка
-    print("\\n🔄 Перезагрузка через 5 секунд...")
-    time.sleep(5)
-    
-    try:
-        if platform.system() == "Windows":
-            subprocess.Popen(["shutdown", "/r", "/t", "3", "/f"], shell=True)
-        else:
-            subprocess.Popen(["reboot"])
-    except Exception as e:
-        print(f"❌ Не удалось перезагрузить: {e}")
-        print("Пожалуйста, перезагрузите систему вручную.")
-        input("Нажмите Enter для выхода...")
-    
-    sys.exit(0)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"\\n❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
-        import traceback
-        traceback.print_exc()
-        input("\\nНажмите Enter для выхода...")
-        sys.exit(1)
-'''
-        try:
-            with open(self.restart_script, 'w', encoding='utf-8') as f:
-                f.write(script)
-            print(f"[UpdateManager] ✅ Скрипт перезапуска создан: {self.restart_script}")
-        except Exception as e:
-            print(f"[UpdateManager] ❌ Ошибка создания скрипта: {e}")
-    
-    # ==================== ОСНОВНЫЕ МЕТОДЫ ====================
-    
-    def check_for_updates(self, callback=None):
-        """
-        Проверка обновлений
-        callback(available, version, url, notes, error)
-        """
-        if self.check_in_progress:
-            if callback:
-                callback(False, None, None, None, "Проверка уже выполняется")
-            return False
-        
-        self.check_in_progress = True
-        self.error_message = None
-        
-        if not REQUESTS_AVAILABLE:
-            self.error_message = "Библиотека requests не установлена"
-            self.check_in_progress = False
-            if callback:
-                callback(False, None, None, None, self.error_message)
-            return False
-        
-        def check_thread():
-            try:
-                print("[UpdateManager] 🔍 Проверка обновлений...")
-                headers = {
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "BITOS-UpdateManager"
-                }
-                response = requests.get(self.repo_url, timeout=10, headers=headers)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    latest_tag_raw = data.get("tag_name", "").replace("v", "").strip()
-                    self.latest_version_raw = latest_tag_raw
-                    self.latest_version = self._normalize_version(latest_tag_raw)
-                    self.download_url = data.get("zipball_url")
-                    self.release_notes = data.get("body", "Нет описания")
-                    
-                    print(f"[UpdateManager] Текущая: {self.current_version_raw}")
-                    print(f"[UpdateManager] Последняя: {latest_tag_raw}")
-                    
-                    if self._compare_versions(self.latest_version, self.current_version) > 0:
-                        self.update_available = True
-                        print(f"[UpdateManager] ✅ Доступно обновление!")
-                        
-                        self.status['update_available'] = True
-                        self.status['latest_version'] = latest_tag_raw
-                        self.status['checked_at'] = datetime.now().isoformat()
-                        self._save_status()
-                        
-                        self.last_check_time = datetime.now()
-                        self.check_in_progress = False
-                        
-                        if callback:
-                            self._safe_callback(callback, True, latest_tag_raw, self.download_url, self.release_notes, None)
-                    else:
-                        self.update_available = False
-                        print(f"[UpdateManager] ✅ Система актуальна")
-                        
-                        self.status['update_available'] = False
-                        self.status['checked_at'] = datetime.now().isoformat()
-                        self._save_status()
-                        
-                        self.last_check_time = datetime.now()
-                        self.check_in_progress = False
-                        
-                        if callback:
-                            self._safe_callback(callback, False, None, None, None, "Обновлений нет")
-                else:
-                    self.error_message = f"Ошибка API: {response.status_code}"
-                    print(f"[UpdateManager] ❌ {self.error_message}")
-                    self.check_in_progress = False
-                    if callback:
-                        self._safe_callback(callback, False, None, None, None, self.error_message)
-                    
-            except Exception as e:
-                self.error_message = f"Ошибка проверки: {str(e)}"
-                print(f"[UpdateManager] ❌ {self.error_message}")
-                self.check_in_progress = False
-                if callback:
-                    self._safe_callback(callback, False, None, None, None, self.error_message)
-        
-        thread = threading.Thread(target=check_thread, daemon=True)
-        thread.start()
-        return True
-    
-    def download_update(self, progress_callback=None, complete_callback=None):
-        """
-        Скачивание обновления
-        progress_callback(percent, status_text)
-        complete_callback(success, filepath, error)
-        """
-        if not self.download_url:
-            if complete_callback:
-                complete_callback(False, None, "Нет URL для скачивания")
-            return
-        
-        if self.is_downloading:
-            if complete_callback:
-                complete_callback(False, None, "Скачивание уже выполняется")
-            return
-        
-        self.is_downloading = True
-        self.download_progress = 0
-        
-        if progress_callback:
-            progress_callback(0, "Начинаем скачивание...")
-        
-        def download_thread():
-            try:
-                filename = f"bitos_update_{self.latest_version_raw}.zip"
-                filepath = os.path.join(self.temp_dir, filename)
-                
-                print(f"[UpdateManager] 📥 Скачивание: {filename}")
-                
-                headers = {"User-Agent": "BITOS-UpdateManager"}
-                response = requests.get(self.download_url, stream=True, timeout=30,
-                                         headers=headers, allow_redirects=True)
-                response.raise_for_status()
-                
-                # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и не всегда
-                # присылает заголовок Content-Length. Раньше при total_size == 0
-                # скачивание сразу считалось ошибкой — обновления никогда не
-                # скачивались. Теперь при неизвестном размере просто показываем
-                # объём уже скачанных данных вместо процента.
-                total_size = int(response.headers.get('content-length', 0) or 0)
-                
-                downloaded = 0
-                last_reported_percent = -1
-                with open(filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        if total_size > 0:
-                            percent = int((downloaded / total_size) * 100)
-                            self.download_progress = percent
-                            if percent != last_reported_percent and progress_callback:
-                                last_reported_percent = percent
-                                self._safe_callback(progress_callback, percent, f"Скачивание: {percent}%")
-                        else:
-                            mb_downloaded = downloaded / (1024 * 1024)
-                            # прогресс неизвестен заранее — плавно ползём к 99%,
-                            # чтобы UI не выглядел зависшим
-                            self.download_progress = min(99, self.download_progress + 1)
-                            if progress_callback:
-                                self._safe_callback(
-                                    progress_callback, self.download_progress,
-                                    f"Скачано: {mb_downloaded:.1f} МБ"
-                                )
-                
-                self.is_downloading = False
-                
-                # Проверяем файл
-                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                    self.download_progress = 100
-                    print(f"[UpdateManager] ✅ Скачано: {filepath}")
-                    
-                    self.status['download_path'] = filepath
-                    self._save_status()
-                    
-                    if progress_callback:
-                        self._safe_callback(progress_callback, 100, "Скачивание завершено")
-                    if complete_callback:
-                        self._safe_callback(complete_callback, True, filepath, None)
-                else:
-                    print(f"[UpdateManager] ❌ Файл не создан")
-                    if complete_callback:
-                        self._safe_callback(complete_callback, False, None, "Файл не был создан")
-                    
-            except Exception as e:
-                self.is_downloading = False
-                print(f"[UpdateManager] ❌ Ошибка скачивания: {e}")
-                if complete_callback:
-                    self._safe_callback(complete_callback, False, None, str(e))
-        
-        thread = threading.Thread(target=download_thread, daemon=True)
-        thread.start()
-    
-    def install_update(self):
-        """
-        Установка обновления
-        Возвращает True если установка запущена
-        """
-        if self.is_installing:
-            messagebox.showinfo("Информация", "Установка уже выполняется")
-            return False
-        
-        # Ищем файл обновления
-        filepath = None
-        if self.latest_version_raw:
-            candidate = os.path.join(self.temp_dir, f"bitos_update_{self.latest_version_raw}.zip")
-            if os.path.exists(candidate):
-                filepath = candidate
-        
-        if not filepath:
-            # Берём самый свежий по времени изменения, а не по алфавитной
-            # сортировке имён — иначе можно случайно подхватить старый файл
-            zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
-            if zip_files:
-                zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
-                filepath = max(zip_candidates, key=os.path.getmtime)
-            else:
-                messagebox.showerror("Ошибка", "Файл обновления не найден\nСначала скачайте обновление")
-                return False
-        
-        # Запрашиваем подтверждение
-        if not messagebox.askyesno(
-            "Установка обновления",
-            f"Установить обновление v{self.latest_version_raw}?\n\n"
-            "⚠️ ВНИМАНИЕ:\n"
-            "• Система будет перезагружена\n"
-            "• Ваши настройки будут сохранены\n"
-            "• Личные файлы не будут затронуты\n\n"
-            "Продолжить?"
-        ):
-            return False
-        
-        self.is_installing = True
-        
-        try:
-            # Запускаем скрипт обновления
-            if platform.system() == "Windows":
-                subprocess.Popen(
-                    [sys.executable, self.restart_script],
-                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-                )
-            else:
-                subprocess.Popen([sys.executable, self.restart_script])
-            
-            # Закрываем приложение
-            self._close_application()
-            return True
-            
-        except Exception as e:
-            self.is_installing = False
-            messagebox.showerror("Ошибка", f"Не удалось запустить установку:\n{e}")
-            return False
-    
-    def _close_application(self):
-        """Корректное закрытие приложения"""
-        try:
-            import tkinter as tk
-            if tk._default_root:
-                tk._default_root.destroy()
-        except:
-            pass
-        
-        try:
-            sys.exit(0)
-        except:
-            os._exit(0)
-    
-    # ==================== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ====================
-    
-    def get_status(self):
-        """Получение статуса"""
-        return {
-            'current_version': self.current_version_raw,
-            'latest_version': self.latest_version_raw,
-            'update_available': self.update_available,
-            'is_downloading': self.is_downloading,
-            'is_installing': self.is_installing,
-            'download_progress': self.download_progress,
-            'last_check': self.last_check_time,
-            'error': self.error_message
-        }
-    
-    def get_update_info(self):
-        """Получение информации об обновлении"""
-        return {
-            'version': self.latest_version_raw,
-            'download_url': self.download_url,
-            'release_notes': self.release_notes,
-            'available': self.update_available
-        }
-    
-    def is_update_available(self):
-        """Проверка доступности обновления"""
-        return self.update_available
-    
-    def get_download_path(self):
-        """Получение пути к скачанному файлу"""
-        if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
-            return self.status.get('download_path')
-        
-        zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
-        if zip_files:
-            zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
-            return max(zip_candidates, key=os.path.getmtime)
-        
-        return None
-    
-    def clear_download(self):
-        """Очистка скачанных файлов"""
-        try:
-            for f in os.listdir(self.temp_dir):
-                filepath = os.path.join(self.temp_dir, f)
-                try:
-                    if os.path.isfile(filepath):
-                        os.remove(filepath)
-                    elif os.path.isdir(filepath):
-                        shutil.rmtree(filepath)
-                except:
-                    pass
-            
-            self.download_progress = 0
-            self.update_available = False
-            self.status['download_path'] = None
-            self._save_status()
-            print("[UpdateManager] ✅ Файлы обновлений очищены")
-            return True
-        except Exception as e:
-            print(f"[UpdateManager] ❌ Ошибка очистки: {e}")
-            return False
-        
     # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     if not PIL_AVAILABLE:
