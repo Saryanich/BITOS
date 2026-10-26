@@ -11012,8 +11012,8 @@ class SettingsWindow:
             os.makedirs(extract_path, exist_ok=True)
 
             max_entries = 20000
-            max_total_uncompressed = 2 * 1024 * 1024 * 1024
-            max_single_file = 512 * 1024 * 1024
+            max_total_uncompressed = 1024 * 1024 * 1024
+            max_single_file = 256 * 1024 * 1024
             total_uncompressed = 0
 
             with zipfile.ZipFile(filepath, 'r') as zip_ref:
@@ -12832,17 +12832,20 @@ def main():
         time.sleep(1)
     print("\\n")
     
-    # Ищем zip файл обновления (берём самый свежий по времени изменения,
-    # а не по алфавитной сортировке имён — иначе можно взять не тот файл)
-    zip_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.zip')]
-    if not zip_files:
-        print("❌ Файл обновления не найден!")
-        input("Нажмите Enter для выхода...")
-        sys.exit(1)
-    
-    zip_candidates = [os.path.join(TEMP_DIR, f) for f in zip_files]
-    zip_path = max(zip_candidates, key=os.path.getmtime)
-    print(f"📦 Найден файл: {os.path.basename(zip_path)}")
+    # Берём только тот архив, который передал менеджер обновлений.
+    # Не выбираем случайный старый ZIP по времени изменения.
+    requested_zip = os.environ.get("BITOS_UPDATE_ZIP", "")
+    if requested_zip:
+        zip_path = os.path.abspath(requested_zip)
+        if (os.path.commonpath([os.path.abspath(TEMP_DIR), zip_path]) != os.path.abspath(TEMP_DIR)
+                or not zip_path.lower().endswith(".zip") or not os.path.isfile(zip_path)):
+            raise RuntimeError("Путь к архиву обновления недопустим")
+    else:
+        zip_files = [f for f in os.listdir(TEMP_DIR) if f.lower().endswith(".zip")]
+        if len(zip_files) != 1:
+            raise RuntimeError("Нельзя однозначно определить архив обновления; повторите скачивание")
+        zip_path = os.path.join(TEMP_DIR, zip_files[0])
+    print("📦 Найден файл: " + os.path.basename(zip_path))
     
     # Извлекаем архив
     extract_path = os.path.join(TEMP_DIR, "extracted")
@@ -13209,13 +13212,16 @@ if __name__ == "__main__":
         
         try:
             # Запускаем скрипт обновления
+            restart_env = os.environ.copy()
+            restart_env["BITOS_UPDATE_ZIP"] = os.path.abspath(filepath)
             if platform.system() == "Windows":
                 subprocess.Popen(
                     [sys.executable, self.restart_script],
+                    env=restart_env,
                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
                 )
             else:
-                subprocess.Popen([sys.executable, self.restart_script])
+                subprocess.Popen([sys.executable, self.restart_script], env=restart_env)
             
             # Закрываем приложение
             self._close_application()
