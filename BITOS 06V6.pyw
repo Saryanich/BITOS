@@ -71,7 +71,7 @@ def shutdown_windows():
     """Реальное выключение Windows"""
     if platform.system() == "Windows":
         try:
-            subprocess.run(["shutdown", "/s", "/t", "1", "/f"], shell=True)
+            subprocess.run(["shutdown", "/s", "/t", "1", "/f"])
         except:
             try:
                 os.system("shutdown /s /t 1 /f")
@@ -82,7 +82,7 @@ def restart_windows():
     """Реальная перезагрузка Windows"""
     if platform.system() == "Windows":
         try:
-            subprocess.run(["shutdown", "/r", "/t", "1", "/f"], shell=True)
+            subprocess.run(["shutdown", "/r", "/t", "1", "/f"])
         except:
             try:
                 os.system("shutdown /r /t 1 /f")
@@ -6182,7 +6182,7 @@ class Desktop:
                 
                 def open_app(p=app_path):
                     try:
-                        subprocess.Popen([p], shell=True)
+                        subprocess.Popen([p])
                         if hasattr(self.bitos, 'security'):
                             self.bitos.security.log_app_launch(f"App: {os.path.basename(p)}", self.username)
                     except Exception as e:
@@ -13017,7 +13017,7 @@ def main():
     
     try:
         if platform.system() == "Windows":
-            subprocess.Popen(["shutdown", "/r", "/t", "3", "/f"], shell=True)
+            subprocess.Popen(["shutdown", "/r", "/t", "3", "/f"])
         else:
             subprocess.Popen(["reboot"])
     except Exception as e:
