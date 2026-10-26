@@ -10918,61 +10918,127 @@ class SettingsWindow:
             self.window.after(0, lambda: self.update_progress_bar.config(value=70))
             self.window.after(0, lambda: self._log_update("📦 Распаковка обновления...", "INSTALL"))
             
-            # Распаковываем архив
+            # Безопасная распаковка: запрещаем Zip Slip, symlink entries,
+            # архивы чрезмерного размера и подозрительно большие файлы.
             import zipfile
+            import stat
             extract_path = os.path.join(self.update_manager.temp_dir, "extracted")
             if os.path.exists(extract_path):
                 shutil.rmtree(extract_path, ignore_errors=True)
             os.makedirs(extract_path, exist_ok=True)
-            
+
+            max_entries = 20000
+            max_total_uncompressed = 2 * 1024 * 1024 * 1024
+            max_single_file = 512 * 1024 * 1024
+            total_uncompressed = 0
+
             with zipfile.ZipFile(filepath, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
-            
-            # Находим папку с кодом (обычно она имеет имя вида Saryanich-BITOS-xxxxxxx)
+                entries = zip_ref.infolist()
+                if not entries or len(entries) > max_entries:
+                    raise ValueError("Архив пуст или содержит слишком много элементов")
+
+                for info in entries:
+                    raw_name = info.filename.replace("\\", "/")
+                    parts = raw_name.split("/")
+                    mode = (info.external_attr >> 16) & 0o170000
+                    if (raw_name.startswith("/") or
+                            (parts and ":" in parts[0]) or
+                            any(part in ("..", "") for part in parts[:-1]) or
+                            mode == stat.S_IFLNK):
+                        raise ValueError(f"Недопустимый путь в архиве: {info.filename}")
+                    if info.file_size > max_single_file:
+                        raise ValueError(f"Слишком большой файл в архиве: {info.filename}")
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > max_total_uncompressed:
+                        raise ValueError("Распакованный архив превышает допустимый размер")
+
+                bad_member = zip_ref.testzip()
+                if bad_member:
+                    raise ValueError(f"Повреждённый файл в архиве: {bad_member}")
+
+                for info in entries:
+                    target = os.path.realpath(os.path.join(extract_path, *info.filename.replace("\\", "/").split("/")))
+                    if os.path.commonpath([os.path.realpath(extract_path), target]) != os.path.realpath(extract_path):
+                        raise ValueError(f"Путь выходит за пределы архива: {info.filename}")
+                    zip_ref.extract(info, extract_path)
+
+            # В релизном ZIP ожидается одна корневая папка проекта.
             extracted_items = os.listdir(extract_path)
-            extracted_dir = None
-            for item in extracted_items:
-                if os.path.isdir(os.path.join(extract_path, item)):
-                    extracted_dir = os.path.join(extract_path, item)
-                    break
-            
-            if not extracted_dir:
-                error_text = "Не удалось найти распакованные файлы"
-                self.window.after(0, lambda err=error_text: self._install_error(err))
-                return
-            
-            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Замена файлов..."))
+            extracted_dirs = [
+                os.path.join(extract_path, item) for item in extracted_items
+                if os.path.isdir(os.path.join(extract_path, item)) and
+                not os.path.islink(os.path.join(extract_path, item))
+            ]
+            if len(extracted_dirs) != 1:
+                raise ValueError("В архиве должна находиться ровно одна корневая папка проекта")
+            extracted_dir = extracted_dirs[0]
+
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Проверка и замена файлов..."))
             self.window.after(0, lambda: self.update_progress_bar.config(value=85))
-            self.window.after(0, lambda: self._log_update("📦 Замена файлов...", "INSTALL"))
-            
-            # Копируем новые файлы поверх старых (кроме System).
-            # Опять же — ошибка на одном файле не должна убивать всю
-            # установку; собираем список проблемных файлов и сообщаем о них.
+            self.window.after(0, lambda: self._log_update("📦 Проверка и замена файлов...", "INSTALL"))
+
+            # Транзакционная замена верхнеуровневых элементов: каждый старый
+            # элемент сохраняется до замены; при любой ошибке уже заменённые
+            # элементы восстанавливаются в обратном порядке.
             install_errors = []
-            for item in os.listdir(extracted_dir):
-                if item == 'System':
-                    continue
-                src = os.path.join(extracted_dir, item)
-                dst = os.path.join(base_path, item)
-                try:
-                    if os.path.exists(dst):
+            rollback_dir = os.path.join(
+                self.update_manager.backup_dir,
+                "rollback_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            )
+            os.makedirs(rollback_dir, exist_ok=True)
+            replaced = []
+            try:
+                for item in os.listdir(extracted_dir):
+                    if item == "System":
+                        continue
+                    src = os.path.join(extracted_dir, item)
+                    dst = os.path.join(base_path, item)
+                    rollback_item = os.path.join(rollback_dir, item)
+
+                    if os.path.islink(src):
+                        raise ValueError(f"Символическая ссылка запрещена: {item}")
+                    if os.path.islink(dst):
+                        raise ValueError(f"Нельзя безопасно заменить символическую ссылку: {item}")
+
+                    had_original = os.path.lexists(dst)
+                    if had_original:
                         if os.path.isdir(dst):
-                            shutil.rmtree(dst)
+                            shutil.copytree(dst, rollback_item, symlinks=True)
                         else:
-                            os.remove(dst)
+                            shutil.copy2(dst, rollback_item)
+                    replaced.append((dst, rollback_item, had_original))
+
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    elif os.path.lexists(dst):
+                        os.remove(dst)
+
                     if os.path.isdir(src):
                         shutil.copytree(src, dst)
                     else:
                         shutil.copy2(src, dst)
-                except Exception as copy_err:
-                    install_errors.append(f"{item}: {copy_err}")
-                    print(f"[Install] ❌ Не удалось заменить {item}: {copy_err}")
-            
+
+                # Успешная установка: оставляем резервную копию для ручного отката.
+                self.update_manager.status["last_transactional_rollback"] = rollback_dir
+                self.update_manager._save_status()
+            except Exception:
+                for dst, rollback_item, had_original in reversed(replaced):
+                    try:
+                        if os.path.isdir(dst) and not os.path.islink(dst):
+                            shutil.rmtree(dst)
+                        elif os.path.lexists(dst):
+                            os.remove(dst)
+                        if had_original and os.path.lexists(rollback_item):
+                            if os.path.isdir(rollback_item) and not os.path.islink(rollback_item):
+                                shutil.copytree(rollback_item, dst, symlinks=True)
+                            else:
+                                shutil.copy2(rollback_item, dst)
+                    except Exception as rollback_error:
+                        install_errors.append(f"Не удалось откатить {os.path.basename(dst)}: {rollback_error}")
+                raise
+
             if install_errors:
-                errors_text = "; ".join(install_errors)
-                error_text = f"Не удалось заменить некоторые файлы: {errors_text}"
-                self.window.after(0, lambda err=error_text: self._install_error(err))
-                return
+                raise RuntimeError("; ".join(install_errors))
             
             self.window.after(0, lambda: self.update_progress_label.config(text="✅ Установка завершена!"))
             self.window.after(0, lambda: self.update_progress_bar.config(value=100))
