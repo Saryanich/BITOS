@@ -1,0 +1,20 @@
+name: BITOS syntax check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  syntax:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile BITOS source without running the application
+        run: python -c "import py_compile; py_compile.compile('BITOS 06V6.pyw', doraise=True)"
