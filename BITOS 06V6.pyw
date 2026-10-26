@@ -4403,7 +4403,10 @@ class DevModeDialog:
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
     
     def show_hint(self):
-        messagebox.showinfo("Подсказка", "Пароль режима разработчика: BIT642Os\n\nПосле входа используйте терминал для команд:\nhedev - полная справка\nsystem - команды системы\nuser - команды пользователей\nnetwork - сетевые команды\ndiag - диагностика\nutil - утилиты")
+        messagebox.showinfo(
+            "Режим разработчика",
+            "Для включения задайте переменную среды BITOS_DEV_PASSWORD и перезапустите BITOS."
+        )
     
     def check_password(self):
         password = self.password_entry.get().strip()
@@ -12812,7 +12815,7 @@ class UpdateManager:
     def _create_restart_script(self):
         """Создание скрипта для установки обновления после перезапуска"""
         script = '''# -*- coding: utf-8 -*-
-import os, sys, time, shutil, zipfile, subprocess, platform
+import os, sys, time, shutil, zipfile, subprocess, platform, stat
 
 BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMP_DIR = os.path.join(BASE_PATH, "System", "Temp", "updates")
@@ -12847,57 +12850,96 @@ def main():
         shutil.rmtree(extract_path)
     os.makedirs(extract_path)
     
-    print("📦 Извлечение обновления...")
+    print("📦 Проверка и извлечение обновления...")
     with zipfile.ZipFile(zip_path, 'r') as z:
-        z.extractall(extract_path)
-    
-    # Находим корневую папку с кодом
-    code_path = extract_path
-    for item in os.listdir(extract_path):
-        full_path = os.path.join(extract_path, item)
-        if os.path.isdir(full_path) and ('BITOS' in item or '06V' in item or 'bitos' in item.lower()):
-            code_path = full_path
-            break
-    
-    print(f"📁 Папка с кодом: {os.path.basename(code_path)}")
-    
-    # Копируем файлы (пропускаем System для сохранения настроек)
+        infos = z.infolist()
+        if not infos or len(infos) > 20000:
+            raise RuntimeError("Архив пуст или содержит слишком много элементов")
+        total_size = 0
+        for info in infos:
+            name = info.filename.replace("\\\\", "/")
+            parts = name.split("/")
+            mode = (info.external_attr >> 16) & 0o170000
+            if (name.startswith("/") or (parts and ":" in parts[0]) or
+                    any(part in ("..", "") for part in parts[:-1]) or
+                    mode == stat.S_IFLNK):
+                raise RuntimeError("Недопустимый путь в архиве: " + info.filename)
+            if info.file_size > 256 * 1024 * 1024:
+                raise RuntimeError("Файл в архиве превышает 256 МБ: " + info.filename)
+            total_size += info.file_size
+            if total_size > 1024 * 1024 * 1024:
+                raise RuntimeError("Распакованный архив превышает лимит 1 ГБ")
+        for info in infos:
+            target = os.path.realpath(os.path.join(extract_path, *info.filename.replace("\\\\", "/").split("/")))
+            if os.path.commonpath([os.path.realpath(extract_path), target]) != os.path.realpath(extract_path):
+                raise RuntimeError("Путь выходит за пределы архива: " + info.filename)
+            z.extract(info, extract_path)
+
+    roots = [
+        os.path.join(extract_path, item) for item in os.listdir(extract_path)
+        if os.path.isdir(os.path.join(extract_path, item)) and
+        not os.path.islink(os.path.join(extract_path, item))
+    ]
+    if len(roots) != 1:
+        raise RuntimeError("В архиве должна находиться ровно одна корневая папка проекта")
+    code_path = roots[0]
+    print("📁 Папка с кодом: " + os.path.basename(code_path))
+
+    # Сначала резервируем старые элементы, затем меняем. При сбое выполняем откат.
     print("\\n⚙️ Установка файлов...")
+    rollback_dir = os.path.join(TEMP_DIR, "rollback_" + str(int(time.time())))
+    os.makedirs(rollback_dir, exist_ok=True)
+    replaced = []
     updated = 0
-    errors = 0
-    
-    for item in os.listdir(code_path):
-        if item == 'System':
-            print(f"  ⏭ Пропущено: {item}/ (настройки сохранены)")
-            continue
-        
-        src = os.path.join(code_path, item)
-        dst = os.path.join(BASE_PATH, item)
-        
-        try:
-            # Удаляем старый файл/папку
-            if os.path.exists(dst):
+    try:
+        for item in os.listdir(code_path):
+            if item == "System":
+                print("  ⏭ Пропущено: System/ (настройки сохранены)")
+                continue
+            src = os.path.join(code_path, item)
+            dst = os.path.join(BASE_PATH, item)
+            backup = os.path.join(rollback_dir, item)
+            if os.path.islink(src) or os.path.islink(dst):
+                raise RuntimeError("Символические ссылки запрещены: " + item)
+            had_original = os.path.lexists(dst)
+            if had_original:
                 if os.path.isdir(dst):
-                    shutil.rmtree(dst)
+                    shutil.copytree(dst, backup, symlinks=True)
                 else:
-                    os.remove(dst)
-            
-            # Копируем новый
+                    shutil.copy2(dst, backup)
+            replaced.append((dst, backup, had_original))
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
+            elif os.path.lexists(dst):
+                os.remove(dst)
             if os.path.isdir(src):
                 shutil.copytree(src, dst)
             else:
                 shutil.copy2(src, dst)
-            
-            print(f"  ✅ {item}")
+            print("  ✅ " + item)
             updated += 1
-        except Exception as e:
-            print(f"  ❌ {item}: {e}")
-            errors += 1
+    except Exception as install_error:
+        print("  ❌ Ошибка установки, выполняется откат: " + str(install_error))
+        for dst, backup, had_original in reversed(replaced):
+            try:
+                if os.path.isdir(dst) and not os.path.islink(dst):
+                    shutil.rmtree(dst)
+                elif os.path.lexists(dst):
+                    os.remove(dst)
+                if had_original and os.path.lexists(backup):
+                    if os.path.isdir(backup) and not os.path.islink(backup):
+                        shutil.copytree(backup, dst, symlinks=True)
+                    else:
+                        shutil.copy2(backup, dst)
+            except Exception as rollback_error:
+                print("  ❌ Откат не удался для " + os.path.basename(dst) + ": " + str(rollback_error))
+        raise
     
     print(f"\\n{'=' * 50}")
     print(f"✅ Установлено: {updated} файлов")
     if errors > 0:
         print(f"❌ Ошибок: {errors}")
+        raise RuntimeError("Обновление завершилось с ошибками")
     print(f"{'=' * 50}")
     
     # Удаляем архив и временные файлы
