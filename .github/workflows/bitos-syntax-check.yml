@@ -21,3 +21,5 @@ jobs:
       - name: Check key security and updater guards
         run: |
           python -c "from pathlib import Path; s=Path('BITOS 06V6.pyw').read_text(encoding='utf-8'); u=Path('bitos_update_manager.py').read_text(encoding='utf-8'); all_source=s+u; assert 'extractall(' not in all_source; assert 'BIT642Os' not in all_source; assert 'pbkdf2_sha256' in s; assert 'BITOS_DEV_PASSWORD' in s; assert 'rollback_dir' in all_source; assert 'safe_version_token' in all_source"
+      - name: Run updater regression tests
+        run: python -m unittest discover -s tests -v
