@@ -11038,6 +11038,12 @@ class SettingsWindow:
                         backup_errors += 1
                         print(f"[Install] ⚠️ Не удалось сохранить в бэкап {folder_key}: {copy_err}")
                 
+                if backup_errors:
+                    raise RuntimeError(
+                        f"Резервная копия неполная: не удалось сохранить {backup_errors} элементов. "
+                        "Установка отменена, чтобы не рисковать текущей версией."
+                    )
+
                 # Запоминаем, где лежит бекап, чтобы вкладка восстановления
                 # могла им воспользоваться
                 self.update_manager.status['last_backup_path'] = backup_path
@@ -11154,7 +11160,7 @@ class SettingsWindow:
                 # Успешная установка: оставляем резервную копию для ручного отката.
                 self.update_manager.status["last_transactional_rollback"] = rollback_dir
                 self.update_manager._save_status()
-            except Exception:
+            except Exception as install_error:
                 for dst, rollback_item, had_original in reversed(replaced):
                     try:
                         if os.path.isdir(dst) and not os.path.islink(dst):
@@ -11167,11 +11173,14 @@ class SettingsWindow:
                             else:
                                 shutil.copy2(rollback_item, dst)
                     except Exception as rollback_error:
-                        install_errors.append(f"Не удалось откатить {os.path.basename(dst)}: {rollback_error}")
+                        install_errors.append(
+                            f"Не удалось откатить {os.path.basename(dst)}: {rollback_error}"
+                        )
+                if install_errors:
+                    raise RuntimeError(
+                        f"{install_error}; ОШИБКИ ОТКАТА: " + "; ".join(install_errors)
+                    ) from install_error
                 raise
-
-            if install_errors:
-                raise RuntimeError("; ".join(install_errors))
             
             self.window.after(0, lambda: self.update_progress_label.config(text="✅ Установка завершена!"))
             self.window.after(0, lambda: self.update_progress_bar.config(value=100))
