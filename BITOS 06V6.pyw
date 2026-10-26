@@ -13204,15 +13204,11 @@ if __name__ == "__main__":
                 filepath = candidate
         
         if not filepath:
-            # Берём самый свежий по времени изменения, а не по алфавитной
-            # сортировке имён — иначе можно случайно подхватить старый файл
-            zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
-            if zip_files:
-                zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
-                filepath = max(zip_candidates, key=os.path.getmtime)
-            else:
-                messagebox.showerror("Ошибка", "Файл обновления не найден\nСначала скачайте обновление")
-                return False
+            messagebox.showerror(
+                "Ошибка",
+                "Архив именно этой версии не найден. Повторите скачивание обновления."
+            )
+            return False
         
         # Запрашиваем подтверждение
         if not messagebox.askyesno(
