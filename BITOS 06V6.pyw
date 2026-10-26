@@ -13330,35 +13330,44 @@ if __name__ == "__main__":
         return self.update_available
     
     def get_download_path(self):
-        """Получение пути к скачанному файлу"""
-        if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
-            return self.status.get('download_path')
-        
-        zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
-        if zip_files:
-            zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
-            return max(zip_candidates, key=os.path.getmtime)
-        
+        """Возвращает только архив версии, для которой проверено обновление."""
+        if not self.latest_version_raw:
+            return None
+        expected = os.path.join(
+            self.temp_dir,
+            "bitos_update_%s.zip" % safe_version_token(self.latest_version_raw)
+        )
+        if os.path.isfile(expected):
+            return expected
         return None
     
     def clear_download(self):
-        """Очистка скачанных файлов"""
+        """Удаляет только временные файлы загрузки, сохраняя резервные копии отката."""
         try:
-            for f in os.listdir(self.temp_dir):
-                filepath = os.path.join(self.temp_dir, f)
+            for name in os.listdir(self.temp_dir):
+                path = os.path.join(self.temp_dir, name)
+                is_download_artifact = (
+                    name.lower().endswith(".zip") or
+                    name.lower().endswith(".zip.part") or
+                    name == "extracted"
+                )
+                if not is_download_artifact:
+                    continue
                 try:
-                    if os.path.isfile(filepath):
-                        os.remove(filepath)
-                    elif os.path.isdir(filepath):
-                        shutil.rmtree(filepath)
-                except:
-                    pass
+                    if os.path.islink(path):
+                        os.remove(path)
+                    elif os.path.isfile(path):
+                        os.remove(path)
+                    elif os.path.isdir(path):
+                        shutil.rmtree(path)
+                except OSError as cleanup_error:
+                    print(f"[UpdateManager] ⚠️ Не удалось удалить {name}: {cleanup_error}")
             
             self.download_progress = 0
             self.update_available = False
-            self.status['download_path'] = None
+            self.status["download_path"] = None
             self._save_status()
-            print("[UpdateManager] ✅ Файлы обновлений очищены")
+            print("[UpdateManager] ✅ Временные файлы обновления очищены; откаты сохранены")
             return True
         except Exception as e:
             print(f"[UpdateManager] ❌ Ошибка очистки: {e}")
