@@ -8,6 +8,7 @@ import math
 import random
 import json
 import hashlib
+import hmac
 import string
 from datetime import datetime
 from pathlib import Path
@@ -740,7 +741,35 @@ class LoginScreen:
         restart_btn.pack(side=tk.RIGHT, padx=4)
     
     def get_pin_hash(self, pin):
-        return hashlib.sha256(pin.encode()).hexdigest()
+        """PBKDF2-HMAC-SHA256 с уникальной солью для каждого PIN."""
+        import secrets
+        salt = secrets.token_bytes(16)
+        iterations = 310000
+        digest = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
+        return "pbkdf2_sha256$%s$%s$%s" % (iterations, salt.hex(), digest.hex())
+
+    def verify_pin(self, pin, saved_hash):
+        """Проверяет современный хеш и мигрирует старые SHA-256-хеши после успеха."""
+        if not saved_hash:
+            return False
+        if saved_hash.startswith("pbkdf2_sha256$"):
+            try:
+                _, iterations, salt_hex, digest_hex = saved_hash.split("$", 3)
+                iterations = int(iterations)
+                if iterations < 100000 or iterations > 2000000:
+                    return False
+                salt = bytes.fromhex(salt_hex)
+                expected = bytes.fromhex(digest_hex)
+                actual = hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), salt, iterations)
+                return hmac.compare_digest(actual, expected)
+            except (ValueError, TypeError):
+                return False
+
+        legacy_digest = hashlib.sha256(str(pin).encode("utf-8")).hexdigest()
+        if hmac.compare_digest(legacy_digest, saved_hash):
+            self.save_pin(pin)
+            return True
+        return False
     
     def load_pin(self):
         if self.bitos and hasattr(self.bitos, 'system_paths'):
@@ -828,7 +857,7 @@ class LoginScreen:
             confirm_pin = entries['confirm'].get().strip()
             saved_hash = self.load_pin()
             
-            if self.get_pin_hash(old_pin) != saved_hash:
+            if not self.verify_pin(old_pin, saved_hash):
                 status_label.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
                 return
             if not new_pin.isdigit():
@@ -889,7 +918,7 @@ class LoginScreen:
             return
         
         saved_hash = self.load_pin()
-        if self.get_pin_hash(pin) != saved_hash:
+        if not self.verify_pin(pin, saved_hash):
             self.failed_attempts += 1
             remaining = self.max_attempts - self.failed_attempts
             
@@ -4347,9 +4376,11 @@ class DevModeDialog:
         self.password_entry.bind('<Return>', lambda e: self.check_password())
         self.password_entry.focus_set()
         
-        info_label = tk.Label(self.dialog, text="Подсказка: стандартный пароль BIT642Os", font=('Segoe UI', 9), bg='#F5F7FA', fg='#3498DB', cursor='hand2')
-        info_label.pack(pady=5)
-        info_label.bind('<Button-1>', lambda e: self.show_hint())
+        tk.Label(
+            self.dialog,
+            text="Пароль задаётся через переменную среды BITOS_DEV_PASSWORD",
+            font=('Segoe UI', 9), bg='#F5F7FA', fg='#3498DB', wraplength=350
+        ).pack(pady=5)
         
         button_frame = tk.Frame(self.dialog, bg='#F5F7FA')
         button_frame.pack(fill=tk.X, padx=20, pady=10)
@@ -4367,7 +4398,14 @@ class DevModeDialog:
     
     def check_password(self):
         password = self.password_entry.get().strip()
-        if password == self.bitos.dev_password:
+        if not self.bitos.dev_password:
+            self.message_label.config(text='Режим разработчика не настроен')
+            messagebox.showwarning(
+                "Режим разработчика",
+                "Для включения задайте переменную среды BITOS_DEV_PASSWORD и перезапустите BITOS."
+            )
+            return
+        if hmac.compare_digest(password, self.bitos.dev_password):
             self.bitos.dev_mode = True
             self.bitos.dev_log("DEV MODE ACTIVATED")
             self.result = True
@@ -6685,7 +6723,9 @@ class BITOS:
         self.input_blocker = InputBlocker()
          
         self.dev_mode = False
-        self.dev_password = "BIT642Os"
+        # Общий пароль режима разработчика не должен находиться в исходниках.
+        # Задайте BITOS_DEV_PASSWORD в переменных среды перед запуском.
+        self.dev_password = os.environ.get("BITOS_DEV_PASSWORD", "")
         self.dev_commands_history = []
         self.protected_files = []
         
@@ -10300,7 +10340,7 @@ class SettingsWindow:
             with open(pin_file, 'r') as f:
                 saved_hash = f.read().strip()
         
-        if hashlib.sha256(old_pin.encode()).hexdigest() != saved_hash:
+        if not self.login_screen.verify_pin(old_pin, saved_hash):
             self.pin_status.config(text="❌ Неверный текущий PIN-код", fg='#E74C3C')
             return
         if not new_pin.isdigit():
@@ -10732,38 +10772,63 @@ class SettingsWindow:
             filename = f"bitos_update_{self.update_manager.latest_version}.zip"
             filepath = os.path.join(self.update_manager.temp_dir, filename)
             
-            # Скачиваем с прогрессом
+            from urllib.parse import urlparse
+            allowed_hosts = {
+                "api.github.com", "github.com", "codeload.github.com",
+                "objects.githubusercontent.com", "release-assets.githubusercontent.com"
+            }
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+                raise ValueError("Недоверенный адрес обновления: разрешены только HTTPS-ссылки GitHub")
+
             headers = {"User-Agent": "BITOS-UpdateManager"}
-            response = requests.get(url, stream=True, timeout=30, headers=headers, allow_redirects=True)
-            response.raise_for_status()
-            
-            # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и часто НЕ
-            # присылает Content-Length. Раньше это сразу считалось ошибкой,
-            # и скачивание почти всегда обрывалось. Теперь при неизвестном
-            # размере просто показываем объём скачанного вместо процента.
-            total_size = int(response.headers.get('content-length', 0) or 0)
-            
-            progress_callback(0, "Начинаем загрузку...")
-            
-            downloaded = 0
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            percent = int((downloaded / total_size) * 100)
-                            progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
-                        else:
-                            progress_callback(min(99, downloaded // 1024 % 100),
-                                               f"Скачивание: {downloaded//1024} KB")
-            
-            # Проверяем, что файл скачался
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            part_path = filepath + ".part"
+            max_download_size = 1024 * 1024 * 1024
+            try:
+                with requests.get(url, stream=True, timeout=(10, 60), headers=headers,
+                                  allow_redirects=True) as response:
+                    response.raise_for_status()
+                    final_url = urlparse(response.url)
+                    if final_url.scheme != "https" or final_url.hostname not in allowed_hosts:
+                        raise ValueError("Перенаправление ведёт на недоверенный адрес")
+                    total_size = int(response.headers.get("content-length", 0) or 0)
+                    if total_size > max_download_size:
+                        raise ValueError("Архив обновления превышает лимит 1 ГБ")
+
+                    progress_callback(0, "Начинаем загрузку...")
+                    downloaded = 0
+                    with open(part_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if not chunk:
+                                continue
+                            downloaded += len(chunk)
+                            if downloaded > max_download_size:
+                                raise ValueError("Загрузка превышает лимит 1 ГБ")
+                            f.write(chunk)
+                            if total_size > 0:
+                                percent = min(99, int(downloaded * 100 / total_size))
+                                progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+                            else:
+                                progress_callback(min(99, downloaded // (1024 * 1024)),
+                                                  f"Скачано: {downloaded//1024} KB")
+
+                import zipfile
+                with zipfile.ZipFile(part_path, "r") as archive:
+                    if not archive.infolist():
+                        raise ValueError("Скачан пустой ZIP-архив")
+                    bad_member = archive.testzip()
+                    if bad_member:
+                        raise ValueError(f"Повреждённый ZIP-архив: {bad_member}")
+                os.replace(part_path, filepath)
                 progress_callback(100, "Скачивание завершено")
                 complete_callback(True, filepath, None)
-            else:
-                complete_callback(False, None, "Файл не скачан")
+            except Exception:
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except OSError:
+                    pass
+                raise
                 
         except Exception as e:
             complete_callback(False, None, str(e))
@@ -12929,7 +12994,7 @@ if __name__ == "__main__":
                         self.check_in_progress = False
                         
                         if callback:
-                            self._safe_callback(callback, False, None, None, None, "Обновлений нет")
+                            self._safe_callback(callback, False, None, None, None, None)
                 else:
                     self.error_message = f"Ошибка API: {response.status_code}"
                     print(f"[UpdateManager] ❌ {self.error_message}")
