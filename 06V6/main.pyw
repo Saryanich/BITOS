@@ -24,7 +24,18 @@ runtime = {
     "__package__": None,
 }
 
-for source_file in sorted(MODULE_DIR.glob("part_*.py")):
+MODULE_FILES = (
+    "security_and_files.py",
+    "file_explorer_apps.py",
+    "desktop_shell.py",
+    "system_core_widgets.py",
+    "diagnostics_audio.py",
+    "settings_recovery.py",
+    "multi_monitor.py",
+)
+
+for module_name in MODULE_FILES:
+    source_file = MODULE_DIR / module_name
     source_text = source_file.read_text(encoding="utf-8")
     compiled = compile(source_text, str(source_file), "exec")
     exec(compiled, runtime, runtime)
