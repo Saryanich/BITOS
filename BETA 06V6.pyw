@@ -362,13 +362,21 @@ class SplashScreen:
         except Exception as e:
             pass
     
-    def close(self):
-        """Неблокирующее закрытие экрана загрузки."""
-        try:
-            self.root.setWindowOpacity(0.0)
-        except Exception:
-            pass
-        self.root.destroy()
+    def close(self, callback=None):
+        """Плавное закрытие splash-экрана без блокировки Qt."""
+        def fade(step=10):
+            try:
+                self.root.setWindowOpacity(max(0.0, step / 10))
+            except Exception:
+                pass
+            if step > 0:
+                self.root.after(20, lambda: fade(step - 1))
+            else:
+                self.root.destroy()
+                if callback:
+                    callback()
+
+        self.root.after(0, fade)
 
 
 # ==================== КЛАСС 2: LoginScreen (ИСПРАВЛЕННЫЙ) ====================
@@ -920,7 +928,7 @@ class LoginScreen:
             self.root.destroy()
             self.on_login(username)
 
-        self.root.after(80, complete_login)
+        self.root.after(500, complete_login)
     
     def run(self):
         self.root.mainloop()
@@ -7333,10 +7341,12 @@ class BITOS:
             splash.root.after(120, launch_login)
 
         def launch_login():
-            splash.close()
-            self.input_blocker.start_blocking()
-            login = LoginScreen(self.after_login, self)
-            login.run()
+            def show_login():
+                self.input_blocker.start_blocking()
+                login = LoginScreen(self.after_login, self)
+                login.run()
+
+            splash.close(show_login)
 
         def advance_stage():
             index = state["index"]
