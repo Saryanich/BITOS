@@ -1,0 +1,110 @@
+name: Temporary BITOS final validation
+on:
+  push:
+    branches: [main]
+    paths:
+      - "BETA 06V6.py"
+      - ".github/workflows/temporary-bitos-final.yml"
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install system Qt libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check PyQt6 requests Pillow
+      - name: Compile
+        run: python -m py_compile "BETA 06V6.py"
+      - name: Qt, profiles, worker pool, ZIP and recovery smoke tests
+        run: |
+          python - <<'PY'
+          import importlib.util, json, os, sys, tempfile, threading, zipfile
+          from PyQt6.QtWidgets import QApplication, QWidget
+          spec = importlib.util.spec_from_file_location("bitos_validation", "BETA 06V6.py")
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          app = QApplication.instance() or QApplication([])
+          root = module.Tk()
+          frame = module.Frame(root, bg="white")
+          frame.pack(fill=module.BOTH, expand=True)
+          label = module.Label(frame, text="BITOS Qt smoke test")
+          label.pack()
+          slider = module.Scale(frame, from_=0, to=4, orient=module.HORIZONTAL)
+          slider.pack()
+          assert all(isinstance(widget, QWidget) for widget in (root, frame, label, slider))
+          with tempfile.TemporaryDirectory() as directory:
+              runtime = module.BITOS.__new__(module.BITOS)
+              runtime.optimization_percent = 0
+              runtime.optimization_config_path = os.path.join(directory, "performance.json")
+              runtime._worker_executor_lock = threading.RLock()
+              runtime._worker_executor = None
+              for level in (0, 25, 50, 75, 100):
+                  assert runtime.apply_optimization_profile(level) == level
+                  with open(runtime.optimization_config_path, encoding="utf-8") as handle:
+                      assert json.load(handle)["optimization_percent"] == level
+              assert runtime.submit_background(lambda: 42).result(timeout=5) == 42
+              settings = module.SettingsWindow.__new__(module.SettingsWindow)
+              settings.notebook = module.ttk.Notebook(root)
+              settings.bitos = runtime
+              settings._optimization_loading = True
+              settings._create_optimization_tab()
+              assert settings.notebook.count() == 1
+              assert settings.optimization_slider.value() == 4
+              runtime.shutdown_background_workers(wait=True)
+
+              manager = module.UpdateManager.__new__(module.UpdateManager)
+              good_zip = os.path.join(directory, "valid.zip")
+              with zipfile.ZipFile(good_zip, "w") as archive:
+                  archive.writestr("repo/BETA 06V6.py", "print('ok')\n")
+              assert manager._validate_update_archive(good_zip)
+              bad_zip = os.path.join(directory, "unsafe.zip")
+              with zipfile.ZipFile(bad_zip, "w") as archive:
+                  archive.writestr("repo/BETA 06V6.py", "print('ok')\n")
+                  archive.writestr("../escape.txt", "blocked")
+              try:
+                  manager._validate_update_archive(bad_zip)
+                  raise AssertionError("Unsafe ZIP path was accepted")
+              except ValueError:
+                  pass
+
+              base = os.path.join(directory, "bitos-root")
+              temp = os.path.join(base, "System", "Temp", "updates")
+              os.makedirs(os.path.join(temp, "backups"), exist_ok=True)
+              target = os.path.join(base, "sample.txt")
+              backup = os.path.join(temp, "backups", "sample.txt")
+              with open(target, "w", encoding="utf-8") as handle:
+                  handle.write("new")
+              with open(backup, "w", encoding="utf-8") as handle:
+                  handle.write("old")
+              journal = os.path.join(temp, "update_transaction.json")
+              with open(journal, "w", encoding="utf-8") as handle:
+                  json.dump({"entries": [{"destination": target, "backup": backup, "had_original": True}]}, handle)
+              recovery = module.BITOS.__new__(module.BITOS)
+              recovery.base_path = base
+              recovery.system_paths = {"temp": os.path.join(base, "System", "Temp")}
+              assert recovery._recover_update_transaction()
+              with open(target, encoding="utf-8") as handle:
+                  assert handle.read() == "old"
+              assert not os.path.exists(journal)
+
+              # Missing backup + missing original must block recovery.
+              with open(journal, "w", encoding="utf-8") as handle:
+                  json.dump({"entries": [{"destination": target, "backup": backup, "had_original": True}]}, handle)
+              os.remove(target)
+              assert not recovery._recover_update_transaction()
+          root.close()
+          app.quit()
+          print("OK: Qt widgets, five profiles, config, worker pool, ZIP guard and rollback recovery")
+          PY
