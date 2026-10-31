@@ -8949,12 +8949,7 @@ class BITOS:
         # Файловая и звуковая инициализация не должна блокировать GUI-поток.
         self._startup_complete = False
         self._startup_error = None
-        self._startup_thread = threading.Thread(
-            target=self._startup_worker,
-            name="BITOSStartup",
-            daemon=True
-        )
-        self._startup_thread.start()
+        self._startup_thread = self.submit_background(self._startup_worker)
         
         # Менеджер мониторов - будет создан в after_login
         self.monitor_manager = None
@@ -9571,9 +9566,57 @@ class BITOS:
         if executor is not None:
             executor.shutdown(wait=wait, cancel_futures=True)
 
+    def _recover_update_transaction(self):
+        """При следующем старте откатывает незавершённое обновление после сбоя питания/процесса."""
+        transaction_dir = os.path.join(self.system_paths["temp"], "updates")
+        journal_path = os.path.join(transaction_dir, "update_transaction.json")
+        if not os.path.isfile(journal_path):
+            return True
+        base_root = os.path.realpath(self.base_path)
+        errors = []
+        try:
+            with open(journal_path, "r", encoding="utf-8") as journal_file:
+                journal = json.load(journal_file)
+            for entry in reversed(journal.get("entries", [])):
+                destination = os.path.realpath(entry.get("destination", ""))
+                backup_value = entry.get("backup")
+                backup = os.path.realpath(backup_value) if backup_value else None
+                try:
+                    if os.path.commonpath([base_root, destination]) != base_root:
+                        raise ValueError("Путь восстановления выходит за пределы BITOS")
+                    if backup and os.path.commonpath([base_root, backup]) != base_root:
+                        raise ValueError("Путь резервной копии выходит за пределы BITOS")
+                    had_original = bool(entry.get("had_original"))
+                    if had_original:
+                        if backup and os.path.lexists(backup):
+                            if os.path.lexists(destination):
+                                if os.path.isdir(destination) and not os.path.islink(destination):
+                                    shutil.rmtree(destination)
+                                else:
+                                    os.remove(destination)
+                            os.makedirs(os.path.dirname(destination), exist_ok=True)
+                            os.replace(backup, destination)
+                    elif os.path.lexists(destination):
+                        if os.path.isdir(destination) and not os.path.islink(destination):
+                            shutil.rmtree(destination)
+                        else:
+                            os.remove(destination)
+                except Exception as recovery_error:
+                    errors.append(f"{destination}: {recovery_error}")
+            if errors:
+                print("[BITOS UpdateRecovery] Ошибки отката: " + "; ".join(errors))
+                return False
+            os.remove(journal_path)
+            print("[BITOS UpdateRecovery] Незавершённое обновление автоматически отменено.")
+            return True
+        except Exception as exc:
+            print(f"[BITOS UpdateRecovery] Не удалось восстановить транзакцию: {exc}")
+            return False
+
     def _startup_worker(self):
         """Подготовка файловой системы и звука в отдельном потоке."""
         try:
+            self._recover_update_transaction()
             self.initialize_filesystem()
             self.security = SecurityManager(self)
             self._create_sound_files()
@@ -13090,45 +13133,9 @@ class SettingsWindow:
         self.update_manager.download_update(progress_callback, complete_callback)
     
     def _download_thread(self, progress_callback, complete_callback):
-        """Поток для скачивания"""
-        try:
-            import requests
-            
-            # Подготавливаем URL
-            url = self.update_manager.download_url
-            
-            # Создаём имя файла
-            filename = f"bitos_update_{self.update_manager.latest_version}.zip"
-            filepath = os.path.join(self.update_manager.temp_dir, filename)
-            
-            # Скачиваем с прогрессом
-            response = requests.get(url, stream=True, timeout=30)
-            total_size = int(response.headers.get('content-length', 0))
-            
-            if total_size == 0:
-                complete_callback(False, None, "Не удалось определить размер файла")
-                return
-            
-            progress_callback(0, "Начинаем загрузку...")
-            
-            with open(filepath, 'wb') as f:
-                downloaded = 0
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        percent = int((downloaded / total_size) * 100)
-                        progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
-            
-            # Проверяем, что файл скачался
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                complete_callback(True, filepath, None)
-            else:
-                complete_callback(False, None, "Файл не скачан")
-                
-        except Exception as e:
-            complete_callback(False, None, str(e))
-    
+        """Совместимый вход: вся загрузка выполняется общим проверяемым менеджером."""
+        return self.update_manager.download_update(progress_callback, complete_callback)
+
     def _download_progress(self, percent, status_text):
         """Обновление прогресса скачивания"""
         self.update_progress_bar['value'] = percent
@@ -13229,7 +13236,7 @@ class SettingsWindow:
             if not os.path.isfile(filepath):
                 raise FileNotFoundError("Архив обновления не найден")
             self.window.after(0, lambda: self.update_progress_label.config(text="🔍 Проверка архива..."))
-            self._log_update("🔍 Проверка целостности и структуры ZIP...", "INSTALL")
+            self.window.after(0, lambda: self._log_update("🔍 Проверка целостности и структуры ZIP...", "INSTALL"))
 
             self.update_manager._validate_update_archive(filepath)
             os.makedirs(backup_path, exist_ok=True)
@@ -13279,6 +13286,16 @@ class SettingsWindow:
             if "BETA 06V6.py" not in items:
                 raise ValueError("Главный файл BITOS отсутствует в списке обновления")
 
+            journal_path = os.path.join(temp_dir, "update_transaction.json")
+            journal = {"created_at": datetime.now().isoformat(), "backup_path": backup_path, "entries": []}
+            def save_transaction_journal():
+                temporary_journal = journal_path + ".tmp"
+                with open(temporary_journal, "w", encoding="utf-8") as journal_file:
+                    json.dump(journal, journal_file, ensure_ascii=False, indent=2)
+                    journal_file.flush()
+                    os.fsync(journal_file.fileno())
+                os.replace(temporary_journal, journal_path)
+
             # Подготавливаем копии заранее; в рабочей папке ничего не удаляется на этапе распаковки.
             for name in items:
                 source = os.path.join(code_root, name)
@@ -13290,7 +13307,7 @@ class SettingsWindow:
 
             self.window.after(0, lambda: self.update_progress_label.config(text="📦 Резервирование текущих файлов..."))
             self.window.after(0, lambda: self.update_progress_bar.config(value=65))
-            self._log_update("📦 Создана точка отката; заменяем файлы транзакционно...", "INSTALL")
+            self.window.after(0, lambda: self._log_update("📦 Создана точка отката; заменяем файлы транзакционно...", "INSTALL"))
 
             for index, name in enumerate(items):
                 destination = os.path.join(base_path, name)
@@ -13298,11 +13315,17 @@ class SettingsWindow:
                 backup = os.path.join(backup_path, name)
                 if not (os.path.exists(staged) or os.path.islink(staged)):
                     continue
-                if os.path.lexists(destination):
+                had_original = os.path.lexists(destination)
+                journal_entry = {
+                    "destination": destination,
+                    "backup": backup if had_original else None,
+                    "had_original": had_original
+                }
+                journal["entries"].append(journal_entry)
+                save_transaction_journal()
+                if had_original:
                     os.replace(destination, backup)
-                    changed.append((destination, backup))
-                else:
-                    changed.append((destination, None))
+                changed.append((destination, backup if had_original else None))
                 try:
                     os.replace(staged, destination)
                 except Exception:
@@ -13312,7 +13335,7 @@ class SettingsWindow:
                             shutil.rmtree(destination, ignore_errors=True)
                         else:
                             os.remove(destination)
-                    if os.path.exists(backup):
+                    if had_original and os.path.exists(backup):
                         os.replace(backup, destination)
                         changed.pop()
                     raise
@@ -13334,10 +13357,12 @@ class SettingsWindow:
                 "download_path": filepath
             })
             self.update_manager._save_status()
+            if os.path.exists(journal_path):
+                os.remove(journal_path)
             successful = True
             self.window.after(0, lambda: self.update_progress_label.config(text="✅ Проверка и установка завершены"))
             self.window.after(0, lambda: self.update_progress_bar.config(value=100))
-            self._log_update("✅ Установка завершена. Резервная копия сохранена.", "SUCCESS")
+            self.window.after(0, lambda: self._log_update("✅ Установка завершена. Резервная копия сохранена.", "SUCCESS"))
             self.window.after(1000, self._restart_after_update)
         except Exception as exc:
             rollback_errors = []
@@ -13355,6 +13380,12 @@ class SettingsWindow:
             error_text = str(exc)
             if rollback_errors:
                 error_text += "\nОШИБКИ ОТКАТА: " + "; ".join(rollback_errors)
+            else:
+                try:
+                    if os.path.exists(journal_path):
+                        os.remove(journal_path)
+                except OSError:
+                    pass
             self.window.after(0, lambda message=error_text: self._install_error(message))
         finally:
             self.update_manager.is_installing = False
