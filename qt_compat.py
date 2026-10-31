@@ -812,6 +812,9 @@ class Misc:
             self.setAlignment(flags.get(anchor, Qt.AlignmentFlag.AlignCenter))
         if isinstance(self, QLabelQt):
             self.setWordWrap(bool(options.get("wraplength") or options.get("wrap")))
+            if options.get("wraplength"):
+                try: self.setMaximumWidth(int(options["wraplength"]))
+                except Exception: pass
         if "relief" in options and isinstance(self, QFrameQt):
             try:
                 relief = str(options["relief"]).lower()
