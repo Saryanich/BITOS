@@ -9631,7 +9631,8 @@ class BITOS:
     def _startup_worker(self):
         """Подготовка файловой системы и звука в отдельном потоке."""
         try:
-            self._recover_update_transaction()
+            if not self._recover_update_transaction():
+                raise RuntimeError("Не удалось восстановить незавершённое обновление BITOS. Запуск остановлен для защиты файлов.")
             self.initialize_filesystem()
             self.security = SecurityManager(self)
             self._create_sound_files()
@@ -13249,6 +13250,8 @@ class SettingsWindow:
         changed = []
         successful = False
         try:
+            if os.path.exists(journal_path):
+                raise RuntimeError("Обнаружен незавершённый журнал обновления. Сначала перезапустите BITOS для автоматического восстановления.")
             if not os.path.isfile(filepath):
                 raise FileNotFoundError("Архив обновления не найден")
             self.window.after(0, lambda: self.update_progress_label.config(text="🔍 Проверка архива..."))
@@ -15137,16 +15140,27 @@ class UpdateManager:
         return self.update_available
     
     def get_download_path(self):
-        """Возвращает только архив, связанный с текущей проверенной загрузкой."""
+        """Возвращает только проверенный ZIP из каталога загрузок BITOS."""
+        root = os.path.realpath(self.temp_dir)
         stored_path = self.status.get("download_path")
-        if stored_path and os.path.isfile(stored_path):
-            return stored_path
+        if stored_path:
+            candidate = os.path.realpath(stored_path)
+            try:
+                inside_temp = os.path.commonpath([root, candidate]) == root
+            except ValueError:
+                inside_temp = False
+            if inside_temp and os.path.isfile(candidate):
+                return candidate
         version = self.latest_version_raw or self.status.get("download_version")
         if not version:
             return None
         safe_version = re.sub(r"[^0-9A-Za-z._-]", "_", str(version))
-        candidate = os.path.join(self.temp_dir, f"bitos_update_{safe_version}.zip")
-        return candidate if os.path.isfile(candidate) else None
+        candidate = os.path.realpath(os.path.join(self.temp_dir, f"bitos_update_{safe_version}.zip"))
+        try:
+            inside_temp = os.path.commonpath([root, candidate]) == root
+        except ValueError:
+            inside_temp = False
+        return candidate if inside_temp and os.path.isfile(candidate) else None
     
     def clear_download(self):
         """Удаляет только архивы и частичные загрузки, не трогая резервные копии и журнал."""
