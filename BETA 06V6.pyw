@@ -9338,8 +9338,16 @@ class SoundClickPlayer:
         self.volume = self._load_volume_from_config()
         self._last_known_volume = self.volume
         
-        # Поток для мониторинга громкости
+        # Потоки громкости: команды сериализуются, чтобы UI не ждал WinAPI.
         self._monitor_thread = None
+        import queue
+        self._volume_queue = queue.Queue(maxsize=1)
+        self._volume_worker = threading.Thread(
+            target=self._volume_worker_loop,
+            daemon=True,
+            name="BITOSVolumeWorker"
+        )
+        self._volume_worker.start()
         
         # Инициализация WinAPI
         self._init_winapi_volume()
@@ -9442,6 +9450,32 @@ class SoundClickPlayer:
             print(f"[SoundClickPlayer] ⚠️ Ошибка отправки команды: {e}")
             return False
     
+    def _queue_system_volume(self, target_volume):
+        """Передача управления громкостью отдельному последовательному потоку."""
+        try:
+            self._volume_queue.put_nowait(int(target_volume))
+        except queue.Full:
+            try:
+                self._volume_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._volume_queue.put_nowait(int(target_volume))
+            except queue.Full:
+                pass
+
+    def _volume_worker_loop(self):
+        while True:
+            target = self._volume_queue.get()
+            try:
+                if target is None:
+                    return
+                self._set_system_volume(target)
+            except Exception as exc:
+                print(f"[SoundClickPlayer] Ошибка фоновой установки громкости: {exc}")
+            finally:
+                self._volume_queue.task_done()
+
     def _set_system_volume(self, target_volume):
         """Установка системной громкости через WinAPI"""
         import time
@@ -9481,7 +9515,7 @@ class SoundClickPlayer:
                 self._save_volume_to_config(volume)
                 
                 # Устанавливаем системную громкость
-                self._set_system_volume(volume)
+                self._queue_system_volume(volume)
                 
                 print(f"[SoundClickPlayer] 🔊 Громкость: {old_volume}% -> {volume}%")
                 return True
@@ -9495,7 +9529,7 @@ class SoundClickPlayer:
             self.enabled = True
             
             # Устанавливаем громкость
-            self._set_system_volume(self.volume)
+            self._queue_system_volume(self.volume)
             
             # Запускаем мониторинг
             self._start_volume_monitor()
@@ -9532,7 +9566,7 @@ class SoundClickPlayer:
                 self._last_known_volume = current_volume
                 
                 # Меняем системную громкость
-                self._set_system_volume(self.volume)
+                self._queue_system_volume(self.volume)
                 
                 print(f"[SoundClickPlayer] 📁 Громкость: {old_volume}% -> {self.volume}%")
                 return True
