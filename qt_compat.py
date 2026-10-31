@@ -1161,6 +1161,7 @@ class Canvas(Misc, QWidget):
         self.items = []
         self._ids = {}
         self._tag_bindings = {}
+        self._hovered_canvas_item = None
         self._scroll_y = 0
         self._scrollregion = None
         self._yscrollcommand = None
@@ -1416,7 +1417,7 @@ class Canvas(Misc, QWidget):
         painter.fillRect(self.rect(), QColor(bg))
         for item in self.items:
             kind, c, opt = item["kind"], item["coords"], item["options"]
-            if kind == "window": continue
+            if kind == "window" or opt.get("state") == "hidden": continue
             painter.save()
             fill = opt.get("fill")
             outline = opt.get("outline")
@@ -1495,16 +1496,66 @@ class Canvas(Misc, QWidget):
         super().resizeEvent(event)
         self._update_canvas_windows()
 
+    def _canvas_item_at(self, x, y):
+        scene_y = float(y) + self._scroll_y
+        for item in reversed(self.items):
+            if item["options"].get("state") == "hidden":
+                continue
+            box = self._item_bbox(item)
+            if box and box[0] <= x <= box[2] and box[1] <= scene_y <= box[3]:
+                return item
+        return None
+
+    def _dispatch_item_event(self, item, sequence, data):
+        if item is None:
+            return
+        callbacks = []
+        for tag in item["tags"] + (item["id"],):
+            callbacks.extend(self._tag_bindings.get((tag, sequence), []))
+        delivered = set()
+        for callback in callbacks:
+            if id(callback) in delivered:
+                continue
+            delivered.add(id(callback))
+            try:
+                callback(data)
+            except Exception as exc:
+                root = _root_of(self)
+                if root:
+                    root.report_callback_exception(type(exc), exc, exc.__traceback__)
+
     def mousePressEvent(self, event):
         data = _event_data(self, event)
-        for item in reversed(self.items):
-            box = self._item_bbox(item)
-            if box and box[0] <= data.x <= box[2] and box[1]-self._scroll_y <= data.y <= box[3]-self._scroll_y:
-                sequence = "<Button-3>" if data.num == 3 else "<Button-1>"
-                for tag in item["tags"] + (item["id"],):
-                    for cb in self._tag_bindings.get((tag, sequence), []):
-                        cb(data)
+        sequence = "<Button-3>" if data.num == 3 else "<Button-1>"
+        self._dispatch_item_event(self._canvas_item_at(data.x, data.y), sequence, data)
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        data = _event_data(self, event)
+        sequence = "<Double-1>"
+        self._dispatch_item_event(self._canvas_item_at(data.x, data.y), sequence, data)
+        super().mouseDoubleClickEvent(event)
+
+    def mouseMoveEvent(self, event):
+        data = _event_data(self, event)
+        hovered = self._canvas_item_at(data.x, data.y)
+        previous_id = self._hovered_canvas_item
+        current_id = hovered["id"] if hovered else None
+        if current_id != previous_id:
+            previous = self._ids.get(previous_id) if previous_id is not None else None
+            self._dispatch_item_event(previous, "<Leave>", data)
+            self._dispatch_item_event(hovered, "<Enter>", data)
+            self._hovered_canvas_item = current_id
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        previous = self._ids.get(self._hovered_canvas_item) if self._hovered_canvas_item is not None else None
+        if previous is not None:
+            data = SimpleNamespace(x=-1, y=-1, x_root=0, y_root=0, num=0,
+                                   keysym="", widget=self, delta=0, width=self.width(), height=self.height())
+            self._dispatch_item_event(previous, "<Leave>", data)
+        self._hovered_canvas_item = None
+        super().leaveEvent(event)
 
 
 class Menu(Misc, QMenuQt):
