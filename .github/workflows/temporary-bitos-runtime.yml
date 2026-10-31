@@ -1,0 +1,66 @@
+name: Temporary BITOS runtime validation
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "BETA 06V6.py"
+      - ".github/workflows/temporary-bitos-runtime.yml"
+permissions:
+  contents: read
+jobs:
+  qt-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt runtime
+        run: python -m pip install --disable-pip-version-check PyQt6 requests Pillow
+      - name: Compile BITOS source
+        run: python -m py_compile "BETA 06V6.py"
+      - name: Import Qt runtime and smoke-test widgets/profiles
+        run: |
+          python - <<'PY'
+          import importlib.util, json, os, sys, tempfile, threading
+          from PyQt6.QtWidgets import QApplication, QWidget
+          spec = importlib.util.spec_from_file_location("bitos_validation", "BETA 06V6.py")
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          app = QApplication.instance() or QApplication([])
+          root = module.Tk()
+          frame = module.Frame(root, bg="white")
+          frame.pack(fill=module.BOTH, expand=True)
+          label = module.Label(frame, text="BITOS Qt smoke test")
+          label.pack()
+          slider = module.Scale(frame, from_=0, to=4, orient=module.HORIZONTAL)
+          slider.pack()
+          assert isinstance(frame, QWidget) and isinstance(label, QWidget) and isinstance(slider, QWidget)
+          with tempfile.TemporaryDirectory() as directory:
+              runtime = module.BITOS.__new__(module.BITOS)
+              runtime.optimization_percent = 0
+              runtime.optimization_config_path = os.path.join(directory, "performance.json")
+              runtime._worker_executor_lock = threading.RLock()
+              runtime._worker_executor = None
+              for level in (0, 25, 50, 75, 100):
+                  assert runtime.apply_optimization_profile(level) == level
+                  with open(runtime.optimization_config_path, encoding="utf-8") as handle:
+                      assert json.load(handle)["optimization_percent"] == level
+              assert runtime.submit_background(lambda: 42).result(timeout=5) == 42
+              settings = module.SettingsWindow.__new__(module.SettingsWindow)
+              settings.notebook = module.ttk.Notebook(root)
+              settings.bitos = runtime
+              settings._optimization_loading = True
+              settings._create_optimization_tab()
+              assert settings.notebook.count() == 1
+              assert settings.optimization_slider.value() == 4
+              runtime.shutdown_background_workers(wait=True)
+          root.close()
+          app.quit()
+          print("PyQt widgets, optimization levels, config persistence and worker pool: OK")
+          PY
