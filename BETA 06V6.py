@@ -8956,7 +8956,10 @@ class BITOS:
         # Менеджер мониторов - будет создан в after_login
         self.monitor_manager = None
         
-        self.run()
+        try:
+            self.run()
+        finally:
+            self.shutdown_background_workers(wait=False)
     
     # ==================== МЕТОДЫ ПЕРЕХВАТА КОНСОЛИ ====================
     
