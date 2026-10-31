@@ -2175,7 +2175,9 @@ __all__ = [
 ]
 
 # Local Tk-style namespace; all widgets above are implemented by PyQt6.
-tk = SimpleNamespace(**{_name: globals()[_name] for _name in __all__})
+# Используем сам модуль, чтобы tk._default_root и другие глобальные значения
+# всегда отражали актуальное состояние после создания/закрытия Qt-окон.
+tk = sys.modules[__name__]
 ImageTk = tk.ImageTk
 
 
