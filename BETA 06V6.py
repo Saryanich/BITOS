@@ -13226,6 +13226,7 @@ class SettingsWindow:
         temp_dir = self.update_manager.temp_dir
         extract_path = tempfile.mkdtemp(prefix="bitos_extract_", dir=temp_dir)
         stage_path = tempfile.mkdtemp(prefix="bitos_stage_", dir=temp_dir)
+        journal_path = os.path.join(temp_dir, "update_transaction.json")
         backup_path = os.path.join(
             temp_dir, "backups",
             f"bitos_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
@@ -13286,7 +13287,6 @@ class SettingsWindow:
             if "BETA 06V6.py" not in items:
                 raise ValueError("Главный файл BITOS отсутствует в списке обновления")
 
-            journal_path = os.path.join(temp_dir, "update_transaction.json")
             journal = {"created_at": datetime.now().isoformat(), "backup_path": backup_path, "entries": []}
             def save_transaction_journal():
                 temporary_journal = journal_path + ".tmp"
@@ -14700,10 +14700,8 @@ class UpdateManager:
         # Создаем папки
         os.makedirs(self.temp_dir, exist_ok=True)
         
-        # Создаем/обновляем скрипт перезапуска
-        # (пересоздаём всегда, чтобы исправления логики установки
-        # доходили и до систем, где скрипт уже был создан ранее)
-        self._create_restart_script()
+        # Установка обновлений выполняется транзакционно из вкладки настроек.
+        # Старый автономный restart.pyw больше не создаётся и не запускается.
         
         # Загружаем статус
         self.status = self._load_status()
@@ -14795,12 +14793,22 @@ class UpdateManager:
         return {}
     
     def _save_status(self):
-        """Сохранение статуса обновлений"""
+        """Атомарное сохранение состояния загрузки/обновления."""
+        temp_path = self.update_status_file + ".tmp"
         try:
-            with open(self.update_status_file, 'w', encoding='utf-8') as f:
-                json.dump(self.status, f, indent=4, ensure_ascii=False)
-        except:
-            pass
+            os.makedirs(os.path.dirname(self.update_status_file), exist_ok=True)
+            with open(temp_path, "w", encoding="utf-8") as status_file:
+                json.dump(self.status, status_file, indent=4, ensure_ascii=False)
+                status_file.flush()
+                os.fsync(status_file.fileno())
+            os.replace(temp_path, self.update_status_file)
+        except Exception as exc:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
+            print(f"[UpdateManager] Не удалось сохранить статус: {exc}")
     
     def _validate_update_archive(self, archive_path):
         """Проверяет ZIP до распаковки: CRC, пути, ссылки и разумные лимиты."""
@@ -14823,6 +14831,8 @@ class UpdateManager:
                 total_uncompressed += int(info.file_size or 0)
                 if total_uncompressed > max_uncompressed:
                     raise ValueError("Архив слишком большой после распаковки")
+                if info.compress_size > 0 and info.file_size / info.compress_size > 1000:
+                    raise ValueError(f"Подозрительная степень сжатия: {info.filename}")
                 if parts and parts[-1] == "BETA 06V6.py":
                     has_main = True
             bad_member = archive.testzip()
@@ -14850,137 +14860,9 @@ class UpdateManager:
                 pass
     
     def _create_restart_script(self):
-        """Создание скрипта для установки обновления после перезапуска"""
-        script = '''# -*- coding: utf-8 -*-
-import os, sys, time, shutil, zipfile, subprocess, platform
+        """Отключённый устаревший установщик: небезопасная замена файлов запрещена."""
+        return None
 
-BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMP_DIR = os.path.join(BASE_PATH, "System", "Temp", "updates")
-
-def main():
-    print("=" * 50)
-    print("УСТАНОВКА ОБНОВЛЕНИЯ BITOS")
-    print("=" * 50)
-    
-    # Ждем чтобы основная программа закрылась
-    print("\\nОжидание 10 секунд...")
-    for i in range(10, 0, -1):
-        print(f"Осталось {i} сек...", end='\\r')
-        time.sleep(1)
-    print("\\n")
-    
-    # Ищем zip файл обновления (берём самый свежий по времени изменения,
-    # а не по алфавитной сортировке имён — иначе можно взять не тот файл)
-    zip_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.zip')]
-    if not zip_files:
-        print("❌ Файл обновления не найден!")
-        input("Нажмите Enter для выхода...")
-        sys.exit(1)
-    
-    zip_candidates = [os.path.join(TEMP_DIR, f) for f in zip_files]
-    zip_path = max(zip_candidates, key=os.path.getmtime)
-    print(f"📦 Найден файл: {os.path.basename(zip_path)}")
-    
-    # Извлекаем архив
-    extract_path = os.path.join(TEMP_DIR, "extracted")
-    if os.path.exists(extract_path):
-        shutil.rmtree(extract_path)
-    os.makedirs(extract_path)
-    
-    print("📦 Извлечение обновления...")
-    with zipfile.ZipFile(zip_path, 'r') as z:
-        z.extractall(extract_path)
-    
-    # Находим корневую папку с кодом
-    code_path = extract_path
-    for item in os.listdir(extract_path):
-        full_path = os.path.join(extract_path, item)
-        if os.path.isdir(full_path) and ('BITOS' in item or '06V' in item or 'bitos' in item.lower()):
-            code_path = full_path
-            break
-    
-    print(f"📁 Папка с кодом: {os.path.basename(code_path)}")
-    
-    # Копируем файлы (пропускаем System для сохранения настроек)
-    print("\\n⚙️ Установка файлов...")
-    updated = 0
-    errors = 0
-    
-    for item in os.listdir(code_path):
-        if item == 'System':
-            print(f"  ⏭ Пропущено: {item}/ (настройки сохранены)")
-            continue
-        
-        src = os.path.join(code_path, item)
-        dst = os.path.join(BASE_PATH, item)
-        
-        try:
-            # Удаляем старый файл/папку
-            if os.path.exists(dst):
-                if os.path.isdir(dst):
-                    shutil.rmtree(dst)
-                else:
-                    os.remove(dst)
-            
-            # Копируем новый
-            if os.path.isdir(src):
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
-            
-            print(f"  ✅ {item}")
-            updated += 1
-        except Exception as e:
-            print(f"  ❌ {item}: {e}")
-            errors += 1
-    
-    print(f"\\n{'=' * 50}")
-    print(f"✅ Установлено: {updated} файлов")
-    if errors > 0:
-        print(f"❌ Ошибок: {errors}")
-    print(f"{'=' * 50}")
-    
-    # Удаляем архив и временные файлы
-    try:
-        os.remove(zip_path)
-        if os.path.exists(extract_path):
-            shutil.rmtree(extract_path)
-    except:
-        pass
-    
-    # Перезагрузка
-    print("\\n🔄 Перезагрузка через 5 секунд...")
-    time.sleep(5)
-    
-    try:
-        if platform.system() == "Windows":
-            subprocess.Popen(["shutdown", "/r", "/t", "3", "/f"], shell=True)
-        else:
-            subprocess.Popen(["reboot"])
-    except Exception as e:
-        print(f"❌ Не удалось перезагрузить: {e}")
-        print("Пожалуйста, перезагрузите систему вручную.")
-        input("Нажмите Enter для выхода...")
-    
-    sys.exit(0)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"\\n❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
-        import traceback
-        traceback.print_exc()
-        input("\\nНажмите Enter для выхода...")
-        sys.exit(1)
-'''
-        try:
-            with open(self.restart_script, 'w', encoding='utf-8') as f:
-                f.write(script)
-            print(f"[UpdateManager] ✅ Скрипт перезапуска создан: {self.restart_script}")
-        except Exception as e:
-            print(f"[UpdateManager] ❌ Ошибка создания скрипта: {e}")
-    
     # ==================== ОСНОВНЫЕ МЕТОДЫ ====================
     
     def check_for_updates(self, callback=None):
@@ -15144,9 +15026,9 @@ if __name__ == "__main__":
 
                 if downloaded <= 0:
                     raise ValueError("Сервер вернул пустой файл")
-                if self.expected_download_size and downloaded != self.expected_download_size:
+                if expected and downloaded != expected:
                     raise ValueError(
-                        f"Размер файла не совпал: ожидалось {self.expected_download_size}, получено {downloaded}"
+                        f"Размер файла не совпал: ожидалось {expected}, получено {downloaded}"
                     )
                 actual_sha256 = digest.hexdigest()
                 if self.download_sha256 and actual_sha256.lower() != self.download_sha256.lower():
@@ -15183,65 +15065,18 @@ if __name__ == "__main__":
         return thread
 
     def install_update(self):
-        """
-        Установка обновления
-        Возвращает True если установка запущена
-        """
-        if self.is_installing:
-            messagebox.showinfo("Информация", "Установка уже выполняется")
+        """Не допускает запуск устаревшего restart.pyw в обход транзакционного установщика."""
+        filepath = self.get_download_path()
+        if not filepath or not os.path.isfile(filepath):
+            messagebox.showerror("Обновление BITOS", "Проверенный архив обновления не найден.")
             return False
-        
-        # Ищем файл обновления
-        filepath = None
-        if self.latest_version_raw:
-            candidate = os.path.join(self.temp_dir, f"bitos_update_{self.latest_version_raw}.zip")
-            if os.path.exists(candidate):
-                filepath = candidate
-        
-        if not filepath:
-            # Берём самый свежий по времени изменения, а не по алфавитной
-            # сортировке имён — иначе можно случайно подхватить старый файл
-            zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
-            if zip_files:
-                zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
-                filepath = max(zip_candidates, key=os.path.getmtime)
-            else:
-                messagebox.showerror("Ошибка", "Файл обновления не найден\nСначала скачайте обновление")
-                return False
-        
-        # Запрашиваем подтверждение
-        if not messagebox.askyesno(
-            "Установка обновления",
-            f"Установить обновление v{self.latest_version_raw}?\n\n"
-            "⚠️ ВНИМАНИЕ:\n"
-            "• Система будет перезагружена\n"
-            "• Ваши настройки будут сохранены\n"
-            "• Личные файлы не будут затронуты\n\n"
-            "Продолжить?"
-        ):
-            return False
-        
-        self.is_installing = True
-        
-        try:
-            # Запускаем скрипт обновления
-            if platform.system() == "Windows":
-                subprocess.Popen(
-                    [sys.executable, self.restart_script],
-                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-                )
-            else:
-                subprocess.Popen([sys.executable, self.restart_script])
-            
-            # Закрываем приложение
-            self._close_application()
-            return True
-            
-        except Exception as e:
-            self.is_installing = False
-            messagebox.showerror("Ошибка", f"Не удалось запустить установку:\n{e}")
-            return False
-    
+        messagebox.showinfo(
+            "Обновление BITOS",
+            "Используйте установку в окне «Настройки → Обновления». "
+            "Там выполняются проверка архива, резервирование и автоматический откат."
+        )
+        return False
+
     def _close_application(self):
         """Корректное закрытие приложения"""
         try:
@@ -15285,40 +15120,39 @@ if __name__ == "__main__":
         return self.update_available
     
     def get_download_path(self):
-        """Получение пути к скачанному файлу"""
-        if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
-            return self.status.get('download_path')
-        
-        zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
-        if zip_files:
-            zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
-            return max(zip_candidates, key=os.path.getmtime)
-        
-        return None
+        """Возвращает только архив, связанный с текущей проверенной загрузкой."""
+        stored_path = self.status.get("download_path")
+        if stored_path and os.path.isfile(stored_path):
+            return stored_path
+        version = self.latest_version_raw or self.status.get("download_version")
+        if not version:
+            return None
+        safe_version = re.sub(r"[^0-9A-Za-z._-]", "_", str(version))
+        candidate = os.path.join(self.temp_dir, f"bitos_update_{safe_version}.zip")
+        return candidate if os.path.isfile(candidate) else None
     
     def clear_download(self):
-        """Очистка скачанных файлов"""
+        """Удаляет только архивы и частичные загрузки, не трогая резервные копии и журнал."""
         try:
-            for f in os.listdir(self.temp_dir):
-                filepath = os.path.join(self.temp_dir, f)
-                try:
-                    if os.path.isfile(filepath):
-                        os.remove(filepath)
-                    elif os.path.isdir(filepath):
-                        shutil.rmtree(filepath)
-                except:
-                    pass
-            
+            for name in os.listdir(self.temp_dir):
+                if not (name.lower().endswith(".zip") or name.lower().endswith(".zip.part")):
+                    continue
+                path = os.path.join(self.temp_dir, name)
+                if os.path.isfile(path):
+                    os.remove(path)
             self.download_progress = 0
             self.update_available = False
-            self.status['download_path'] = None
+            self.status.pop("download_path", None)
+            self.status.pop("download_sha256", None)
+            self.status.pop("downloaded_bytes", None)
+            self.status.pop("download_version", None)
             self._save_status()
-            print("[UpdateManager] ✅ Файлы обновлений очищены")
+            print("[UpdateManager] Архивы обновлений очищены; резервные копии сохранены")
             return True
-        except Exception as e:
-            print(f"[UpdateManager] ❌ Ошибка очистки: {e}")
+        except Exception as exc:
+            print(f"[UpdateManager] Ошибка очистки загрузок: {exc}")
             return False
-        
+
     # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     if not PIL_AVAILABLE:
