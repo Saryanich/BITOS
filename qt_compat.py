@@ -69,6 +69,48 @@ class _Dispatcher(QObject):
 
 
 _dispatcher = None
+_global_filter = None
+
+
+class _GlobalEventFilter(QObject):
+    """Routes Tk-style bind_all events from any Qt child widget."""
+
+    def eventFilter(self, watched, event):
+        event_type = event.type()
+        if not isinstance(watched, QWidget):
+            return False
+        data = _event_data(watched, event)
+        for sequence, callbacks in list(_global_bindings.items()):
+            if _EVENT_TYPES.get(sequence) != event_type:
+                continue
+            if sequence == "<Button-1>" and data.num != 1:
+                continue
+            if sequence == "<Button-3>" and data.num != 3:
+                continue
+            if sequence in ("<Return>", "<Escape>"):
+                wanted = "Return" if sequence == "<Return>" else "Escape"
+                if data.keysym != wanted:
+                    continue
+            if sequence in ("<Control-s>", "<Control-S>"):
+                modifiers = getattr(event, "modifiers", lambda: Qt.KeyboardModifier.NoModifier)()
+                if data.keysym.lower() != "s" or not (modifiers & Qt.KeyboardModifier.ControlModifier):
+                    continue
+            for callback in list(callbacks):
+                try:
+                    callback(data)
+                except Exception as exc:
+                    root = _root_of(watched)
+                    if root:
+                        root.report_callback_exception(type(exc), exc, exc.__traceback__)
+        return False
+
+
+def _ensure_global_filter():
+    global _global_filter
+    app = _ensure_app()
+    if _global_filter is None:
+        _global_filter = _GlobalEventFilter(app)
+        app.installEventFilter(_global_filter)
 
 
 def _dispatch_after(delay, callback):
@@ -177,6 +219,7 @@ _EVENT_TYPES = {
     "<FocusIn>": QEvent.Type.FocusIn,
     "<FocusOut>": QEvent.Type.FocusOut,
     "<KeyRelease>": QEvent.Type.KeyRelease,
+    "<MouseWheel>": QEvent.Type.Wheel,
     "<Return>": QEvent.Type.KeyPress,
     "<Escape>": QEvent.Type.KeyPress,
     "<Control-s>": QEvent.Type.KeyPress,
@@ -325,6 +368,7 @@ class Misc:
         return str(id(callback))
 
     def bind_all(self, sequence, callback, add=None):
+        _ensure_global_filter()
         _global_bindings.setdefault(sequence, [])
         if not add:
             _global_bindings[sequence] = []
