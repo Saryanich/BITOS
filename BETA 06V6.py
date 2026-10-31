@@ -3915,9 +3915,10 @@ class ModernFileExplorer:
         self.search_status.config(text="🔍 Поиск...")
         self.search_results = []
         
-        thread = threading.Thread(target=self._search_thread, args=(query,))
-        thread.daemon = True
-        thread.start()
+        if hasattr(self.bitos, "submit_background"):
+            self.bitos.submit_background(self._search_thread, query)
+        else:
+            threading.Thread(target=self._search_thread, args=(query,), daemon=True).start()
     
     def _search_thread(self, query):
         results = []
@@ -6943,9 +6944,10 @@ class BipInstallWindow:
         self.install_btn.config(state='disabled')
         self.status_label.config(text="⏳ Установка...")
         
-        thread = threading.Thread(target=self.install_process)
-        thread.daemon = True
-        thread.start()
+        if hasattr(self.bitos, "submit_background"):
+            self.bitos.submit_background(self.install_process)
+        else:
+            threading.Thread(target=self.install_process, daemon=True).start()
     
     def install_process(self):
         for i in range(101):
@@ -9037,7 +9039,7 @@ class BITOS:
     def _start_console_writer(self):
         def writer():
             while self._console_running:
-                time.sleep(0.3)
+                time.sleep(float(getattr(self, "console_flush_interval", 0.3)))
                 if not self._console_buffer:
                     continue
                 
@@ -9490,11 +9492,11 @@ class BITOS:
 
         cpu_count = max(1, os.cpu_count() or 1)
         profiles = {
-            0:   {"workers": min(16, max(8, cpu_count * 2)), "monitor": 5,  "autosave": 10, "effects": True},
-            25:  {"workers": min(8, max(6, cpu_count)),     "monitor": 7,  "autosave": 12, "effects": True},
-            50:  {"workers": min(6, max(4, cpu_count // 2 or 4)), "monitor": 10, "autosave": 15, "effects": True},
-            75:  {"workers": 3, "monitor": 15, "autosave": 20, "effects": False},
-            100: {"workers": 2, "monitor": 20, "autosave": 30, "effects": False},
+            0:   {"workers": min(16, max(8, cpu_count * 2)), "monitor": 5,  "autosave": 10, "flush": 0.3, "effects": True},
+            25:  {"workers": min(8, max(6, cpu_count)),     "monitor": 7,  "autosave": 12, "flush": 0.5, "effects": True},
+            50:  {"workers": min(6, max(4, cpu_count // 2 or 4)), "monitor": 10, "autosave": 15, "flush": 0.75, "effects": True},
+            75:  {"workers": 3, "monitor": 15, "autosave": 20, "flush": 1.0, "effects": False},
+            100: {"workers": 2, "monitor": 20, "autosave": 30, "flush": 1.5, "effects": False},
         }
         profile = profiles[percent]
         self.optimization_percent = percent
@@ -9502,6 +9504,7 @@ class BITOS:
         self.worker_limit = profile["workers"]
         self.error_monitor_interval = profile["monitor"]
         self.autosave_interval = profile["autosave"]
+        self.console_flush_interval = profile["flush"]
 
         # Ограничиваем именно фоновые задачи. GUI-поток и события Qt не блокируются.
         if hasattr(self, "_worker_executor_lock"):
@@ -9548,7 +9551,19 @@ class BITOS:
         os.replace(temp_path, config_path)
 
     def submit_background(self, target, *args, **kwargs):
-        """Запускает короткую фоновую задачу в управляемом пуле потоков."""
+        """Запускает короткую фоновую задачу с приоритетом, зависящим от профиля."""
+        def run_task():
+            try:
+                if platform.system() == "Windows":
+                    import ctypes
+                    priority = -2 if self.optimization_percent >= 75 else (-1 if self.optimization_percent >= 50 else 0)
+                    ctypes.windll.kernel32.SetThreadPriority(
+                        ctypes.windll.kernel32.GetCurrentThread(), priority
+                    )
+            except Exception:
+                pass
+            return target(*args, **kwargs)
+
         with self._worker_executor_lock:
             if self._worker_executor is None:
                 self._worker_executor = concurrent.futures.ThreadPoolExecutor(
@@ -9556,7 +9571,7 @@ class BITOS:
                     thread_name_prefix="BITOS-Worker"
                 )
             executor = self._worker_executor
-            return executor.submit(target, *args, **kwargs)
+            return executor.submit(run_task)
 
     def shutdown_background_workers(self, wait=False):
         """Корректно завершает пул при завершении BITOS."""
@@ -13523,11 +13538,13 @@ class SettingsWindow:
             highlightthickness=0, length=680
         )
         self.optimization_slider.pack(fill=tk.X, padx=24, pady=(4, 8))
-        for tick, title in enumerate(("0%", "25%", "50%", "75%", "100%")):
+        ticks_frame = tk.Frame(main, bg="white")
+        ticks_frame.pack(fill=tk.X, padx=24, pady=(0, 10))
+        for title in ("0%", "25%", "50%", "75%", "100%"):
             tk.Label(
-                main, text=title, font=("Segoe UI", 9, "bold"),
+                ticks_frame, text=title, font=("Segoe UI", 9, "bold"),
                 bg="white", fg="#526579"
-            ).place(relx=tick / 4, y=145, anchor="n")
+            ).pack(side=tk.LEFT, expand=True)
 
         descriptions = {
             0: "Штатный режим. Без дополнительных ограничений энергопотребления и фоновой активности.",
