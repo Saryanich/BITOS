@@ -11940,41 +11940,11 @@ class MultiMonitorManager:
             return False
     
     def _create_tkinter_desktop(self, monitor_index):
-        if monitor_index >= len(self.monitors):
+        """Совместимый alias: дополнительные экраны тоже запускаются только на Qt."""
+        if not PYQT_AVAILABLE:
+            print("[MultiMonitorManager] PyQt6 не установлен; дополнительный экран не запущен.")
             return False
-        monitor = self.monitors[monitor_index]
-        
-        script_code = f'''# -*- coding: utf-8 -*-
-import sys, json, tkinter as tk
-from datetime import datetime
-with open(r"{self.monitor_config_path}", 'r', encoding='utf-8') as f:
-    config = json.load(f)
-monitor = config['monitors'][{monitor_index}]
-root = tk.Tk()
-root.overrideredirect(True)
-root.geometry(f"{{monitor['width']}}x{{monitor['height']}}+{{monitor['x']}}+{{monitor['y']}}")
-root.configure(bg='#1e1e2e')
-time_label = tk.Label(root, text="", font=('Segoe UI', 64, 'bold'), fg='#cdd6f4', bg='#1e1e2e')
-time_label.pack(expand=True)
-def update_time():
-    time_label.config(text=datetime.now().strftime("%H:%M:%S"))
-    root.after(1000, update_time)
-update_time()
-root.mainloop()
-'''
-        script_path = os.path.join(self.temp_dir, f"monitor_tk_{monitor_index}.py")
-        with open(script_path, 'w', encoding='utf-8') as f:
-            f.write(script_code)
-        
-        try:
-            process = subprocess.Popen(
-                [sys.executable, script_path],
-                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            )
-            self.processes[monitor_index] = process
-            return True
-        except:
-            return False
+        return self._create_pyqt_desktop(monitor_index)
     
     def _generate_accurate_script(self, monitor_index):
         theme_cfg_path = os.path.join(self.config_path, "theme.cfg")
