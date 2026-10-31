@@ -8715,12 +8715,12 @@ class ErrorManager:
     
     def _patch_everything(self):
         """Патчинг всех компонентов для перехвата ошибок"""
-        self._patch_tkinter()
+        self._patch_qt()
         self._patch_threading()
         self._patch_functions()
     
-    def _patch_tkinter(self):
-        """Патчинг tkinter для перехвата ошибок"""
+    def _patch_qt(self):
+        """Патчинг Qt-виджетов для перехвата ошибок"""
         try:
             import qt_compat as tk
             
@@ -8731,9 +8731,9 @@ class ErrorManager:
             
             # Создаём новый обработчик
             def custom_report_callback(self_widget, exc, val, tb):
-                """Кастомный обработчик ошибок tkinter"""
-                error_msg = f"tkinter error: {exc.__name__}: {val}"
-                self._handle_exception(exc, val, tb, source="tkinter")
+                """Кастомный обработчик ошибок Qt"""
+                error_msg = f"Qt UI error: {exc.__name__}: {val}"
+                self._handle_exception(exc, val, tb, source="qt")
                 
                 # Вызываем оригинальный обработчик если есть
                 if self._original_report_callback:
@@ -8770,7 +8770,7 @@ class ErrorManager:
             tk.Misc.destroy = safe_destroy
             
         except Exception as e:
-            print(f"[ErrorManager] ⚠️ Не удалось пропатчить tkinter: {e}")
+            print(f"[ErrorManager] ⚠️ Не удалось настроить Qt-обработчики: {e}")
     
     def _patch_threading(self):
         """Патчинг threading для перехвата ошибок в потоках"""
@@ -9241,7 +9241,7 @@ class ErrorManager:
         sys.stdout = self._original_stdout
         sys.stderr = self._original_stderr
         
-        # Восстанавливаем tkinter
+        # Восстанавливаем обработчики Qt
         try:
             import qt_compat as tk
             if hasattr(self, '_original_report_callback'):
@@ -11906,7 +11906,7 @@ class MultiMonitorManager:
             if PYQT_AVAILABLE:
                 self._create_pyqt_desktop(i)
             else:
-                self._create_tkinter_desktop(i)
+                self._create_qt_desktop(i)
     
     def _create_pyqt_desktop(self, monitor_index):
         if monitor_index >= len(self.monitors):
@@ -11939,7 +11939,7 @@ class MultiMonitorManager:
         except:
             return False
     
-    def _create_tkinter_desktop(self, monitor_index):
+    def _create_qt_desktop(self, monitor_index):
         """Совместимый alias: дополнительные экраны тоже запускаются только на Qt."""
         if not PYQT_AVAILABLE:
             print("[MultiMonitorManager] PyQt6 не установлен; дополнительный экран не запущен.")
