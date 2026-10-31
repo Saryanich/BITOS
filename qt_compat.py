@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from PyQt6.QtCore import Qt, QTimer, QObject, QEvent, QPointF, QRectF, pyqtSignal, QThread
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetricsF, QPainter, QPen, QBrush, QPixmap, QImage,
-    QCursor, QTextCursor, QPolygonF
+    QCursor, QTextCursor, QPolygonF, QLinearGradient
 )
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QDialog, QWidget, QLabel as QLabelQt,
@@ -1038,6 +1038,12 @@ class Canvas(Misc, QWidget):
     def create_polygon(self, *coords, **options):
         return self._add("polygon", coords, **options)
 
+    def create_gradient(self, x1, y1, x2, y2, start_color, end_color, **options):
+        return self._add(
+            "gradient", (x1, y1, x2, y2),
+            start_color=start_color, end_color=end_color, **options
+        )
+
     def create_image(self, x, y, **options):
         return self._add("image", (x, y), **options)
 
@@ -1142,7 +1148,7 @@ class Canvas(Misc, QWidget):
             fm = QFontMetricsF(font)
             rect = fm.boundingRect(text)
             return (c[0] - rect.width()/2, c[1] - rect.height()/2, c[0] + rect.width()/2, c[1] + rect.height()/2)
-        if item["kind"] in ("rect", "oval"):
+        if item["kind"] in ("rect", "oval", "gradient"):
             return (min(c[0], c[2]), min(c[1], c[3]), max(c[0], c[2]), max(c[1], c[3]))
         if item["kind"] in ("line", "polygon"):
             xs, ys = c[0::2], c[1::2]
@@ -1255,7 +1261,13 @@ class Canvas(Misc, QWidget):
             if not outline or outline == "": pen.setStyle(Qt.PenStyle.NoPen)
             painter.setPen(pen)
             painter.setBrush(QBrush(QColor(fill)) if fill else Qt.BrushStyle.NoBrush)
-            if kind == "line" and len(c) >= 4:
+            if kind == "gradient" and len(c) >= 4:
+                gradient = QLinearGradient(float(c[0]), float(c[1])-self._scroll_y, float(c[0]), float(c[3])-self._scroll_y)
+                gradient.setColorAt(0.0, QColor(opt.get("start_color", bg)))
+                gradient.setColorAt(1.0, QColor(opt.get("end_color", bg)))
+                painter.fillRect(QRectF(float(c[0]), float(c[1])-self._scroll_y,
+                                        float(c[2])-float(c[0]), float(c[3])-float(c[1])), QBrush(gradient))
+            elif kind == "line" and len(c) >= 4:
                 for i in range(0, len(c)-2, 2):
                     painter.drawLine(QPointF(float(c[i]), float(c[i+1])-self._scroll_y),
                                      QPointF(float(c[i+2]), float(c[i+3])-self._scroll_y))
