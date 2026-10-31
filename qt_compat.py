@@ -149,8 +149,14 @@ def _event_data(widget, event):
             keysym = chr(key)
         except Exception:
             keysym = str(key)
+    try:
+        event_size = event.size()
+        event_width, event_height = int(event_size.width()), int(event_size.height())
+    except Exception:
+        event_width, event_height = int(widget.width()), int(widget.height())
     return SimpleNamespace(
         x=int(pos.x()), y=int(pos.y()), x_root=int(gx), y_root=int(gy),
+        width=event_width, height=event_height,
         widget=widget, keysym=keysym, keycode=key,
         num=1 if (button == Qt.MouseButton.LeftButton or buttons & Qt.MouseButton.LeftButton) else 3 if button == Qt.MouseButton.RightButton else 0,
         delta=getattr(event, "angleDelta", lambda: QPointF(0, 0))().y()
@@ -381,8 +387,14 @@ class Misc:
             pass
         fill = options.get("fill")
         expand = bool(options.get("expand"))
-        policy = QSizePolicy.Policy.Expanding if expand or fill in ("both", "x", "y") else QSizePolicy.Policy.Preferred
-        self.setSizePolicy(policy, policy)
+        horizontal_policy = QSizePolicy.Policy.Expanding if fill in ("both", "x") else QSizePolicy.Policy.Preferred
+        vertical_policy = QSizePolicy.Policy.Expanding if fill in ("both", "y") else QSizePolicy.Policy.Preferred
+        if expand:
+            if layout.direction() == QBoxLayout.Direction.LeftToRight:
+                horizontal_policy = QSizePolicy.Policy.Expanding
+            else:
+                vertical_policy = QSizePolicy.Policy.Expanding
+        self.setSizePolicy(horizontal_policy, vertical_policy)
         anchor = options.get("anchor")
         alignment = Qt.AlignmentFlag(0)
         if anchor in ("w", "nw", "sw"):
@@ -394,9 +406,8 @@ class Misc:
         elif anchor in ("s", "sw", "se"):
             alignment |= Qt.AlignmentFlag.AlignBottom
         stretch = 1 if expand else 0
-        if side == "right":
-            layout.addWidget(self, stretch, alignment)
-            layout.setAlignment(self, alignment)
+        if side in ("right", "bottom"):
+            layout.insertWidget(0, self, stretch, alignment)
         else:
             layout.addWidget(self, stretch, alignment)
         self._show_parent()
@@ -755,10 +766,10 @@ class Toplevel(Misc, QDialog):
         self.show()
 
 
-class Frame(Misc, QWidget):
+class Frame(Misc, QFrameQt):
     def __init__(self, parent=None, **options):
         host = _parent_widget(parent)
-        QWidget.__init__(self, host)
+        QFrameQt.__init__(self, host)
         self._init_misc(parent)
         self._deleted = False
         self._apply_options(options)
@@ -926,6 +937,7 @@ class Scrollbar(Misc, QScrollBar):
         self._init_misc(parent)
         self._deleted = False
         self._command = options.pop("command", None)
+        self.setRange(0, 1000)
         self.valueChanged.connect(self._notify)
         self._apply_options(options)
 
@@ -935,8 +947,13 @@ class Scrollbar(Misc, QScrollBar):
             except Exception: pass
 
     def set(self, first, last=None):
-        try: self.setValue(int(float(first) * max(1, self.maximum())))
-        except Exception: pass
+        try:
+            first_value = max(0.0, min(1.0, float(first)))
+            last_value = max(first_value, min(1.0, float(last if last is not None else 1.0)))
+            self.setPageStep(max(1, int((last_value - first_value) * max(1, self.maximum()))))
+            self.setValue(int(first_value * max(1, self.maximum())))
+        except Exception:
+            pass
 
 
 class _Variable:
@@ -1130,8 +1147,25 @@ class Canvas(Misc, QWidget):
         if item["kind"] in ("line", "polygon"):
             xs, ys = c[0::2], c[1::2]
             return (min(xs), min(ys), max(xs), max(ys))
-        if item["kind"] in ("image", "window"):
+        if item["kind"] == "image":
+            image = item["options"].get("image")
+            pixmap = getattr(image, "pixmap", image)
+            if isinstance(pixmap, QPixmap):
+                anchor = item["options"].get("anchor", "center")
+                x, y = float(c[0]), float(c[1])
+                x0 = x if anchor in ("nw", "w", "sw") else x - pixmap.width() / 2
+                y0 = y if anchor in ("nw", "n", "ne") else y - pixmap.height() / 2
+                return (x0, y0, x0 + pixmap.width(), y0 + pixmap.height())
             return (c[0]-10, c[1]-10, c[0]+10, c[1]+10)
+        if item["kind"] == "window":
+            widget = item["options"].get("widget")
+            width = int(item["options"].get("width", widget.sizeHint().width() if widget else 200) or 200)
+            height = int(item["options"].get("height", widget.sizeHint().height() if widget else 100) or 100)
+            x, y = float(c[0]), float(c[1])
+            anchor = item["options"].get("anchor", "center")
+            x0 = x if anchor in ("nw", "w", "sw") else x - width if anchor in ("ne", "e", "se") else x - width / 2
+            y0 = y if anchor in ("nw", "n", "ne") else y - height if anchor in ("sw", "s", "se") else y - height / 2
+            return (x0, y0, x0 + width, y0 + height)
         return None
 
     def tag_bind(self, tag, sequence, callback, add=None):
@@ -1158,6 +1192,7 @@ class Canvas(Misc, QWidget):
             amount = int(args[1]) * (20 if len(args) < 3 or args[2] == "units" else self.height())
             self._scroll_y = max(0, self._scroll_y + amount)
         self._update_canvas_windows()
+        self._notify_scroll()
         self.update()
 
     def yview_scroll(self, amount, what="units"):
@@ -1173,6 +1208,17 @@ class Canvas(Misc, QWidget):
         for item in self.items:
             if item["kind"] == "window": self._place_canvas_window(item)
 
+    def _notify_scroll(self):
+        if not self._yscrollcommand:
+            return
+        total = max(self.height(), self._scrollregion[3] if self._scrollregion else self.height())
+        first = min(1.0, self._scroll_y / max(1, total))
+        last = min(1.0, (self._scroll_y + self.height()) / max(1, total))
+        try:
+            self._yscrollcommand(first, last)
+        except Exception:
+            pass
+
     def configure(self, **options):
         self._tk_options.update(options)
         if "scrollregion" in options:
@@ -1180,6 +1226,7 @@ class Canvas(Misc, QWidget):
         if "yscrollcommand" in options:
             self._yscrollcommand = options["yscrollcommand"]
         self._apply_options({k:v for k,v in options.items() if k in ("bg","background","cursor")})
+        self._notify_scroll()
 
     config = configure
 
