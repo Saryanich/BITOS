@@ -694,7 +694,9 @@ class Misc:
             pass
 
     def _apply_options(self, options):
+        changed_options = dict(options)
         self._tk_options.update(options)
+        options = self._tk_options
         bg = options.get("bg", options.get("background"))
         fg = options.get("fg", options.get("foreground"))
         font = options.get("font")
@@ -782,9 +784,9 @@ class Misc:
                     self.setMinimumHeight(max(1, int(metrics.lineSpacing() * height_value)))
             except Exception:
                 pass
-        if "text" in options:
+        if "text" in changed_options:
             try:
-                if hasattr(self, "setText"): self.setText(str(options["text"]))
+                if hasattr(self, "setText"): self.setText(str(changed_options["text"]))
             except Exception:
                 pass
         if "justify" in options and isinstance(self, QLabelQt):
