@@ -295,12 +295,16 @@ class Misc:
 
     def winfo_exists(self):
         try:
-            return not self.isHidden() and not self._deleted
-        except Exception:
-            try:
-                return self.isVisible()
-            except Exception:
+            if getattr(self, "_deleted", False):
                 return False
+            # Tk reports existence independently of visibility. Touching a Qt
+            # method also detects wrappers whose C++ object was already deleted.
+            self.objectName()
+            return True
+        except (RuntimeError, AttributeError):
+            return False
+        except Exception:
+            return not getattr(self, "_deleted", True)
 
     def winfo_children(self):
         try:
@@ -567,8 +571,10 @@ class Misc:
             try:
                 normalized_state = str(state).lower()
                 self.setEnabled(normalized_state != "disabled")
-                if isinstance(self, QLineEdit):
+                        if isinstance(self, QLineEdit):
                     self.setReadOnly(normalized_state == "readonly")
+                if isinstance(self, QComboBox) and normalized_state in ("normal", "readonly"):
+                    self.setEditable(normalized_state == "normal")
             except Exception:
                 pass
         if cursor:
@@ -650,9 +656,23 @@ class Misc:
             self.setAlignment(flags.get(anchor, Qt.AlignmentFlag.AlignCenter))
         if isinstance(self, QLabelQt):
             self.setWordWrap(bool(options.get("wraplength") or options.get("wrap")))
-        if "relief" in options and options["relief"] not in ("flat",):
-            try: self.setFrameShape(QFrameQt.Shape.Panel)
-            except Exception: pass
+        if "relief" in options and isinstance(self, QFrameQt):
+            try:
+                relief = str(options["relief"]).lower()
+                if relief == "flat":
+                    self.setFrameShape(QFrameQt.Shape.NoFrame)
+                else:
+                    self.setFrameShape(QFrameQt.Shape.Box)
+                    shadow = {
+                        "raised": QFrameQt.Shadow.Raised,
+                        "sunken": QFrameQt.Shadow.Sunken,
+                        "ridge": QFrameQt.Shadow.Raised,
+                        "groove": QFrameQt.Shadow.Sunken,
+                        "solid": QFrameQt.Shadow.Plain
+                    }.get(relief, QFrameQt.Shadow.Plain)
+                    self.setFrameShadow(shadow)
+            except Exception:
+                pass
         self.update()
 
     def config(self, **options):
