@@ -9476,6 +9476,8 @@ class BITOS:
             os.makedirs(os.path.dirname(self.optimization_config_path), exist_ok=True)
             with open(self.optimization_config_path, "r", encoding="utf-8") as config_file:
                 config = json.load(config_file)
+            if not isinstance(config, dict):
+                raise ValueError("Некорректный формат performance.json")
             value = int(config.get("optimization_percent", 0))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             value = 0
@@ -9562,7 +9564,16 @@ class BITOS:
                     )
             except Exception:
                 pass
-            return target(*args, **kwargs)
+            try:
+                return target(*args, **kwargs)
+            except Exception as exc:
+                try:
+                    print(f"[BITOS BackgroundTask] {target.__name__}: {exc}")
+                    if hasattr(self, "security"):
+                        self.security.log_error("BackgroundTask", str(exc), target.__name__)
+                except Exception:
+                    pass
+                raise
 
         with self._worker_executor_lock:
             if self._worker_executor is None:
@@ -9587,15 +9598,15 @@ class BITOS:
         journal_path = os.path.join(transaction_dir, "update_transaction.json")
         if not os.path.isfile(journal_path):
             return True
-        base_root = os.path.realpath(self.base_path)
+        base_root = os.path.abspath(self.base_path)
         errors = []
         try:
             with open(journal_path, "r", encoding="utf-8") as journal_file:
                 journal = json.load(journal_file)
             for entry in reversed(journal.get("entries", [])):
-                destination = os.path.realpath(entry.get("destination", ""))
+                destination = os.path.abspath(entry.get("destination", ""))
                 backup_value = entry.get("backup")
-                backup = os.path.realpath(backup_value) if backup_value else None
+                backup = os.path.abspath(backup_value) if backup_value else None
                 try:
                     if os.path.commonpath([base_root, destination]) != base_root:
                         raise ValueError("Путь восстановления выходит за пределы BITOS")
@@ -14807,7 +14818,8 @@ class UpdateManager:
         if os.path.exists(self.update_status_file):
             try:
                 with open(self.update_status_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+                    return loaded if isinstance(loaded, dict) else {}
             except:
                 pass
         return {}
