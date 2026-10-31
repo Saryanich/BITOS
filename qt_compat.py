@@ -564,8 +564,13 @@ class Misc:
             try: self.setFont(_font_from(font))
             except Exception: pass
         if state is not None:
-            try: self.setEnabled(str(state).lower() not in ("disabled",))
-            except Exception: pass
+            try:
+                normalized_state = str(state).lower()
+                self.setEnabled(normalized_state != "disabled")
+                if isinstance(self, QLineEdit):
+                    self.setReadOnly(normalized_state == "readonly")
+            except Exception:
+                pass
         if cursor:
             try:
                 self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor if cursor == "hand2" else Qt.CursorShape.ArrowCursor))
@@ -620,6 +625,15 @@ class Misc:
                 if hasattr(self, "setText"): self.setText(str(options["text"]))
             except Exception:
                 pass
+        if "justify" in options and isinstance(self, QLabelQt):
+            justify = str(options["justify"]).lower()
+            current = self.alignment() & (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignBottom)
+            horizontal = {
+                "left": Qt.AlignmentFlag.AlignLeft,
+                "center": Qt.AlignmentFlag.AlignHCenter,
+                "right": Qt.AlignmentFlag.AlignRight
+            }.get(justify, Qt.AlignmentFlag.AlignHCenter)
+            self.setAlignment(current | horizontal)
         if "anchor" in options and isinstance(self, QLabelQt):
             anchor = options["anchor"]
             flags = {
@@ -642,6 +656,14 @@ class Misc:
         self.update()
 
     def config(self, **options):
+        if isinstance(self, QLabelQt) and "image" in options:
+            image = options["image"]
+            self._tk_image_ref = image
+            pixmap = getattr(image, "pixmap", image)
+            if isinstance(pixmap, QPixmap):
+                self.setPixmap(pixmap)
+            elif image in ("", None, False):
+                self.setPixmap(QPixmap())
         self._apply_options(options)
 
     configure = config
@@ -848,9 +870,15 @@ class Label(Misc, QLabelQt):
     def __init__(self, parent=None, **options):
         host = _parent_widget(parent)
         text = str(options.pop("text", ""))
+        image = options.pop("image", None)
         QLabelQt.__init__(self, text, host)
         self._init_misc(parent)
         self._deleted = False
+        self._tk_options["text"] = text
+        self._tk_image_ref = image
+        pixmap = getattr(image, "pixmap", image)
+        if isinstance(pixmap, QPixmap):
+            self.setPixmap(pixmap)
         self._apply_options(options)
 
 
@@ -876,8 +904,12 @@ class Entry(Misc, QLineEdit):
         QLineEdit.__init__(self, host)
         self._init_misc(parent)
         self._deleted = False
+        self._variable = options.pop("textvariable", None)
         show = options.pop("show", None)
         if show: self.setEchoMode(QLineEdit.EchoMode.Password)
+        if self._variable is not None:
+            self._variable.register_widget(lambda value: self.setText("" if value is None else str(value)))
+            self.textChanged.connect(self._variable.set)
         self._apply_options(options)
 
     def get(self):
@@ -891,10 +923,14 @@ class Entry(Misc, QLineEdit):
         self.setText(self.text()[:start] + self.text()[end:])
 
     def insert(self, index, value):
-        if index in (0, "0", "insert"):
+        if index in (0, "0"):
             self.setText(str(value) + self.text())
         elif index in ("end", "END"):
             self.setText(self.text() + str(value))
+        elif index == "insert":
+            pos = self.cursorPosition()
+            self.setText(self.text()[:pos] + str(value) + self.text()[pos:])
+            self.setCursorPosition(pos + len(str(value)))
         else:
             pos = max(0, int(index))
             self.setText(self.text()[:pos] + str(value) + self.text()[pos:])
