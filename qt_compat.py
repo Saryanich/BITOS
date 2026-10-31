@@ -405,11 +405,16 @@ class Misc:
             alignment |= Qt.AlignmentFlag.AlignTop
         elif anchor in ("s", "sw", "se"):
             alignment |= Qt.AlignmentFlag.AlignBottom
+        if side == "right":
+            alignment |= Qt.AlignmentFlag.AlignRight
+        elif side == "left":
+            alignment |= Qt.AlignmentFlag.AlignLeft
+        elif side == "bottom":
+            alignment |= Qt.AlignmentFlag.AlignBottom
+        elif side == "top":
+            alignment |= Qt.AlignmentFlag.AlignTop
         stretch = 1 if expand else 0
-        if side in ("right", "bottom"):
-            layout.insertWidget(0, self, stretch, alignment)
-        else:
-            layout.addWidget(self, stretch, alignment)
+        layout.addWidget(self, stretch, alignment)
         self._show_parent()
 
     def grid(self, **options):
@@ -553,13 +558,24 @@ class Misc:
                 self.setMaximum(int(options["to"]))
         if "width" in options:
             try:
-                metrics = QFontMetricsF(self.font())
-                self.setMinimumWidth(max(1, int(metrics.averageCharWidth() * float(options["width"]))))
+                width_value = max(1, int(float(options["width"])))
+                if isinstance(self, QFrameQt):
+                    self.setMinimumWidth(width_value)
+                else:
+                    metrics = QFontMetricsF(self.font())
+                    self.setMinimumWidth(max(1, int(metrics.averageCharWidth() * width_value)))
             except Exception:
                 pass
-        if "height" in options and not isinstance(self, (QTextEdit,)):
-            try: self.setMinimumHeight(max(1, int(options["height"] * 1.5)))
-            except Exception: pass
+        if "height" in options:
+            try:
+                height_value = max(1, int(float(options["height"])))
+                if isinstance(self, QFrameQt):
+                    self.setMinimumHeight(height_value)
+                else:
+                    metrics = QFontMetricsF(self.font())
+                    self.setMinimumHeight(max(1, int(metrics.lineSpacing() * height_value)))
+            except Exception:
+                pass
         if "text" in options:
             try:
                 if hasattr(self, "setText"): self.setText(str(options["text"]))
@@ -1474,10 +1490,15 @@ class Treeview(Misc, QTreeWidget):
         if not node: return {}
         if "values" in kwargs:
             values = kwargs["values"]
-            for i, value in enumerate(values, start=1):
+            start_column = 0 if self._tk_options.get("show") == "headings" else 1
+            for i, value in enumerate(values, start=start_column):
                 if i < self.columnCount(): node.setText(i, str(value))
         if "text" in kwargs: node.setText(0, str(kwargs["text"]))
-        result = {"text": node.text(0), "values": [node.text(i) for i in range(1, self.columnCount())]}
+        value_start = 0 if self._tk_options.get("show") == "headings" else 1
+        result = {
+            "text": node.text(0),
+            "values": [node.text(i) for i in range(value_start, self.columnCount())]
+        }
         return result.get(option, result) if option else result
 
     def delete(self, *iids):
@@ -1531,11 +1552,17 @@ class Treeview(Misc, QTreeWidget):
         bar = self.horizontalScrollBar()
         if args and args[0] == "moveto": bar.setValue(int(float(args[1]) * bar.maximum()))
 
+    def see(self, iid):
+        node = self._iid_map.get(str(iid))
+        if node:
+            self.scrollToItem(node)
+
     def tag_configure(self, tag, **options):
         pass
 
     def configure(self, **options):
         self._tk_options.update(options)
+        self._apply_options({k: v for k, v in options.items() if k in ("bg", "background", "fg", "foreground", "font")})
         yscroll = options.get("yscrollcommand")
         if callable(yscroll) and not getattr(self, "_tk_yscroll_connected", False):
             bar = self.verticalScrollBar()
