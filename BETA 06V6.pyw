@@ -8731,9 +8731,11 @@ class ErrorManager:
             
             # Патчим after для безопасности
             def safe_after(self_widget, ms, func=None, *args):
-                if not self_widget or not self_widget.winfo_exists():
+                if not self_widget:
                     return None
                 try:
+                    # qt_compat.after is thread-safe and validates the widget
+                    # when the queued callback reaches the GUI thread.
                     return self._original_after(self_widget, ms, func, *args)
                 except tk.TclError as e:
                     self._log_error("TclError", str(e), traceback.format_exc(), source="after")
