@@ -8705,7 +8705,7 @@ class ErrorManager:
     def _patch_tkinter(self):
         """Патчинг tkinter для перехвата ошибок"""
         try:
-            import tkinter as tk
+            import qt_compat as tk
             
             # Сохраняем оригинальные методы
             self._original_report_callback = tk.Tk.report_callback_exception
@@ -8811,7 +8811,7 @@ class ErrorManager:
     def _check_windows(self):
         """Проверка состояния окон"""
         try:
-            import tkinter as tk
+            import qt_compat as tk
             root = tk._default_root
             if root:
                 # Проверяем дочерние окна
@@ -9211,7 +9211,7 @@ class ErrorManager:
         
         # Восстанавливаем tkinter
         try:
-            import tkinter as tk
+            import qt_compat as tk
             if hasattr(self, '_original_report_callback'):
                 tk.Tk.report_callback_exception = self._original_report_callback
         except:
@@ -12216,7 +12216,7 @@ class UpdateManager:
         
         # Если не нашли - пробуем найти через tkinter
         try:
-            import tkinter as tk
+            import qt_compat as tk
             if tk._default_root:
                 print("[UpdateManager] ✅ Используем tk._default_root")
                 return tk._default_root
@@ -12686,7 +12686,7 @@ if __name__ == "__main__":
     def _close_application(self):
         """Корректное закрытие приложения"""
         try:
-            import tkinter as tk
+            import qt_compat as tk
             if tk._default_root:
                 tk._default_root.destroy()
         except:
