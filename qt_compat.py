@@ -1416,6 +1416,7 @@ class Progressbar(Misc, QProgressBar):
         QProgressBar.__init__(self, host)
         self._init_misc(parent)
         self._deleted = False
+        self.setTextVisible(False)
         self.setRange(0, int(options.pop("maximum", 100)))
         if "length" in options: self.setMinimumWidth(int(options.pop("length")))
         self._apply_options(options)
@@ -1485,8 +1486,15 @@ class Treeview(Misc, QTreeWidget):
         self._columns = list(options.pop("columns", []))
         self.setColumnCount(len(self._columns))
         self.setHeaderLabels(self._columns)
-        if options.get("show") == "tree": self.setRootIsDecorated(True)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        show_mode = options.get("show", "tree headings")
+        self.setHeaderHidden(show_mode == "tree")
+        self.setRootIsDecorated(show_mode != "headings")
+        selection_mode = options.get("selectmode", "browse")
+        self.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+            if selection_mode == "extended"
+            else QAbstractItemView.SelectionMode.SingleSelection
+        )
         if "height" in options: self.setMinimumHeight(int(options["height"] * 20))
         self._iid_map = {}
         self._apply_options(options)
@@ -1511,6 +1519,8 @@ class Treeview(Misc, QTreeWidget):
             item = QTreeWidgetItem([str(text)] + [str(v) for v in values])
         key = str(iid or id(item))
         item.setData(0, Qt.ItemDataRole.UserRole, key)
+        if options.get("tags"):
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, list(options["tags"]))
         self._iid_map[key] = item
         if parent:
             parent_item = self._iid_map.get(str(parent))
@@ -1539,7 +1549,8 @@ class Treeview(Misc, QTreeWidget):
         value_start = 0 if self._tk_options.get("show") == "headings" else 1
         result = {
             "text": node.text(0),
-            "values": [node.text(i) for i in range(value_start, self.columnCount())]
+            "values": [node.text(i) for i in range(value_start, self.columnCount())],
+            "tags": node.data(0, Qt.ItemDataRole.UserRole + 1) or []
         }
         return result.get(option, result) if option else result
 
