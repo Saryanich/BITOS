@@ -64,6 +64,44 @@ jobs:
               assert settings.notebook.count() == 1
               assert settings.optimization_slider.value() == 4
               runtime.shutdown_background_workers(wait=True)
+
+              # ZIP integrity/path checks.
+              import zipfile
+              manager = module.UpdateManager.__new__(module.UpdateManager)
+              good_zip = os.path.join(directory, "valid.zip")
+              with zipfile.ZipFile(good_zip, "w") as archive:
+                  archive.writestr("repo/BETA 06V6.py", "print('ok')\n")
+              assert manager._validate_update_archive(good_zip)
+              bad_zip = os.path.join(directory, "unsafe.zip")
+              with zipfile.ZipFile(bad_zip, "w") as archive:
+                  archive.writestr("repo/BETA 06V6.py", "print('ok')\n")
+                  archive.writestr("../escape.txt", "blocked")
+              try:
+                  manager._validate_update_archive(bad_zip)
+                  raise AssertionError("Unsafe ZIP path was accepted")
+              except ValueError:
+                  pass
+
+              # Simulate a power cut after one file was replaced: boot recovery restores backup.
+              base = os.path.join(directory, "bitos-root")
+              temp = os.path.join(base, "System", "Temp", "updates")
+              os.makedirs(os.path.join(temp, "backups"), exist_ok=True)
+              target = os.path.join(base, "sample.txt")
+              backup = os.path.join(temp, "backups", "sample.txt")
+              with open(target, "w", encoding="utf-8") as handle:
+                  handle.write("new")
+              with open(backup, "w", encoding="utf-8") as handle:
+                  handle.write("old")
+              journal_path = os.path.join(temp, "update_transaction.json")
+              with open(journal_path, "w", encoding="utf-8") as handle:
+                  json.dump({"entries": [{"destination": target, "backup": backup, "had_original": True}]}, handle)
+              recovery = module.BITOS.__new__(module.BITOS)
+              recovery.base_path = base
+              recovery.system_paths = {"temp": os.path.join(base, "System", "Temp")}
+              assert recovery._recover_update_transaction()
+              with open(target, encoding="utf-8") as handle:
+                  assert handle.read() == "old"
+              assert not os.path.exists(journal_path)
           root.close()
           app.quit()
           print("PyQt widgets, optimization levels, config persistence and worker pool: OK")
