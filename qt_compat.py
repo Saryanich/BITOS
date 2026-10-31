@@ -481,11 +481,21 @@ class Misc:
     def iconbitmap(self, *args, **kwargs):
         return None
 
-    def grid_rowconfigure(self, *args, **kwargs):
-        return None
+    def grid_rowconfigure(self, index, **options):
+        layout = self.layout()
+        if isinstance(layout, QGridLayout):
+            weight = int(options.get("weight", 0) or 0)
+            layout.setRowStretch(int(index), weight)
+            if "minsize" in options:
+                layout.setRowMinimumHeight(int(index), int(options["minsize"]))
 
-    def grid_columnconfigure(self, *args, **kwargs):
-        return None
+    def grid_columnconfigure(self, index, **options):
+        layout = self.layout()
+        if isinstance(layout, QGridLayout):
+            weight = int(options.get("weight", 0) or 0)
+            layout.setColumnStretch(int(index), weight)
+            if "minsize" in options:
+                layout.setColumnMinimumWidth(int(index), int(options["minsize"]))
 
     rowconfigure = grid_rowconfigure
     columnconfigure = grid_columnconfigure
@@ -575,7 +585,7 @@ class Misc:
             return
         layout = parent.layout()
         if layout is None:
-            layout = TkPackLayout(parent)
+            layout = TkPackLayout()
             parent.setLayout(layout)
         if not isinstance(layout, TkPackLayout):
             raise TclError("Нельзя смешивать pack и grid в одном контейнере")
@@ -834,9 +844,11 @@ class Tk(Misc, QMainWindow):
 
     def mainloop(self, *args, **kwargs):
         global _loop_running
+        # Tkinter allows a new Toplevel/root to be shown while another event
+        # loop is already running. Show first; only the outer call owns exec().
+        self.show()
         if _loop_running:
             return
-        self.show()
         _loop_running = True
         try:
             _ensure_app().exec()
