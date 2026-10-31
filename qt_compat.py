@@ -571,7 +571,7 @@ class Misc:
             try:
                 normalized_state = str(state).lower()
                 self.setEnabled(normalized_state != "disabled")
-                        if isinstance(self, QLineEdit):
+                if isinstance(self, QLineEdit):
                     self.setReadOnly(normalized_state == "readonly")
                 if isinstance(self, QComboBox) and normalized_state in ("normal", "readonly"):
                     self.setEditable(normalized_state == "normal")
