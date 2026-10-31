@@ -710,13 +710,14 @@ class Misc:
                 normalized_state = str(state).lower()
                 if isinstance(self, (QTextEdit, QPlainTextEdit)):
                     self.setEnabled(True)
-                    self.setReadOnly(normalized_state == "disabled")
+                    self.setReadOnly(normalized_state in ("disabled", "readonly"))
                 elif isinstance(self, QLineEdit):
-                    self.setEnabled(True)
+                    self.setEnabled(normalized_state != "disabled")
                     self.setReadOnly(normalized_state == "readonly")
-                elif isinstance(self, QComboBox) and normalized_state in ("normal", "readonly"):
-                    self.setEnabled(True)
-                    self.setEditable(normalized_state == "normal")
+                elif isinstance(self, QComboBox):
+                    self.setEnabled(normalized_state != "disabled")
+                    if normalized_state in ("normal", "readonly"):
+                        self.setEditable(normalized_state == "normal")
                 else:
                     self.setEnabled(normalized_state != "disabled")
             except Exception:
