@@ -261,7 +261,10 @@ class Misc:
 
     def winfo_children(self):
         try:
-            return [x for x in self.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly)]
+            container = self.centralWidget() if isinstance(self, QMainWindow) else self
+            if container is None:
+                container = self
+            return [x for x in container.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly)]
         except Exception:
             return []
 
@@ -902,7 +905,7 @@ class Checkbutton(Misc, QCheckBox):
         self._deleted = False
         self._variable = variable
         if variable is not None:
-            self.setChecked(bool(variable.get()))
+            variable.register_widget(lambda value: self.setChecked(bool(value)))
         self.stateChanged.connect(lambda value: variable.set(bool(value)) if variable is not None else None)
         if command: self.clicked.connect(command)
         self._apply_options(options)
@@ -921,7 +924,7 @@ class Radiobutton(Misc, QRadioButton):
         self._variable = variable
         self._value = value
         if variable is not None:
-            self.setChecked(variable.get() == value)
+            variable.register_widget(lambda selected: self.setChecked(selected == value))
         def sync(checked):
             if checked and variable is not None:
                 variable.set(value)
@@ -982,15 +985,24 @@ class _Variable:
     def __init__(self, master=None, value=None):
         self._value = value
         self._traces = []
+        self._widgets = []
 
     def get(self):
         return self._value
 
     def set(self, value):
         self._value = value
+        for setter in list(self._widgets):
+            try: setter(value)
+            except Exception: pass
         for callback in list(self._traces):
             try: callback()
             except Exception: pass
+
+    def register_widget(self, setter):
+        self._widgets.append(setter)
+        try: setter(self._value)
+        except Exception: pass
 
     def trace_add(self, mode, callback):
         self._traces.append(lambda: callback("", "", mode))
@@ -1339,7 +1351,8 @@ class Canvas(Misc, QWidget):
                 flags = Qt.AlignmentFlag.AlignLeft
                 if opt.get("justify") == "center": flags = Qt.AlignmentFlag.AlignHCenter
                 elif opt.get("justify") == "right": flags = Qt.AlignmentFlag.AlignRight
-                if text_width > 0: flags |= Qt.AlignmentFlag.TextWordWrap
+                if text_width > 0:
+                    flags = Qt.AlignmentFlag(int(flags) | int(Qt.TextFlag.TextWordWrap))
                 painter.drawText(draw_rect, flags | Qt.AlignmentFlag.AlignVCenter, text)
             elif kind == "image" and len(c) >= 2:
                 image = opt.get("image")
@@ -1428,7 +1441,7 @@ class Combobox(Misc, QComboBox):
         state = options.pop("state", None)
         if state == "readonly": self.setEditable(False)
         if self._variable is not None:
-            self.setCurrentText(str(self._variable.get()))
+            self._variable.register_widget(lambda value: self.setCurrentText(str(value)))
             self.currentTextChanged.connect(self._variable.set)
         self._apply_options(options)
 
