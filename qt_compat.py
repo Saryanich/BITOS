@@ -135,6 +135,7 @@ def _event_data(widget, event):
     except Exception:
         gx, gy = 0, 0
     button = getattr(event, "button", lambda: Qt.MouseButton.NoButton)()
+    buttons = getattr(event, "buttons", lambda: Qt.MouseButton.NoButton)()
     key = getattr(event, "key", lambda: 0)()
     key_names = {
         Qt.Key.Key_Return: "Return", Qt.Key.Key_Enter: "Return",
@@ -151,7 +152,7 @@ def _event_data(widget, event):
     return SimpleNamespace(
         x=int(pos.x()), y=int(pos.y()), x_root=int(gx), y_root=int(gy),
         widget=widget, keysym=keysym, keycode=key,
-        num=1 if button == Qt.MouseButton.LeftButton else 3 if button == Qt.MouseButton.RightButton else 0,
+        num=1 if (button == Qt.MouseButton.LeftButton or buttons & Qt.MouseButton.LeftButton) else 3 if button == Qt.MouseButton.RightButton else 0,
         delta=getattr(event, "angleDelta", lambda: QPointF(0, 0))().y()
     )
 
@@ -336,7 +337,8 @@ class Misc:
                 if data.keysym != wanted:
                     continue
             if sequence in ("<Control-s>", "<Control-S>"):
-                if data.keysym.lower() != "s" or not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                modifiers = getattr(event, "modifiers", lambda: Qt.KeyboardModifier.NoModifier)()
+                if data.keysym.lower() != "s" or not (modifiers & Qt.KeyboardModifier.ControlModifier):
                     continue
             for callback in list(callbacks):
                 try:
@@ -358,8 +360,8 @@ class Misc:
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
             parent.setLayout(layout)
-        if isinstance(layout, QBoxLayout):
-            layout.setDirection(QBoxLayout.Direction.LeftToRight if side in ("left", "right") else QBoxLayout.Direction.TopToBottom)
+        # Keep the direction selected by the first packed child. Reversing a
+        # populated Qt layout for each Tk side= argument would reorder every widget.
         padx, pady = options.get("padx", 0), options.get("pady", 0)
         try:
             if isinstance(padx, (tuple, list)):
@@ -634,6 +636,21 @@ class Tk(Misc, QMainWindow):
         if not width: self.setFixedWidth(self.width())
         if not height: self.setFixedHeight(self.height())
 
+    def minsize(self, width=None, height=None):
+        if width is not None or height is not None:
+            self.setMinimumSize(int(width or 0), int(height or 0))
+
+    def maxsize(self, width=None, height=None):
+        if width is not None or height is not None:
+            self.setMaximumSize(int(width or 16777215), int(height or 16777215))
+
+    def lift(self):
+        self.raise_()
+        self.activateWindow()
+
+    def iconify(self):
+        self.showMinimized()
+
     def protocol(self, name, callback):
         self._close_callback = callback
 
@@ -784,7 +801,7 @@ class Entry(Misc, QLineEdit):
 
     def delete(self, first=0, last=None):
         start = 0 if first in (0, "0") else max(0, int(first))
-        end = self.text().length() if False else self.text().__len__()
+        end = len(self.text())
         if last not in (None, "end", "END"):
             end = max(start, int(last))
         self.setText(self.text()[:start] + self.text()[end:])
@@ -1303,6 +1320,11 @@ class Combobox(Misc, QComboBox):
     def set(self, value):
         self.setCurrentText(str(value))
 
+    def current(self, index=None):
+        if index is None:
+            return self.currentIndex()
+        self.setCurrentIndex(int(index))
+
 
 class Notebook(Misc, QTabWidget):
     def __init__(self, parent=None, **options):
@@ -1397,6 +1419,18 @@ class Treeview(Misc, QTreeWidget):
 
     def selection(self):
         return tuple(str(x.data(0, Qt.ItemDataRole.UserRole)) for x in self.selectedItems())
+
+    def selection_anchor(self):
+        item = self.currentItem()
+        return str(item.data(0, Qt.ItemDataRole.UserRole)) if item else ""
+
+    def focus(self, iid=None):
+        if iid is None:
+            item = self.currentItem()
+            return str(item.data(0, Qt.ItemDataRole.UserRole)) if item else ""
+        item = self._iid_map.get(str(iid))
+        if item:
+            self.setCurrentItem(item)
 
     def selection_set(self, *iids):
         self.clearSelection()
