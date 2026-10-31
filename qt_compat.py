@@ -405,14 +405,6 @@ class Misc:
             alignment |= Qt.AlignmentFlag.AlignTop
         elif anchor in ("s", "sw", "se"):
             alignment |= Qt.AlignmentFlag.AlignBottom
-        if side == "right":
-            alignment |= Qt.AlignmentFlag.AlignRight
-        elif side == "left":
-            alignment |= Qt.AlignmentFlag.AlignLeft
-        elif side == "bottom":
-            alignment |= Qt.AlignmentFlag.AlignBottom
-        elif side == "top":
-            alignment |= Qt.AlignmentFlag.AlignTop
         stretch = 1 if expand else 0
         layout.addWidget(self, stretch, alignment)
         self._show_parent()
@@ -1208,11 +1200,16 @@ class Canvas(Misc, QWidget):
     lower = tag_lower
 
     def yview(self, *args):
+        content_height = max(
+            self.height(),
+            (self._scrollregion[3] - self._scrollregion[1]) if self._scrollregion else self.height()
+        )
+        max_scroll = max(0, content_height - self.height())
         if args and args[0] == "moveto":
-            self._scroll_y = max(0, int(float(args[1]) * (self._scrollregion[3] if self._scrollregion else self.height())))
+            self._scroll_y = max(0, min(max_scroll, int(float(args[1]) * max_scroll)))
         elif args and args[0] == "scroll":
             amount = int(args[1]) * (20 if len(args) < 3 or args[2] == "units" else self.height())
-            self._scroll_y = max(0, self._scroll_y + amount)
+            self._scroll_y = max(0, min(max_scroll, self._scroll_y + amount))
         self._update_canvas_windows()
         self._notify_scroll()
         self.update()
@@ -1233,7 +1230,10 @@ class Canvas(Misc, QWidget):
     def _notify_scroll(self):
         if not self._yscrollcommand:
             return
-        total = max(self.height(), self._scrollregion[3] if self._scrollregion else self.height())
+        total = max(
+            self.height(),
+            (self._scrollregion[3] - self._scrollregion[1]) if self._scrollregion else self.height()
+        )
         first = min(1.0, self._scroll_y / max(1, total))
         last = min(1.0, (self._scroll_y + self.height()) / max(1, total))
         try:
