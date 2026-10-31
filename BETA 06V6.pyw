@@ -8809,19 +8809,31 @@ class ErrorManager:
         thread.start()
     
     def _check_windows(self):
-        """Проверка состояния окон"""
+        """Проверка окон в GUI-потоке Qt."""
         try:
             import qt_compat as tk
             root = tk._default_root
-            if root:
-                # Проверяем дочерние окна
-                for child in root.winfo_children():
-                    try:
-                        if not child.winfo_exists():
-                            self._log_warning("WindowCheck", f"Обнаружено несуществующее окно: {child}")
-                    except:
-                        pass
-        except:
+            if not root:
+                return
+
+            def inspect_windows():
+                try:
+                    for child in root.winfo_children():
+                        try:
+                            if not child.winfo_exists():
+                                self._log_warning(
+                                    "WindowCheck",
+                                    f"Обнаружено несуществующее окно: {child}"
+                                )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            # Этот метод запускается монитором в фоне. Обращение к QWidget
+            # выполняется только после передачи callback основному Qt-потоку.
+            root.after(0, inspect_windows)
+        except Exception:
             pass
     
     def _check_memory(self):
@@ -11336,17 +11348,28 @@ class AutoSafe:
             print(f"[AutoSafe] ⚠️ Не удалось добавить пункт в контекстное меню: {e}")
     
     def _start_auto_save(self):
-        """Запуск фонового автоматического сохранения"""
+        """Фоновый таймер, но снимок Qt-виджетов — только в GUI-потоке."""
+        def check_and_save():
+            if not self._is_running or self._save_in_progress:
+                return
+            try:
+                if self._has_changes():
+                    self.save_all()
+            except Exception as e:
+                print(f"[AutoSafe] ⚠️ Ошибка автосохранения: {e}")
+
         def saver():
             while self._is_running:
                 try:
                     time.sleep(self.SAVE_INTERVAL)
-                    if not self._save_in_progress:
-                        if self._has_changes():
-                            self.save_all()
+                    if not self._is_running:
+                        break
+                    root = getattr(self.desktop, "root", None)
+                    if root and hasattr(root, "after"):
+                        root.after(0, check_and_save)
                 except Exception as e:
-                    print(f"[AutoSafe] ⚠️ Ошибка в фоновом сохранении: {e}")
-        
+                    print(f"[AutoSafe] ⚠️ Ошибка фонового таймера: {e}")
+
         thread = threading.Thread(target=saver, daemon=True, name="AutoSafe")
         thread.start()
     
