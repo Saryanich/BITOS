@@ -678,10 +678,16 @@ class Tk(Misc, QMainWindow):
         self._close_callback = callback
 
     def attributes(self, name, value=None):
-        if name in ("-alpha", "alpha") and value is not None:
+        if value is None:
+            return None
+        if name in ("-alpha", "alpha"):
             self.setWindowOpacity(float(value))
-        if name in ("-topmost", "topmost") and value is not None:
+        elif name in ("-topmost", "topmost"):
+            was_visible = self.isVisible()
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(value))
+            if was_visible: self.show()
+        elif name in ("-fullscreen", "fullscreen"):
+            self.showFullScreen() if bool(value) else self.showNormal()
 
     def report_callback_exception(self, exc, value, tb):
         import traceback
@@ -756,8 +762,16 @@ class Toplevel(Misc, QDialog):
             self.setParent(parent, self.windowFlags())
 
     def attributes(self, name, value=None):
-        if name in ("-alpha", "alpha") and value is not None:
+        if value is None:
+            return None
+        if name in ("-alpha", "alpha"):
             self.setWindowOpacity(float(value))
+        elif name in ("-topmost", "topmost"):
+            was_visible = self.isVisible()
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(value))
+            if was_visible: self.show()
+        elif name in ("-fullscreen", "fullscreen"):
+            self.showFullScreen() if bool(value) else self.showNormal()
 
     def closeEvent(self, event):
         callback = getattr(self, "_close_callback", None)
@@ -1167,8 +1181,8 @@ class Canvas(Misc, QWidget):
             if isinstance(pixmap, QPixmap):
                 anchor = item["options"].get("anchor", "center")
                 x, y = float(c[0]), float(c[1])
-                x0 = x if anchor in ("nw", "w", "sw") else x - pixmap.width() / 2
-                y0 = y if anchor in ("nw", "n", "ne") else y - pixmap.height() / 2
+                x0 = x if anchor in ("nw", "w", "sw") else x - pixmap.width() if anchor in ("ne", "e", "se") else x - pixmap.width() / 2
+                y0 = y if anchor in ("nw", "n", "ne") else y - pixmap.height() if anchor in ("sw", "s", "se") else y - pixmap.height() / 2
                 return (x0, y0, x0 + pixmap.width(), y0 + pixmap.height())
             return (c[0]-10, c[1]-10, c[0]+10, c[1]+10)
         if item["kind"] == "window":
@@ -1275,6 +1289,12 @@ class Canvas(Misc, QWidget):
             width = float(opt.get("width", 1) or 1)
             pen = QPen(QColor(outline if outline else fill if fill else "transparent"), width)
             if not outline or outline == "": pen.setStyle(Qt.PenStyle.NoPen)
+            if opt.get("capstyle") == "round":
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            if opt.get("joinstyle") == "round":
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            if opt.get("dash"):
+                pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(QBrush(QColor(fill)) if fill else Qt.BrushStyle.NoBrush)
             if kind == "gradient" and len(c) >= 4:
@@ -1302,7 +1322,12 @@ class Canvas(Misc, QWidget):
                 text = str(opt.get("text", ""))
                 anchor = opt.get("anchor", "center")
                 fm = QFontMetricsF(painter.font())
-                rect = fm.boundingRect(text)
+                text_width = float(opt.get("width", 0) or 0)
+                text_flags = Qt.TextFlag.TextWordWrap if text_width > 0 else Qt.TextFlag(0)
+                if text_width > 0:
+                    rect = fm.boundingRect(QRectF(0, 0, text_width, 10000), text_flags, text)
+                else:
+                    rect = fm.boundingRect(text)
                 x, y = float(c[0]), float(c[1])-self._scroll_y
                 if anchor in ("w","nw","sw"): x0=x
                 elif anchor in ("e","ne","se"): x0=x-rect.width()
@@ -1310,10 +1335,12 @@ class Canvas(Misc, QWidget):
                 if anchor in ("n","nw","ne"): y0=y
                 elif anchor in ("s","sw","se"): y0=y-rect.height()
                 else: y0=y-rect.height()/2
+                draw_rect = QRectF(x0, y0, max(rect.width(), 1), max(rect.height(), 1))
                 flags = Qt.AlignmentFlag.AlignLeft
                 if opt.get("justify") == "center": flags = Qt.AlignmentFlag.AlignHCenter
                 elif opt.get("justify") == "right": flags = Qt.AlignmentFlag.AlignRight
-                painter.drawText(QRectF(x0, y0, max(rect.width(), 1), max(rect.height(), 1)), flags | Qt.AlignmentFlag.AlignVCenter, text)
+                if text_width > 0: flags |= Qt.AlignmentFlag.TextWordWrap
+                painter.drawText(draw_rect, flags | Qt.AlignmentFlag.AlignVCenter, text)
             elif kind == "image" and len(c) >= 2:
                 image = opt.get("image")
                 pixmap = getattr(image, "pixmap", image)
@@ -1321,8 +1348,10 @@ class Canvas(Misc, QWidget):
                     x, y = float(c[0]), float(c[1])-self._scroll_y
                     anchor = opt.get("anchor", "center")
                     if anchor in ("nw","w","sw"): x0=x
+                    elif anchor in ("ne","e","se"): x0=x-pixmap.width()
                     else: x0=x-pixmap.width()/2
                     if anchor in ("nw","n","ne"): y0=y
+                    elif anchor in ("sw","s","se"): y0=y-pixmap.height()
                     else: y0=y-pixmap.height()/2
                     painter.drawPixmap(int(x0), int(y0), pixmap)
             painter.restore()
