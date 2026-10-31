@@ -293,14 +293,14 @@ class SplashScreen:
         except:
             r, g, b = 10, 10, 42
         
-        for i in range(self.height):
-            t = i / self.height
-            # Создаём градиент от темного к светлому
-            new_r = min(255, int(r + (255 - r) * t * 0.15))
-            new_g = min(255, int(g + (255 - g) * t * 0.15))
-            new_b = min(255, int(b + (255 - b) * t * 0.15))
-            color = f'#{new_r:02x}{new_g:02x}{new_b:02x}'
-            self.canvas.create_line(0, i, self.width, i, fill=color, tags='bg')
+        bottom = '#%02x%02x%02x' % (
+            min(255, int(r + (255 - r) * 0.15)),
+            min(255, int(g + (255 - g) * 0.15)),
+            min(255, int(b + (255 - b) * 0.15))
+        )
+        self.canvas.create_gradient(
+            0, 0, self.width, self.height, canvas_bg, bottom, tags='bg'
+        )
     
     def _hex_to_rgb(self, hex_color):
         """Преобразование HEX в RGB"""
@@ -538,13 +538,14 @@ class LoginScreen:
         except:
             r, g, b = 10, 10, 42
         
-        for i in range(self.height):
-            t = i / self.height
-            new_r = min(255, int(r + (255 - r) * t * 0.15))
-            new_g = min(255, int(g + (255 - g) * t * 0.15))
-            new_b = min(255, int(b + (255 - b) * t * 0.15))
-            color = f'#{new_r:02x}{new_g:02x}{new_b:02x}'
-            self.canvas.create_line(0, i, self.width, i, fill=color, tags='bg')
+        bottom = '#%02x%02x%02x' % (
+            min(255, int(r + (255 - r) * 0.15)),
+            min(255, int(g + (255 - g) * 0.15)),
+            min(255, int(b + (255 - b) * 0.15))
+        )
+        self.canvas.create_gradient(
+            0, 0, self.width, self.height, canvas_bg, bottom, tags='bg'
+        )
     
     def _hex_to_rgb(self, hex_color):
         """Преобразование HEX в RGB"""
