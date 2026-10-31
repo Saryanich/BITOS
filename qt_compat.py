@@ -307,7 +307,7 @@ class TkPackLayout(QLayout):
         vertical = sum(r["height"] + sum(r["pady"]) for r in rows if r["side"] in ("top", "bottom"))
         middle_w = max([r["width"] for r in rows if r["side"] in ("top", "bottom")] or [0])
         middle_h = max([r["height"] for r in rows if r["side"] in ("left", "right")] or [0])
-        return QSize(max(horizontal, middle_w), vertical + middle_h)
+        return QSize(horizontal + middle_w, vertical + middle_h)
 
     def minimumSize(self):
         return self.sizeHint()
@@ -438,6 +438,10 @@ class Misc:
             holder["cancelled"] = True
         try:
             self._deleted = True
+            if not self._tk_is_root:
+                parent = self.parentWidget()
+                if parent is not None and parent.layout() is not None:
+                    parent.layout().removeWidget(self)
             self.hide()
             if self._tk_is_root:
                 _root_windows.discard(self)
