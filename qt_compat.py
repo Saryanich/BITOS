@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from PyQt6.QtCore import Qt, QTimer, QObject, QEvent, QPointF, QRectF, pyqtSignal, QThread
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetricsF, QPainter, QPen, QBrush, QPixmap, QImage,
-    QCursor, QTextCursor, QPolygonF, QLinearGradient
+    QCursor, QTextCursor, QTextCharFormat, QPolygonF, QLinearGradient
 )
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QDialog, QWidget, QLabel as QLabelQt,
@@ -865,17 +865,43 @@ class Text(Misc, QTextEdit):
         QTextEdit.__init__(self, host)
         self._init_misc(parent)
         self._deleted = False
+        self._tag_styles = {}
         if options.get("wrap") == "none":
             self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._apply_options(options)
 
-    def insert(self, index, value):
+    def tag_config(self, tag, **options):
+        self._tag_styles[str(tag)] = dict(options)
+
+    tag_configure = tag_config
+
+    def insert(self, index, value, *tags):
         cursor = self.textCursor()
         if index in ("1.0", "0.0", "0"):
             cursor.movePosition(QTextCursor.MoveOperation.Start)
         else:
             cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(str(value))
+        char_format = QTextCharFormat()
+        for tag in tags:
+            for key, option in self._tag_styles.get(str(tag), {}).items():
+                try:
+                    if key in ("foreground", "fg"):
+                        char_format.setForeground(QColor(option))
+                    elif key in ("background", "bg"):
+                        char_format.setBackground(QColor(option))
+                    elif key == "font":
+                        char_format.setFont(_font_from(option))
+                    elif key == "underline":
+                        char_format.setFontUnderline(bool(option))
+                    elif key == "italic":
+                        char_format.setFontItalic(bool(option))
+                    elif key == "bold" and option:
+                        font = char_format.font()
+                        font.setBold(True)
+                        char_format.setFont(font)
+                except Exception:
+                    pass
+        cursor.insertText(str(value), char_format)
         self.setTextCursor(cursor)
 
     def delete(self, first="1.0", last="end"):
