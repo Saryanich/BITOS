@@ -14,6 +14,7 @@ from pathlib import Path
 import qt_compat as tk
 from qt_compat import ttk, messagebox, scrolledtext, filedialog
 import threading
+import queue
 
 try:
     import ctypes
@@ -9340,7 +9341,6 @@ class SoundClickPlayer:
         
         # Потоки громкости: команды сериализуются, чтобы UI не ждал WinAPI.
         self._monitor_thread = None
-        import queue
         self._volume_queue = queue.Queue(maxsize=1)
         self._volume_worker = threading.Thread(
             target=self._volume_worker_loop,
