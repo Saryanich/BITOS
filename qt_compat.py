@@ -181,6 +181,7 @@ _EVENT_TYPES = {
 class Misc:
     def _init_misc(self, parent=None, is_root=False):
         self._tk_parent = parent
+        self.master = parent
         self._root_owner = self if is_root else _root_of(parent)
         self._tk_is_root = bool(is_root)
         self._tk_bindings = {}
@@ -193,9 +194,12 @@ class Misc:
         except Exception:
             pass
 
-    def after(self, milliseconds, callback=None):
+    def after(self, milliseconds, callback=None, *args):
         if callback is None:
             callback = lambda: None
+        elif args:
+            original_callback = callback
+            callback = lambda: original_callback(*args)
         timer_id = next(_after_ids)
         holder = {"cancelled": False}
 
