@@ -11,8 +11,8 @@ import hashlib
 import string
 from datetime import datetime
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
+import qt_compat as tk
+from qt_compat import ttk, messagebox, scrolledtext, filedialog
 import threading
 
 try:
@@ -53,7 +53,8 @@ def restart_windows():
 
 # Для работы с изображениями
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image
+    import qt_compat as ImageTk
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -361,14 +362,11 @@ class SplashScreen:
             pass
     
     def close(self):
-        """Закрытие экрана загрузки"""
-        for i in range(10, 0, -1):
-            try:
-                self.root.attributes('-alpha', i/10)
-                self.root.update()
-                time.sleep(0.02)
-            except:
-                pass
+        """Неблокирующее закрытие экрана загрузки."""
+        try:
+            self.root.setWindowOpacity(0.0)
+        except Exception:
+            pass
         self.root.destroy()
 
 
@@ -916,9 +914,11 @@ class LoginScreen:
             self.bitos.security.log_login_attempt(username, True)
             self.bitos.security.log_access(username, "LOGIN", "SUCCESS")
         
-        time.sleep(0.5)
-        self.root.destroy()
-        self.on_login(username)
+        def complete_login():
+            self.root.destroy()
+            self.on_login(username)
+
+        self.root.after(80, complete_login)
     
     def run(self):
         self.root.mainloop()
@@ -6757,11 +6757,15 @@ class BITOS:
         self.sound_path = os.path.join(self.base_path, "System", "Sounds")
         os.makedirs(self.sound_path, exist_ok=True)
         
-        self.initialize_filesystem()
-        self.security = SecurityManager(self)
-        
-        self._create_sound_files()
-        self.play_sound("startup")
+        # Файловая и звуковая инициализация не должна блокировать GUI-поток.
+        self._startup_complete = False
+        self._startup_error = None
+        self._startup_thread = threading.Thread(
+            target=self._startup_worker,
+            name="BITOSStartup",
+            daemon=True
+        )
+        self._startup_thread.start()
         
         # Менеджер мониторов - будет создан в after_login
         self.monitor_manager = None
@@ -7280,7 +7284,24 @@ class BITOS:
     
     # ==================== ЗАГРУЗКА ====================
     
+    def _startup_worker(self):
+        """Подготовка файловой системы и звука в отдельном потоке."""
+        try:
+            self.initialize_filesystem()
+            self.security = SecurityManager(self)
+            self._create_sound_files()
+            self.play_sound("startup")
+        except Exception as exc:
+            self._startup_error = exc
+            try:
+                print(f"[BITOS] Ошибка фоновой инициализации: {exc}")
+            except Exception:
+                pass
+        finally:
+            self._startup_complete = True
+
     def boot_sequence(self):
+        """Неблокирующая загрузка: Qt продолжает обрабатывать кадры и ввод."""
         splash = SplashScreen()
         stages = [
             (10, "Проверка компонентов...", "Сканирование системных модулей"),
@@ -7289,16 +7310,44 @@ class BITOS:
             (55, "Загрузка конфигурации...", "Чтение системных настроек"),
             (70, "Проверка безопасности...", "Анализ защищенных файлов"),
             (85, "Запуск служб...", "Инициализация сервисов"),
-            (95, "Подготовка интерфейса...", "Загрузка графических компонентов"),
-            (100, "Готов к работе!", "Добро пожаловать в BITOS 06V6")
+            (95, "Подготовка интерфейса...", "Загрузка графических компонентов")
         ]
-        for progress, status, details in stages:
-            splash.update_progress(progress, status, details)
-            time.sleep(0.3)
-        splash.close()
-        self.input_blocker.start_blocking()
-        login = LoginScreen(self.after_login, self)
-        login.run()
+        state = {"index": 0}
+
+        def finish_boot():
+            if self._startup_error is not None:
+                splash.close()
+                messagebox.showerror(
+                    "Ошибка запуска BITOS",
+                    f"Не удалось подготовить систему:\\n{self._startup_error}"
+                )
+                return
+            if not self._startup_complete:
+                splash.update_progress(97, "Завершение загрузки...", "Ожидание фоновых системных задач")
+                splash.root.after(80, finish_boot)
+                return
+
+            splash.update_progress(100, "Готов к работе!", "Добро пожаловать в BITOS 06V6")
+            splash.root.after(120, launch_login)
+
+        def launch_login():
+            splash.close()
+            self.input_blocker.start_blocking()
+            login = LoginScreen(self.after_login, self)
+            login.run()
+
+        def advance_stage():
+            index = state["index"]
+            if index < len(stages):
+                progress, status, details = stages[index]
+                splash.update_progress(progress, status, details)
+                state["index"] += 1
+                splash.root.after(110, advance_stage)
+            else:
+                finish_boot()
+
+        splash.root.after(0, advance_stage)
+        splash.root.mainloop()
     
     def after_login(self, username):
         self.current_user = username
@@ -9927,7 +9976,7 @@ class SettingsWindow:
             entry.insert(0, default_value)
             
             def pick_color():
-                from tkinter import colorchooser
+                from qt_compat import colorchooser
                 color = colorchooser.askcolor(title=f"Выберите цвет для {label}")[1]
                 if color:
                     entry.delete(0, tk.END)
@@ -9969,7 +10018,7 @@ class SettingsWindow:
         wallpaper_entry.insert(0, "Файл не выбран (будет градиент)")
         
         def browse_wallpaper():
-            from tkinter import filedialog
+            from qt_compat import filedialog
             file_path = filedialog.askopenfilename(
                 title="Выберите обои для темы",
                 filetypes=[("Изображения", "*.png *.jpg *.jpeg *.gif *.bmp"), ("Все файлы", "*.*")]
@@ -12093,7 +12142,7 @@ import threading
 import subprocess
 import platform
 from datetime import datetime
-from tkinter import messagebox
+from qt_compat import messagebox
 
 try:
     import requests
@@ -12716,9 +12765,7 @@ if __name__ == "__main__":
     if not PIL_AVAILABLE:
         print("⚠️ Рекомендуется установить Pillow для работы галереи:")
         print("   pip install Pillow")
-        time.sleep(2)
     if platform.system() == "Windows" and not WIN32_AVAILABLE:
         print("⚠️ Для определения флешек рекомендуется установить pywin32:")
         print("   pip install pywin32")
-        time.sleep(2)
     bitos = BITOS()
