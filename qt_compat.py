@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from PyQt6.QtCore import Qt, QTimer, QObject, QEvent, QPointF, QRectF, pyqtSignal, QThread
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetricsF, QPainter, QPen, QBrush, QPixmap, QImage,
-    QCursor, QTextCursor
+    QCursor, QTextCursor, QPolygonF
 )
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QDialog, QWidget, QLabel as QLabelQt,
@@ -44,8 +44,6 @@ def _ensure_app():
     global _app
     current = QApplication.instance()
     if current is None:
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
         current = QApplication(sys.argv[:1])
         current.setQuitOnLastWindowClosed(False)
         try:
@@ -99,7 +97,7 @@ def _parent_widget(parent):
 def _root_of(parent):
     current = parent
     while current is not None:
-        if getattr(current, "_is_root", False):
+        if getattr(current, "_tk_is_root", False):
             return current
         try:
             current = current.parentWidget()
@@ -230,13 +228,13 @@ class Misc:
         for holder in list(getattr(self, "_tk_after", {}).values()):
             holder["cancelled"] = True
         try:
+            self._deleted = True
+            self.hide()
             if self._tk_is_root:
                 _root_windows.discard(self)
-                self.close()
                 self.deleteLater()
                 _dispatch_after(0, _maybe_quit)
             else:
-                self.close()
                 self.deleteLater()
         except RuntimeError:
             pass
@@ -259,6 +257,18 @@ class Misc:
     def winfo_parent(self):
         p = self.parentWidget()
         return str(id(p)) if p else ""
+
+    def iconbitmap(self, *args, **kwargs):
+        return None
+
+    def grid_rowconfigure(self, *args, **kwargs):
+        return None
+
+    def grid_columnconfigure(self, *args, **kwargs):
+        return None
+
+    rowconfigure = grid_rowconfigure
+    columnconfigure = grid_columnconfigure
 
     def winfo_toplevel(self):
         root = _root_of(self)
@@ -458,8 +468,11 @@ class Misc:
 
     def update(self):
         try:
-            self.repaint()
-            _ensure_app().processEvents()
+            if self._tk_is_root:
+                self.repaint()
+                _ensure_app().processEvents()
+            else:
+                QWidget.update(self)
         except Exception:
             pass
 
@@ -511,6 +524,16 @@ class Misc:
         if css:
             try: self.setStyleSheet(" ".join(css))
             except Exception: pass
+        if isinstance(self, QProgressBar):
+            if "maximum" in options:
+                self.setMaximum(int(options["maximum"]))
+            if "value" in options:
+                self.setValue(int(float(options["value"])))
+        if isinstance(self, QSlider):
+            if "from_" in options:
+                self.setMinimum(int(options["from_"]))
+            if "to" in options:
+                self.setMaximum(int(options["to"]))
         if "width" in options:
             try:
                 metrics = QFontMetricsF(self.font())
@@ -587,7 +610,12 @@ class Tk(Misc, QMainWindow):
     def geometry(self, value=None):
         if value is None:
             return "%dx%d+%d+%d" % (self.width(), self.height(), self.x(), self.y())
-        match = re.match(r"^\s*(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?\s*$", str(value))
+        value = str(value)
+        position = re.match(r"^\s*([+-]\d+)([+-]\d+)\s*$", value)
+        if position:
+            self.move(int(position.group(1)), int(position.group(2)))
+            return
+        match = re.match(r"^\s*(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?\s*$", value)
         if match:
             self.resize(int(match.group(1)), int(match.group(2)))
             if match.group(3) is not None:
@@ -655,7 +683,12 @@ class Toplevel(Misc, QDialog):
     def geometry(self, value=None):
         if value is None:
             return "%dx%d+%d+%d" % (self.width(), self.height(), self.x(), self.y())
-        match = re.match(r"^\s*(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?\s*$", str(value))
+        value = str(value)
+        position = re.match(r"^\s*([+-]\d+)([+-]\d+)\s*$", value)
+        if position:
+            self.move(int(position.group(1)), int(position.group(2)))
+            return
+        match = re.match(r"^\s*(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?\s*$", value)
         if match:
             if int(match.group(1)) > 0 and int(match.group(2)) > 0:
                 self.resize(int(match.group(1)), int(match.group(2)))
@@ -1156,7 +1189,7 @@ class Canvas(Misc, QWidget):
                 painter.drawEllipse(rect)
             elif kind == "polygon" and len(c) >= 6:
                 pts = [QPointF(float(c[i]), float(c[i+1])-self._scroll_y) for i in range(0, len(c)-1, 2)]
-                painter.drawPolygon(*pts)
+                painter.drawPolygon(QPolygonF(pts))
             elif kind == "text" and len(c) >= 2:
                 painter.setFont(_font_from(opt.get("font")))
                 painter.setPen(QPen(QColor(fill or "black")))
@@ -1319,7 +1352,10 @@ class Treeview(Misc, QTreeWidget):
         except ValueError: return 0
 
     def insert(self, parent, index, iid=None, text="", values=(), **options):
-        item = QTreeWidgetItem([str(text)] + [str(v) for v in values])
+        if self._tk_options.get("show") == "headings":
+            item = QTreeWidgetItem([str(v) for v in values])
+        else:
+            item = QTreeWidgetItem([str(text)] + [str(v) for v in values])
         key = str(iid or id(item))
         item.setData(0, Qt.ItemDataRole.UserRole, key)
         self._iid_map[key] = item
