@@ -1230,6 +1230,16 @@ class Canvas(Misc, QWidget):
 
     config = configure
 
+    def wheelEvent(self, event):
+        delta = 0
+        try: delta = event.angleDelta().y()
+        except Exception: pass
+        if delta:
+            self.yview("scroll", -int(delta / 120) or (-1 if delta > 0 else 1), "units")
+            event.accept()
+        else:
+            event.ignore()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         bg = self._tk_options.get("bg", self._tk_options.get("background", "white"))
@@ -1508,6 +1518,40 @@ class Treeview(Misc, QTreeWidget):
     def xview(self, *args):
         bar = self.horizontalScrollBar()
         if args and args[0] == "moveto": bar.setValue(int(float(args[1]) * bar.maximum()))
+
+    def tag_configure(self, tag, **options):
+        pass
+
+    def configure(self, **options):
+        self._tk_options.update(options)
+        yscroll = options.get("yscrollcommand")
+        if callable(yscroll) and not getattr(self, "_tk_yscroll_connected", False):
+            bar = self.verticalScrollBar()
+            def notify(_value=None):
+                maximum = max(1, bar.maximum())
+                first = bar.value() / maximum
+                last = min(1.0, (bar.value() + bar.pageStep()) / maximum)
+                try: yscroll(first, last)
+                except Exception: pass
+            bar.valueChanged.connect(notify)
+            bar.rangeChanged.connect(lambda _a, _b: notify())
+            self._tk_yscroll_connected = True
+            notify()
+        xscroll = options.get("xscrollcommand")
+        if callable(xscroll) and not getattr(self, "_tk_xscroll_connected", False):
+            bar = self.horizontalScrollBar()
+            def notify_x(_value=None):
+                maximum = max(1, bar.maximum())
+                first = bar.value() / maximum
+                last = min(1.0, (bar.value() + bar.pageStep()) / maximum)
+                try: xscroll(first, last)
+                except Exception: pass
+            bar.valueChanged.connect(notify_x)
+            bar.rangeChanged.connect(lambda _a, _b: notify_x())
+            self._tk_xscroll_connected = True
+            notify_x()
+
+    config = configure
 
     def tag_configure(self, tag, **options):
         pass
