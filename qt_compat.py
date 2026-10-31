@@ -325,14 +325,14 @@ class TkPackLayout(QLayout):
         super().setGeometry(rect)
         cavity = QRect(rect)
         rows = self._metrics()
-        fixed_v = sum(r["height"] + sum(r["pady"]) for r in rows
-                      if r["side"] in ("top", "bottom") and not r["expand"])
-        fixed_h = sum(r["width"] + sum(r["padx"]) for r in rows
-                      if r["side"] in ("left", "right") and not r["expand"])
+        requested_v = sum(r["height"] + sum(r["pady"]) for r in rows
+                          if r["side"] in ("top", "bottom"))
+        requested_h = sum(r["width"] + sum(r["padx"]) for r in rows
+                          if r["side"] in ("left", "right"))
         expand_v = sum(1 for r in rows if r["expand"] and r["side"] in ("top", "bottom"))
         expand_h = sum(1 for r in rows if r["expand"] and r["side"] in ("left", "right"))
-        extra_v = max(0, cavity.height() - fixed_v) / max(1, expand_v) if expand_v else 0
-        extra_h = max(0, cavity.width() - fixed_h) / max(1, expand_h) if expand_h else 0
+        extra_v = max(0, cavity.height() - requested_v) / max(1, expand_v) if expand_v else 0
+        extra_h = max(0, cavity.width() - requested_h) / max(1, expand_h) if expand_h else 0
 
         for row in rows:
             side, options = row["side"], row["options"]
@@ -1753,7 +1753,9 @@ class Menu(Misc, QMenuQt):
         self.addSeparator()
 
     def add_cascade(self, label="", menu=None, **options):
-        self.addMenu(menu)
+        if menu is not None:
+            menu.setTitle(str(label))
+            self.addMenu(menu)
 
     def tk_popup(self, x, y):
         self.popup(QPointF(int(x), int(y)).toPoint())
