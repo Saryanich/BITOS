@@ -9622,6 +9622,11 @@ class BITOS:
                                     os.remove(destination)
                             os.makedirs(os.path.dirname(destination), exist_ok=True)
                             os.replace(backup, destination)
+                        elif not os.path.lexists(destination):
+                            raise FileNotFoundError(
+                                "Резервная копия исходного файла отсутствует, а исходный путь пуст: "
+                                + destination
+                            )
                     elif os.path.lexists(destination):
                         if os.path.isdir(destination) and not os.path.islink(destination):
                             shutil.rmtree(destination)
