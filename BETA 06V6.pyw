@@ -7428,6 +7428,11 @@ class BITOS:
         def on_desktop_close():
             self.input_blocker.stop_blocking()
             self._stop_console_writer()
+            try:
+                if hasattr(self, "autosafe") and self.autosafe:
+                    self.autosafe.stop()
+            except Exception:
+                pass
             if self.monitor_manager:
                 try:
                     self.monitor_manager.stop()
@@ -8747,11 +8752,10 @@ class ErrorManager:
             # Патчим destroy
             def safe_destroy(self_widget):
                 try:
-                    if not self_widget or not self_widget.winfo_exists():
-                        return
-                    self._original_destroy(self_widget)
-                except tk.TclError:
-                    pass  # Игнорируем ошибки удаления уже удалённых виджетов
+                    if self_widget:
+                        self._original_destroy(self_widget)
+                except (tk.TclError, RuntimeError):
+                    pass  # Игнорируем повторное удаление уже закрытого виджета
             
             tk.Misc.destroy = safe_destroy
             
@@ -8762,16 +8766,18 @@ class ErrorManager:
         """Патчинг threading для перехвата ошибок в потоках"""
         try:
             original_thread_run = threading.Thread.run
-            
-            def safe_thread_run(self):
+            self._original_thread_run = original_thread_run
+            error_manager = self
+
+            def safe_thread_run(thread_instance):
                 try:
-                    original_thread_run(self)
+                    original_thread_run(thread_instance)
                 except Exception as e:
-                    self._handle_exception(
+                    error_manager._handle_exception(
                         type(e), e, traceback.extract_tb(e.__traceback__),
-                        source=f"thread:{self.name}"
+                        source=f"thread:{thread_instance.name}"
                     )
-            
+
             threading.Thread.run = safe_thread_run
             
         except Exception as e:
