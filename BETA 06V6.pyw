@@ -12251,7 +12251,7 @@ class UpdateManager:
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
     
     def _find_root(self):
-        """Поиск главного окна tkinter"""
+        """Поиск главного окна Qt"""
         # Пробуем разные варианты
         for attr in ['root', 'window', 'master', 'main_window', 'app', 'gui', 'tk_root']:
             if hasattr(self.bitos, attr):
@@ -12260,7 +12260,7 @@ class UpdateManager:
                     print(f"[UpdateManager] ✅ Найдено главное окно: {attr}")
                     return obj
         
-        # Если не нашли - пробуем найти через tkinter
+        # Если не нашли - пробуем найти через Qt
         try:
             import qt_compat as tk
             if tk._default_root:
