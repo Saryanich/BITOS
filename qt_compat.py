@@ -858,6 +858,22 @@ class Entry(Misc, QLineEdit):
     def icursor(self, index):
         self.setCursorPosition(len(self.text()) if index == "end" else int(index))
 
+    def select_range(self, start, end):
+        first = max(0, int(start))
+        last = len(self.text()) if end in ("end", "END") else max(first, int(end))
+        self.setSelection(first, max(0, last - first))
+
+    selection_range = select_range
+
+    def selection_clear(self, start=0, end="end"):
+        self.deselect()
+
+    def selection_present(self):
+        return self.hasSelectedText()
+
+    def selection_get(self):
+        return self.selectedText()
+
 
 class Text(Misc, QTextEdit):
     def __init__(self, parent=None, **options):
