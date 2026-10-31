@@ -13,7 +13,7 @@ import math
 import itertools
 from types import SimpleNamespace
 
-from PyQt6.QtCore import Qt, QTimer, QObject, QEvent, QPointF, QRectF, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QTimer, QObject, QEvent, QPointF, QRect, QRectF, QSize, pyqtSignal, QThread
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetricsF, QPainter, QPen, QBrush, QPixmap, QImage,
     QCursor, QTextCursor, QTextCharFormat, QPolygonF, QLinearGradient
@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLineEdit, QTextEdit, QPlainTextEdit, QFrame as QFrameQt,
     QCheckBox, QRadioButton, QSlider, QScrollBar, QProgressBar, QComboBox,
     QTabWidget, QTreeWidget, QTreeWidgetItem, QMenu as QMenuQt,
-    QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout, QSizePolicy,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout, QLayout, QWidgetItem, QSizePolicy,
     QMessageBox, QFileDialog, QColorDialog, QStyleFactory, QAbstractItemView
 )
 
@@ -227,6 +227,161 @@ _EVENT_TYPES = {
 }
 
 
+class TkPackLayout(QLayout):
+    """Small QLayout implementing Tk's side-based pack geometry."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(0)
+
+    def addItem(self, item):
+        self._entries.append((item, {}))
+
+    def add_packed(self, widget, options):
+        self._entries.append((QWidgetItem(widget), dict(options)))
+        self.invalidate()
+
+    def count(self):
+        return len(self._entries)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._entries):
+            return self._entries[index][0]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._entries):
+            item, _options = self._entries.pop(index)
+            self.invalidate()
+            return item
+        return None
+
+    def removeWidget(self, widget):
+        for index, (item, _options) in enumerate(list(self._entries)):
+            if item.widget() is widget:
+                self.takeAt(index)
+                break
+
+    @staticmethod
+    def _pair(value):
+        if isinstance(value, (tuple, list)):
+            if len(value) >= 2:
+                return max(0, int(value[0])), max(0, int(value[1]))
+            if len(value) == 1:
+                return max(0, int(value[0])), max(0, int(value[0]))
+        try:
+            amount = max(0, int(value or 0))
+        except Exception:
+            amount = 0
+        return amount, amount
+
+    def _metrics(self):
+        rows = []
+        for item, options in self._entries:
+            widget = item.widget()
+            if widget is None:
+                continue
+            side = options.get("side", "top")
+            px1, px2 = self._pair(options.get("padx", 0))
+            py1, py2 = self._pair(options.get("pady", 0))
+            try:
+                hint = item.sizeHint()
+                minimum = item.minimumSize()
+                width = max(1, hint.width(), minimum.width()) + int(options.get("ipadx", 0) or 0) * 2
+                height = max(1, hint.height(), minimum.height()) + int(options.get("ipady", 0) or 0) * 2
+            except Exception:
+                width, height = max(1, widget.width()), max(1, widget.height())
+            rows.append({
+                "item": item, "options": options, "side": side,
+                "padx": (px1, px2), "pady": (py1, py2),
+                "width": width, "height": height,
+                "expand": bool(options.get("expand")),
+            })
+        return rows
+
+    def sizeHint(self):
+        rows = self._metrics()
+        horizontal = sum(r["width"] + sum(r["padx"]) for r in rows if r["side"] in ("left", "right"))
+        vertical = sum(r["height"] + sum(r["pady"]) for r in rows if r["side"] in ("top", "bottom"))
+        middle_w = max([r["width"] for r in rows if r["side"] in ("top", "bottom")] or [0])
+        middle_h = max([r["height"] for r in rows if r["side"] in ("left", "right")] or [0])
+        return QSize(max(horizontal, middle_w), vertical + middle_h)
+
+    def minimumSize(self):
+        return self.sizeHint()
+
+    def expandingDirections(self):
+        directions = Qt.Orientation(0)
+        for _item, options in self._entries:
+            if options.get("expand") or options.get("fill") in ("both", "x"):
+                directions |= Qt.Orientation.Horizontal
+            if options.get("expand") or options.get("fill") in ("both", "y"):
+                directions |= Qt.Orientation.Vertical
+        return directions
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        cavity = QRect(rect)
+        rows = self._metrics()
+        fixed_v = sum(r["height"] + sum(r["pady"]) for r in rows
+                      if r["side"] in ("top", "bottom") and not r["expand"])
+        fixed_h = sum(r["width"] + sum(r["padx"]) for r in rows
+                      if r["side"] in ("left", "right") and not r["expand"])
+        expand_v = sum(1 for r in rows if r["expand"] and r["side"] in ("top", "bottom"))
+        expand_h = sum(1 for r in rows if r["expand"] and r["side"] in ("left", "right"))
+        extra_v = max(0, cavity.height() - fixed_v) / max(1, expand_v) if expand_v else 0
+        extra_h = max(0, cavity.width() - fixed_h) / max(1, expand_h) if expand_h else 0
+
+        for row in rows:
+            side, options = row["side"], row["options"]
+            padx1, padx2 = row["padx"]
+            pady1, pady2 = row["pady"]
+            expand = row["expand"]
+            if side in ("top", "bottom"):
+                parcel_height = row["height"] + pady1 + pady2 + (extra_v if expand else 0)
+                parcel_height = min(max(0, int(round(parcel_height))), max(0, cavity.height()))
+                if side == "top":
+                    parcel = QRect(cavity.x(), cavity.y(), cavity.width(), parcel_height)
+                    cavity.setY(cavity.y() + parcel_height)
+                else:
+                    parcel = QRect(cavity.x(), cavity.bottom() - parcel_height + 1, cavity.width(), parcel_height)
+                cavity.setHeight(max(0, cavity.height() - parcel_height))
+            elif side in ("left", "right"):
+                parcel_width = row["width"] + padx1 + padx2 + (extra_h if expand else 0)
+                parcel_width = min(max(0, int(round(parcel_width))), max(0, cavity.width()))
+                if side == "left":
+                    parcel = QRect(cavity.x(), cavity.y(), parcel_width, cavity.height())
+                    cavity.setX(cavity.x() + parcel_width)
+                else:
+                    parcel = QRect(cavity.right() - parcel_width + 1, cavity.y(), parcel_width, cavity.height())
+                cavity.setWidth(max(0, cavity.width() - parcel_width))
+            else:
+                parcel = QRect(cavity)
+
+            inner = parcel.adjusted(padx1, pady1, -padx2, -pady2)
+            fill = options.get("fill")
+            target_w = inner.width() if fill in ("both", "x") else min(inner.width(), row["width"])
+            target_h = inner.height() if fill in ("both", "y") else min(inner.height(), row["height"])
+            target_w = max(0, target_w)
+            target_h = max(0, target_h)
+            anchor = str(options.get("anchor", "center")).lower()
+            if anchor in ("w", "nw", "sw"):
+                x = inner.left()
+            elif anchor in ("e", "ne", "se"):
+                x = inner.right() - target_w + 1
+            else:
+                x = inner.left() + (inner.width() - target_w) // 2
+            if anchor in ("n", "nw", "ne"):
+                y = inner.top()
+            elif anchor in ("s", "sw", "se"):
+                y = inner.bottom() - target_h + 1
+            else:
+                y = inner.top() + (inner.height() - target_h) // 2
+            row["item"].setGeometry(QRect(int(x), int(y), int(target_w), int(target_h)))
+
+
 class Misc:
     def _init_misc(self, parent=None, is_root=False):
         self._tk_parent = parent
@@ -415,49 +570,16 @@ class Misc:
         if parent is None:
             return
         layout = parent.layout()
-        side = options.get("side", "top")
         if layout is None:
-            layout = QHBoxLayout() if side in ("left", "right") else QVBoxLayout()
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(0)
+            layout = TkPackLayout(parent)
             parent.setLayout(layout)
-        # Keep the direction selected by the first packed child. Reversing a
-        # populated Qt layout for each Tk side= argument would reorder every widget.
-        padx, pady = options.get("padx", 0), options.get("pady", 0)
-        try:
-            if isinstance(padx, (tuple, list)):
-                left, right = int(padx[0]), int(padx[1])
-            else:
-                left = right = int(padx)
-            if isinstance(pady, (tuple, list)):
-                top, bottom = int(pady[0]), int(pady[1])
-            else:
-                top = bottom = int(pady)
-            self.setContentsMargins(left, top, right, bottom)
-        except Exception:
-            pass
+        if not isinstance(layout, TkPackLayout):
+            raise TclError("Нельзя смешивать pack и grid в одном контейнере")
         fill = options.get("fill")
-        expand = bool(options.get("expand"))
         horizontal_policy = QSizePolicy.Policy.Expanding if fill in ("both", "x") else QSizePolicy.Policy.Preferred
         vertical_policy = QSizePolicy.Policy.Expanding if fill in ("both", "y") else QSizePolicy.Policy.Preferred
-        if expand:
-            if layout.direction() == QBoxLayout.Direction.LeftToRight:
-                horizontal_policy = QSizePolicy.Policy.Expanding
-            else:
-                vertical_policy = QSizePolicy.Policy.Expanding
         self.setSizePolicy(horizontal_policy, vertical_policy)
-        anchor = options.get("anchor")
-        alignment = Qt.AlignmentFlag(0)
-        if anchor in ("w", "nw", "sw"):
-            alignment |= Qt.AlignmentFlag.AlignLeft
-        elif anchor in ("e", "ne", "se"):
-            alignment |= Qt.AlignmentFlag.AlignRight
-        if anchor in ("n", "nw", "ne"):
-            alignment |= Qt.AlignmentFlag.AlignTop
-        elif anchor in ("s", "sw", "se"):
-            alignment |= Qt.AlignmentFlag.AlignBottom
-        stretch = 1 if expand else 0
-        layout.addWidget(self, stretch, alignment)
+        layout.add_packed(self, options)
         self._show_parent()
 
     def grid(self, **options):
