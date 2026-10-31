@@ -706,11 +706,17 @@ class Misc:
         if state is not None:
             try:
                 normalized_state = str(state).lower()
-                self.setEnabled(normalized_state != "disabled")
-                if isinstance(self, QLineEdit):
+                if isinstance(self, (QTextEdit, QPlainTextEdit)):
+                    self.setEnabled(True)
+                    self.setReadOnly(normalized_state == "disabled")
+                elif isinstance(self, QLineEdit):
+                    self.setEnabled(True)
                     self.setReadOnly(normalized_state == "readonly")
-                if isinstance(self, QComboBox) and normalized_state in ("normal", "readonly"):
+                elif isinstance(self, QComboBox) and normalized_state in ("normal", "readonly"):
+                    self.setEnabled(True)
                     self.setEditable(normalized_state == "normal")
+                else:
+                    self.setEnabled(normalized_state != "disabled")
             except Exception:
                 pass
         if cursor:
@@ -723,8 +729,22 @@ class Misc:
             css.append("background-color: " + str(bg) + ";")
         if fg:
             css.append("color: " + str(fg) + ";")
-        if options.get("bd") == 0 or options.get("borderwidth") == 0:
+        border_width = options.get("bd", options.get("borderwidth"))
+        highlight_width = options.get("highlightthickness")
+        if isinstance(self, QFrameQt):
+            if border_width is not None:
+                try: self.setLineWidth(max(0, int(border_width)))
+                except Exception: pass
+            if highlight_width is not None and int(highlight_width) == 0:
+                css.append("border: 0px;")
+        elif border_width == 0:
             css.append("border: 0px;")
+        if highlight_width is not None and int(highlight_width or 0) > 0:
+            normal_border = options.get("highlightbackground", options.get("highlightcolor", "#9AA4AE"))
+            focus_border = options.get("highlightcolor", normal_border)
+            css.append("border: %spx solid %s;" % (int(highlight_width), normal_border))
+            if isinstance(self, QLineEdit):
+                css.append("QLineEdit:focus { border: %spx solid %s; }" % (int(highlight_width), focus_border))
         if isinstance(self, QPushButton):
             css.append("padding: %spx %spx;" % (int(options.get("pady", 5)), int(options.get("padx", 8))))
             if options.get("activebackground"):
