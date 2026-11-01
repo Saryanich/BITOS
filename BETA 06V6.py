@@ -14764,7 +14764,7 @@ class MonitorWindow(QMainWindow):
             "QTextEdit {{ background-color: {panel_color}; color: {text_color}; border: 2px solid {accent_color}; "
             "border-radius: 12px; font-size: 15px; font-family: 'Segoe UI', sans-serif; padding: 12px; }}"
         )
-        self.notes_path = Path(r"{os.path.join(self.config_path, 'desktop_notes.txt')}")
+        self.notes_path = Path(os.path.dirname(r"{self.monitor_config_path}")) / "desktop_notes.txt"
         self.load_notes()
         self.notes_edit.textChanged.connect(self.save_notes)
         main_layout.addWidget(self.notes_edit, alignment=Qt.AlignmentFlag.AlignCenter)
