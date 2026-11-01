@@ -991,7 +991,7 @@ class Tk(Misc, QMainWindow):
 
     def mainloop(self, *args, **kwargs):
         global _loop_running
-        # Tkinter allows a new Toplevel/root to be shown while another event
+        # Qt allows a new window to be shown while the application event
         # loop is already running. Show first; only the outer call owns exec().
         # Preserve the explicitly requested fullscreen state when entering
         # the Qt event loop on Windows.
