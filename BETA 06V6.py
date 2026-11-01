@@ -9019,8 +9019,8 @@ class BITOS:
     """Ядро операционной системы BITOS"""
     
     def __init__(self):
-        self.version = "06V6_24.07"
-        self.build = "2026.07 BETA"
+        self.version = "06V6"
+        self.build = "11.01 BETA"
         self.running = True
         self.start_time = time.time()
         self.current_user = "User"
