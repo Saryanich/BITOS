@@ -11,1242 +11,9 @@ import hashlib
 import string
 from datetime import datetime
 from pathlib import Path
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 import threading
-import queue
-
-# ====================== BITOS Qt 6 Runtime ======================
-# Native Qt widgets with a small source-level API adapter so the 07.24
-# UI definitions keep their original geometry and visual settings.
-import math as _qt_math
-import weakref as _qt_weakref
-from types import SimpleNamespace as _QtNamespace
-
-from PyQt6.QtCore import (
-    Qt, QObject, QTimer, QEvent, QPoint, QPointF, QRect, QRectF, QSize,
-    QMargins, QThread, pyqtSignal, QMetaObject, Q_ARG
-)
-from PyQt6.QtGui import (
-    QColor, QBrush, QPen, QFont, QFontMetrics, QPainter, QPixmap,
-    QImage, QTextCursor, QTextCharFormat, QAction, QKeySequence
-)
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QDialog, QWidget, QFrame, QLabel as QLabelQt,
-    QPushButton as QPushButtonQt, QLineEdit, QPlainTextEdit, QCheckBox,
-    QRadioButton, QSlider, QScrollBar, QProgressBar, QComboBox, QTabWidget,
-    QTreeWidget, QTreeWidgetItem, QMenu, QMessageBox, QFileDialog, QColorDialog,
-    QGraphicsView, QGraphicsScene, QGraphicsTextItem, QGraphicsRectItem,
-    QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPixmapItem,
-    QGraphicsProxyWidget, QLayout, QLayoutItem, QWidgetItem, QSizePolicy,
-    QSpacerItem, QVBoxLayout, QHBoxLayout, QGridLayout
-)
-
-class QtUIError(RuntimeError):
-    pass
-
-_qt_app = QApplication.instance() or QApplication(sys.argv[:1])
-_qt_app.setQuitOnLastWindowClosed(False)
-_qt_default_root = None
-_qt_event_loop_running = False
-_qt_runtime_profile = {"timer_scale": 1.0}
-
-def _qt_scaled_delay(milliseconds):
-    value = max(0, int(milliseconds))
-    if value < 50:
-        return value
-    scale = max(1.0, float(_qt_runtime_profile.get("timer_scale", 1.0)))
-    return min(60000, int(round(value * scale)))
-
-class _QtDispatcher(QObject):
-    invoke = pyqtSignal(object)
-    def __init__(self):
-        super().__init__()
-        self.invoke.connect(self._run, Qt.ConnectionType.QueuedConnection)
-    def _run(self, callback):
-        try:
-            callback()
-        except RuntimeError:
-            pass
-        except Exception:
-            import traceback
-            traceback.print_exc()
-
-_qt_dispatcher = _QtDispatcher()
-
-def _qt_post(callback):
-    if QThread.currentThread() == _qt_app.thread():
-        callback()
-    else:
-        _qt_dispatcher.invoke.emit(callback)
-
-def _qt_font(value):
-    if isinstance(value, QFont):
-        return value
-    if not isinstance(value, (tuple, list)) or not value:
-        return QFont("Segoe UI", 10)
-    family = str(value[0])
-    size = int(value[1]) if len(value) > 1 and isinstance(value[1], (int, float)) else 10
-    f = QFont(family, max(1, size))
-    for style in value[2:]:
-        style = str(style).lower()
-        if style == "bold": f.setBold(True)
-        elif style == "italic": f.setItalic(True)
-        elif style == "underline": f.setUnderline(True)
-    return f
-
-def _qt_color(value, fallback=None):
-    if value is None:
-        return fallback
-    if isinstance(value, QColor):
-        return value.name()
-    value = str(value)
-    return value if value.lower() not in ("systembuttonface", "systemwindow") else (fallback or "#ffffff")
-
-def _qt_margins(value):
-    if isinstance(value, (tuple, list)):
-        if len(value) == 2: return int(value[0]), int(value[0]), int(value[1]), int(value[1])
-        if len(value) == 4: return tuple(map(int, value))
-    v = int(value or 0)
-    return v, v, v, v
-
-def _qt_alignment(anchor=None, justify=None):
-    text = str(anchor or justify or "center").lower()
-    h = Qt.AlignmentFlag.AlignHCenter
-    v = Qt.AlignmentFlag.AlignVCenter
-    if "w" in text or text in ("left",): h = Qt.AlignmentFlag.AlignLeft
-    elif "e" in text or text in ("right",): h = Qt.AlignmentFlag.AlignRight
-    if "n" in text or text == "top": v = Qt.AlignmentFlag.AlignTop
-    elif "s" in text or text == "bottom": v = Qt.AlignmentFlag.AlignBottom
-    return h | v
-
-
-def _qt_sticky(value):
-    text = str(value or "nsew").lower()
-    if text in ("nsew", "news", "ewns", "wsen", "nwe s".replace(" ", "")):
-        return Qt.AlignmentFlag(0)
-    h = Qt.AlignmentFlag(0)
-    v = Qt.AlignmentFlag(0)
-    if "w" in text and "e" not in text: h |= Qt.AlignmentFlag.AlignLeft
-    elif "e" in text and "w" not in text: h |= Qt.AlignmentFlag.AlignRight
-    elif "w" not in text and "e" not in text: h |= Qt.AlignmentFlag.AlignHCenter
-    if "n" in text and "s" not in text: v |= Qt.AlignmentFlag.AlignTop
-    elif "s" in text and "n" not in text: v |= Qt.AlignmentFlag.AlignBottom
-    elif "n" not in text and "s" not in text: v |= Qt.AlignmentFlag.AlignVCenter
-    return h | v
-
-class _QtEvent:
-    def __init__(self, widget, event):
-        self.widget = widget
-        self.x = 0; self.y = 0; self.x_root = 0; self.y_root = 0
-        self.keysym = ""; self.char = ""; self.delta = 0
-        if hasattr(event, "position"):
-            p = event.position().toPoint(); self.x, self.y = p.x(), p.y()
-        elif hasattr(event, "pos"):
-            p = event.pos(); self.x, self.y = p.x(), p.y()
-        if hasattr(widget, "mapToGlobal"):
-            p = widget.mapToGlobal(QPoint(self.x, self.y)); self.x_root, self.y_root = p.x(), p.y()
-        if hasattr(event, "key"):
-            key = event.key()
-            self.keysym = {Qt.Key.Key_Return:"Return", Qt.Key.Key_Enter:"Return", Qt.Key.Key_Escape:"Escape", Qt.Key.Key_Tab:"Tab", Qt.Key.Key_Space:"space"}.get(key, str(key))
-            self.char = event.text() if hasattr(event, "text") else ""
-        if hasattr(event, "angleDelta"):
-            self.delta = event.angleDelta().y()
-
-class _QtEventFilter(QObject):
-    def __init__(self, target):
-        super().__init__(target)
-        self.target_ref = _qt_weakref.ref(target)
-        self.bindings = []
-        self.tag_handlers = {}
-    def add(self, sequence, callback, add=False):
-        if not add:
-            self.bindings = [(s,c) for s,c in self.bindings if s != sequence]
-        self.bindings.append((sequence, callback))
-    def _call(self, sequence, event):
-        target = self.target_ref()
-        if target is None: return
-        matches = [cb for s,cb in self.bindings if s == sequence]
-        for callback in matches:
-            try: callback(_QtEvent(target, event))
-            except TypeError: callback()
-            except RuntimeError: pass
-    def eventFilter(self, obj, event):
-        target = self.target_ref()
-        if target is None: return False
-        et = event.type()
-        sequence = None
-        if et == QEvent.Type.MouseButtonPress:
-            sequence = '<Button-1>' if event.button() == Qt.MouseButton.LeftButton else '<Button-3>' if event.button() == Qt.MouseButton.RightButton else None
-        elif et == QEvent.Type.MouseButtonDblClick:
-            sequence = '<Double-1>' if event.button() == Qt.MouseButton.LeftButton else '<Double-3>'
-        elif et == QEvent.Type.MouseButtonRelease:
-            sequence = '<ButtonRelease-1>' if event.button() == Qt.MouseButton.LeftButton else '<ButtonRelease-3>'
-        elif et == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
-            sequence = '<B1-Motion>'
-        elif et == QEvent.Type.Enter: sequence = '<Enter>'
-        elif et == QEvent.Type.Leave: sequence = '<Leave>'
-        elif et == QEvent.Type.FocusIn: sequence = '<FocusIn>'
-        elif et == QEvent.Type.FocusOut: sequence = '<FocusOut>'
-        elif et == QEvent.Type.Resize: sequence = '<Configure>'
-        elif et == QEvent.Type.KeyRelease: sequence = '<KeyRelease>'
-        elif et == QEvent.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter): sequence = '<Return>'
-            elif event.key() == Qt.Key.Key_Escape: sequence = '<Escape>'
-            elif event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_S: sequence = '<Control-s>'
-        elif et == QEvent.Type.Wheel: sequence = '<MouseWheel>'
-        if sequence:
-            self._call(sequence, event)
-        return False
-
-class Misc:
-    """Tk-style conveniences implemented exclusively on native Qt objects."""
-    def _qt_init(self):
-        self._qt_event_filter = _QtEventFilter(self)
-        self.installEventFilter(self._qt_event_filter)
-        self.setMouseTracking(True)
-        self._qt_place_specs = {}
-        self._qt_after_handles = {}
-        self._qt_after_seq = 0
-        self._qt_destroyed_flag = False
-    def _qt_on_ui(self, fn, *args, **kwargs):
-        if QThread.currentThread() is not self.thread():
-            _qt_post(lambda: fn(*args, **kwargs)); return None
-        return fn(*args, **kwargs)
-    def pack(self, **kwargs):
-        parent = self.parentWidget()
-        if parent is None: return
-        layout = parent.layout()
-        if not isinstance(layout, _PackLayout):
-            if layout is not None:
-                raise QtUIError('Нельзя смешивать pack/grid/place в одном контейнере')
-            layout = _PackLayout()
-            parent.setLayout(layout)
-        layout.addWidget(self, kwargs)
-        self.show()
-    def pack_forget(self):
-        parent = self.parentWidget()
-        if parent and parent.layout(): parent.layout().removeWidget(self)
-        self.hide()
-    def grid(self, **kwargs):
-        parent = self.parentWidget()
-        if parent is None: return
-        layout = parent.layout()
-        if not isinstance(layout, QGridLayout):
-            if layout is not None:
-                raise QtUIError('Нельзя смешивать pack/grid/place в одном контейнере')
-            layout = QGridLayout(); layout.setContentsMargins(0,0,0,0); layout.setHorizontalSpacing(0); layout.setVerticalSpacing(0)
-            parent.setLayout(layout)
-        row, col = int(kwargs.get('row',0)), int(kwargs.get('column',0))
-        padx = _qt_margins(kwargs.get('padx',0)); pady = _qt_margins(kwargs.get('pady',0))
-        margins = QMargins(padx[0], pady[0], padx[1], pady[1])
-        layout.addWidget(self, row, col, _qt_sticky(kwargs.get('sticky','nsew')))
-        layout.setContentsMargins(0,0,0,0)
-        layout.setHorizontalSpacing(0); layout.setVerticalSpacing(0)
-        idx = layout.indexOf(self)
-        if idx >= 0: layout.setAlignment(self, _qt_sticky(kwargs.get('sticky','nsew')))
-        self._qt_grid_margins = margins
-        self.setContentsMargins(margins.left(), margins.top(), margins.right(), margins.bottom())
-        self.show()
-    def grid_forget(self):
-        p=self.parentWidget(); l=p.layout() if p else None
-        if isinstance(l,QGridLayout): l.removeWidget(self)
-        self.hide()
-    def grid_propagate(self, value=True):
-        self._qt_grid_propagate = bool(value)
-        if not value:
-            self.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Fixed)
-            if self.minimumWidth() and self.minimumHeight(): self.setFixedSize(self.minimumWidth(), self.minimumHeight())
-    def grid_columnconfigure(self, column, weight=0, **kwargs):
-        l=self.layout()
-        if isinstance(l,QGridLayout): l.setColumnStretch(int(column),int(weight))
-    def grid_rowconfigure(self, row, weight=0, **kwargs):
-        l=self.layout()
-        if isinstance(l,QGridLayout): l.setRowStretch(int(row),int(weight))
-    def place(self, **kwargs):
-        parent=self.parentWidget()
-        if parent is None: return
-        layout=parent.layout()
-        if not isinstance(layout,_PlaceLayout):
-            if layout is not None:
-                raise QtUIError('Нельзя смешивать pack/grid/place в одном контейнере')
-            layout=_PlaceLayout(); parent.setLayout(layout)
-        layout.addWidget(self,kwargs); self.show()
-    def place_forget(self):
-        p=self.parentWidget(); l=p.layout() if p else None
-        if isinstance(l,_PlaceLayout): l.removeWidget(self)
-        self.hide()
-    def bind(self, sequence, callback, add=None):
-        self._qt_event_filter.add(sequence,callback,bool(add))
-        return str(id(callback))
-    def bind_all(self, sequence, callback, add=None):
-        _qt_app.installEventFilter(self._qt_event_filter)
-        self._qt_event_filter.add(sequence,callback,bool(add))
-    def unbind_all(self, sequence):
-        self._qt_event_filter.bindings=[(s,c) for s,c in self._qt_event_filter.bindings if s != sequence]
-    def after(self, milliseconds, callback=None, *args):
-        if callback is None:
-            _qt_app.processEvents()
-            return None
-        self._qt_after_seq += 1
-        handle = f"qt-after-{id(self)}-{self._qt_after_seq}"
-        def schedule():
-            if self._qt_destroyed_flag:
-                return
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            def _run_callback():
-                self._qt_after_handles.pop(handle, None)
-                try: callback(*args)
-                finally: timer.deleteLater()
-            timer.timeout.connect(_run_callback)
-            self._qt_after_handles[handle] = timer
-            timer.start(_qt_scaled_delay(milliseconds))
-        if QThread.currentThread() == self.thread(): schedule()
-        else: _qt_post(schedule)
-        return handle
-    def after_cancel(self, handle):
-        timer = self._qt_after_handles.pop(str(handle), None)
-        if timer is not None:
-            timer.stop()
-            timer.deleteLater()
-    def pack_propagate(self, value=True):
-        self._qt_pack_propagate = bool(value)
-        if not value:
-            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-    def nametowidget(self, widget):
-        return widget if isinstance(widget, QWidget) else None
-    def grab_release(self):
-        try:
-            if hasattr(self, 'releaseMouse'): self.releaseMouse()
-            if hasattr(self, 'releaseKeyboard'): self.releaseKeyboard()
-        except RuntimeError:
-            pass
-    def winfo_exists(self):
-        try: return not self._qt_destroyed_flag
-        except RuntimeError: return False
-    def winfo_width(self): return max(1,self.width())
-    def winfo_height(self): return max(1,self.height())
-    def winfo_x(self): return self.x()
-    def winfo_y(self): return self.y()
-    def winfo_rootx(self): return self.mapToGlobal(QPoint(0,0)).x()
-    def winfo_rooty(self): return self.mapToGlobal(QPoint(0,0)).y()
-    def winfo_screenwidth(self): return _qt_app.primaryScreen().geometry().width()
-    def winfo_screenheight(self): return _qt_app.primaryScreen().geometry().height()
-    def winfo_children(self): return self.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly)
-    def winfo_parent(self): return self.parentWidget()
-    def winfo_toplevel(self):
-        w=self
-        while w.parentWidget() is not None: w=w.parentWidget()
-        return w
-    def winfo_containing(self,x,y): return _qt_app.widgetAt(int(x),int(y))
-    def focus_set(self): self.setFocus()
-    def focus_force(self): self.activateWindow(); self.setFocus()
-    def grab_set(self): self.setFocus(); self.window().activateWindow()
-    def wait_window(self, *args):
-        loop = __import__('PyQt6.QtCore',fromlist=['QEventLoop']).QEventLoop(self)
-        self.destroyed.connect(loop.quit)
-        if isinstance(self, QDialog): self.finished.connect(loop.quit)
-        loop.exec()
-    def config(self, **kwargs): return self.configure(**kwargs)
-    def configure(self, **kwargs):
-        def apply(): _qt_apply_options(self, kwargs)
-        return self._qt_on_ui(apply)
-    def destroy(self):
-        def _destroy():
-            if self._qt_destroyed_flag: return
-            self._qt_destroyed_flag = True
-            for timer in list(self._qt_after_handles.values()):
-                try: timer.stop(); timer.deleteLater()
-                except RuntimeError: pass
-            self._qt_after_handles.clear()
-            self.hide()
-            self.setParent(None)
-            self.deleteLater()
-        return self._qt_on_ui(_destroy)
-    def update_idletasks(self): _qt_app.processEvents()
-    def clipboard_clear(self): _qt_app.clipboard().clear()
-    def clipboard_append(self, text): _qt_app.clipboard().setText(str(text))
-    def see(self, index):
-        if isinstance(self,QPlainTextEdit): self.ensureCursorVisible()
-        elif hasattr(self,'scrollToItem'):
-            try: self.scrollToItem(self.currentItem())
-            except Exception: pass
-    def yview(self, *args):
-        bar = self.verticalScrollBar() if hasattr(self,'verticalScrollBar') else None
-        if bar is None: return (0.0,1.0)
-        return _qt_scroll_command(bar,*args)
-    def xview(self,*args):
-        bar = self.horizontalScrollBar() if hasattr(self,'horizontalScrollBar') else None
-        if bar is None: return (0.0,1.0)
-        return _qt_scroll_command(bar,*args)
-    def itemconfig(self, *args, **kwargs): return None
-    def configure_event(self,*args): pass
-
-class _PackItem(QWidgetItem):
-    def __init__(self, widget, options):
-        super().__init__(widget); self.widget_ref=widget; self.options=dict(options)
-        px=_qt_margins(options.get('padx',0)); py=_qt_margins(options.get('pady',0))
-        ipadx=int(options.get('ipadx',0) or 0); ipady=int(options.get('ipady',0) or 0)
-        self.padx=(px[0]+ipadx,px[1]+ipadx); self.pady=(py[0]+ipady,py[1]+ipady)
-    def setGeometry(self, rect):
-        w=self.widget_ref
-        if w is None: return
-        side=self.options.get('side','top'); fill=self.options.get('fill','')
-        hint=w.sizeHint(); minsize=w.minimumSizeHint()
-        l,t,r,b=self.padx[0],self.pady[0],self.padx[1],self.pady[1]
-        inner=rect.adjusted(l,t,-r,-b)
-        if fill in ('x','both'): width=max(0,inner.width())
-        else: width=min(inner.width(),max(minsize.width(),hint.width()))
-        if fill in ('y','both'): height=max(0,inner.height())
-        else: height=min(inner.height(),max(minsize.height(),hint.height()))
-        align=str(self.options.get('anchor','center')).lower()
-        if 'w' in align: x=inner.left()
-        elif 'e' in align: x=inner.right()-width+1
-        else: x=inner.left()+(inner.width()-width)//2
-        if 'n' in align: y=inner.top()
-        elif 's' in align: y=inner.bottom()-height+1
-        else: y=inner.top()+(inner.height()-height)//2
-        w.setGeometry(QRect(x,y,width,height))
-
-class _PackLayout(QLayout):
-    def __init__(self,parent=None):
-        super().__init__(parent); self.items=[]; self._last_rect=QRect()
-    def addItem(self,item): self.items.append(item)
-    def addWidget(self,widget,options):
-        self.addItem(_PackItem(widget,options)); self.invalidate()
-    def count(self): return len(self.items)
-    def itemAt(self,index): return self.items[index] if 0<=index<len(self.items) else None
-    def takeAt(self,index): return self.items.pop(index) if 0<=index<len(self.items) else None
-    def sizeHint(self):
-        w=h=0
-        for item in self.items:
-            s=item.sizeHint(); o=item.options; side=o.get('side','top')
-            px=item.padx[0]+item.padx[1]; py=item.pady[0]+item.pady[1]
-            if side in ('left','right'): w+=s.width()+px; h=max(h,s.height()+py)
-            else: h+=s.height()+py; w=max(w,s.width()+px)
-        return QSize(w,h)
-    def minimumSize(self): return self.sizeHint()
-    def expandingDirections(self): return Qt.Orientation(0)
-    def setGeometry(self,rect):
-        super().setGeometry(rect); self._last_rect=QRect(rect)
-        area=rect.adjusted(0,0,0,0); n=len(self.items)
-        if not n: return
-        # Match Tk's cavity packing: each item claims one edge of the remaining cavity.
-        expands=[i for i in self.items if i.options.get('expand')]
-        base_h=sum(i.sizeHint().height()+i.pady[0]+i.pady[1] for i in self.items if i.options.get('side','top') in ('top','bottom'))
-        base_w=sum(i.sizeHint().width()+i.padx[0]+i.padx[1] for i in self.items if i.options.get('side','top') in ('left','right'))
-        extra_h=max(0,area.height()-base_h)//max(1,sum(1 for i in expands if i.options.get('side','top') in ('top','bottom')))
-        extra_w=max(0,area.width()-base_w)//max(1,sum(1 for i in expands if i.options.get('side','top') in ('left','right')))
-        for item in self.items:
-            o=item.options; side=o.get('side','top'); hint=item.sizeHint()
-            l,t,r,b=item.padx[0],item.pady[0],item.padx[1],item.pady[1]
-            if side in ('top','bottom'):
-                h=hint.height()+t+b+(extra_h if o.get('expand') else 0)
-                h=min(h,area.height()); slot=QRect(area.left(),area.top(),area.width(),h) if side=='top' else QRect(area.left(),area.bottom()-h+1,area.width(),h)
-                if side=='top': area.setTop(area.top()+h)
-                else: area.setBottom(area.bottom()-h)
-            else:
-                w=hint.width()+l+r+(extra_w if o.get('expand') else 0)
-                w=min(w,area.width()); slot=QRect(area.left(),area.top(),w,area.height()) if side=='left' else QRect(area.right()-w+1,area.top(),w,area.height())
-                if side=='left': area.setLeft(area.left()+w)
-                else: area.setRight(area.right()-w)
-            item.setGeometry(slot)
-    def hasHeightForWidth(self): return False
-
-class _PlaceLayout(QLayout):
-    def __init__(self,parent=None): super().__init__(parent); self.items=[]
-    def addItem(self,item): self.items.append(item)
-    def addWidget(self,widget,options):
-        item=QWidgetItem(widget); item.options=dict(options); self.addItem(item); self.invalidate()
-    def count(self): return len(self.items)
-    def itemAt(self,index): return self.items[index] if 0<=index<len(self.items) else None
-    def takeAt(self,index): return self.items.pop(index) if 0<=index<len(self.items) else None
-    def sizeHint(self): return QSize(0,0)
-    def minimumSize(self): return QSize(0,0)
-    def expandingDirections(self): return Qt.Orientation(0)
-    def setGeometry(self,rect):
-        super().setGeometry(rect)
-        for item in self.items:
-            o=item.options; x=float(o.get('x',0)); y=float(o.get('y',0))
-            w=float(o.get('width',item.sizeHint().width())); h=float(o.get('height',item.sizeHint().height()))
-            w += rect.width()*float(o.get('relwidth',0)); h += rect.height()*float(o.get('relheight',0))
-            anchor=str(o.get('anchor','nw')).lower()
-            if 'e' in anchor: x-=w
-            elif 'center' in anchor: x-=w/2
-            if 's' in anchor: y-=h
-            elif 'center' in anchor: y-=h/2
-            item.setGeometry(QRect(rect.x()+int(x),rect.y()+int(y),max(0,int(w)),max(0,int(h))))
-
-class _QtFrame(Misc,QFrame):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QFrame.__init__(self,parent); self._qt_init(); self.setFrameShape(QFrame.Shape.NoFrame); self.setSizePolicy(QSizePolicy.Policy.Preferred,QSizePolicy.Policy.Preferred)
-        _qt_apply_options(self,kwargs)
-    def sizeHint(self):
-        if self.layout(): return self.layout().sizeHint()
-        return super().sizeHint()
-
-class _QtLabel(Misc,QLabelQt):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QLabelQt.__init__(self,parent); self._qt_init(); self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        _qt_apply_options(self,kwargs)
-    def sizeHint(self):
-        if self.minimumWidth() or self.minimumHeight(): return super().sizeHint()
-        return super().sizeHint()
-
-class _QtButton(Misc,QPushButtonQt):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QPushButtonQt.__init__(self,parent); self._qt_init(); self._qt_command=None
-        _qt_apply_options(self,kwargs)
-    def invoke(self):
-        if self._qt_command: self._qt_command()
-    def configure(self,**kwargs):
-        if 'command' in kwargs: self._qt_command=kwargs.pop('command')
-        return Misc.configure(self,**kwargs)
-
-class _QtEntry(Misc,QLineEdit):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QLineEdit.__init__(self,parent); self._qt_init(); _qt_apply_options(self,kwargs)
-    def get(self): return self.text()
-    def insert(self,index,text):
-        if index in (0,'0'): self.setText(str(text)+self.text())
-        elif str(index).lower() in ('end','qt.end'): self.setText(self.text()+str(text))
-        else: self.setText(self.text()[:int(index)]+str(text)+self.text()[int(index):])
-    def delete(self,start,end=None):
-        if start in (0,'0') and end in ('end','END',None): self.clear()
-        elif end in ('end','END'): self.setText(self.text()[:int(start)])
-        else: self.setText(self.text()[:int(start)]+self.text()[int(end or start)+1:])
-    def select_range(self,start,end):
-        a=0 if start in (0,'0') else len(self.text()) if str(start).lower()=='end' else int(start)
-        b=len(self.text()) if str(end).lower()=='end' else int(end)
-        self.setSelection(a,max(0,b-a))
-
-class _QtText(Misc,QPlainTextEdit):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QPlainTextEdit.__init__(self,parent); self._qt_init(); self._qt_text_tags={}; self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth); _qt_apply_options(self,kwargs)
-    def insert(self,index,text,*tags):
-        c=self.textCursor()
-        if str(index).lower() in ('end','qt.end'): c.movePosition(QTextCursor.MoveOperation.End)
-        else: c.movePosition(QTextCursor.MoveOperation.Start)
-        for tag in tags:
-            fmt=self._qt_text_tags.get(str(tag))
-            if fmt is not None: c.setCharFormat(fmt)
-        c.insertText(str(text)); c.setCharFormat(QTextCharFormat()); self.setTextCursor(c)
-    def tag_config(self,tag,**kwargs):
-        fmt=self._qt_text_tags.get(str(tag),QTextCharFormat())
-        if 'foreground' in kwargs: fmt.setForeground(QColor(_qt_color(kwargs['foreground'])))
-        if 'background' in kwargs: fmt.setBackground(QColor(_qt_color(kwargs['background'])))
-        if 'font' in kwargs: fmt.setFont(_qt_font(kwargs['font']))
-        self._qt_text_tags[str(tag)]=fmt
-    tag_configure=tag_config
-    def get(self,start='1.0',end='end'):
-        value=self.toPlainText()
-        if str(start).lower() in ('1.0','0'): pass
-        if str(end).lower() in ('end','qt.end'): return value+'\n'
-        return value
-    def delete(self,start='1.0',end='end'):
-        if str(start).lower() in ('1.0','0') and str(end).lower() in ('end','qt.end'):
-            self.clear(); return
-        c=self.textCursor(); c.movePosition(QTextCursor.MoveOperation.Start); c.movePosition(QTextCursor.MoveOperation.End,QTextCursor.MoveMode.KeepAnchor); c.removeSelectedText()
-
-class _QtCheckButton(Misc,QCheckBox):
-    def __init__(self,master=None,**kwargs): parent=_qt_parent(master); QCheckBox.__init__(self,parent); self._qt_init(); self._qt_var=None; _qt_apply_options(self,kwargs)
-    def select(self): self.setChecked(True)
-    def deselect(self): self.setChecked(False)
-    def invoke(self): self.click()
-
-class _QtRadioButton(Misc,QRadioButton):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QRadioButton.__init__(self,parent); self._qt_init(); self._qt_var=None
-        variable=kwargs.pop('variable',None); value=kwargs.pop('value',None)
-        self._qt_var,self._qt_value=variable,value
-        if variable is not None:
-            self.setChecked(variable.get()==value)
-            self.toggled.connect(lambda checked: variable.set(value) if checked else None)
-            variable.trace('w',lambda *_: self.setChecked(variable.get()==value) if self.isChecked() != (variable.get()==value) else None)
-        _qt_apply_options(self,kwargs)
-    def select(self): self.setChecked(True)
-    def deselect(self): self.setChecked(False)
-    def invoke(self): self.click()
-
-class _QtScale(Misc,QSlider):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); orient=kwargs.pop('orient','horizontal'); QSlider.__init__(self,Qt.Orientation.Horizontal if orient in ('horizontal',Qt.Orientation.Horizontal) else Qt.Orientation.Vertical,parent); self._qt_init(); self._qt_command=None
-        _qt_apply_options(self,kwargs)
-        self.valueChanged.connect(lambda v: self._qt_command(v) if self._qt_command else None)
-    def get(self): return self.value()
-    def set(self,value): self.setValue(int(float(value)))
-    def configure(self,**kwargs):
-        if 'command' in kwargs: self._qt_command=kwargs.pop('command')
-        return Misc.configure(self,**kwargs)
-
-class _QtScrollBar(Misc,QScrollBar):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); orient=kwargs.pop('orient','vertical'); QScrollBar.__init__(self,Qt.Orientation.Vertical if orient in ('vertical',Qt.Orientation.Vertical) else Qt.Orientation.Horizontal,parent); self._qt_init(); self._qt_command=kwargs.pop('command',None)
-        self.valueChanged.connect(lambda v: self._qt_command('moveto',v/max(1,self.maximum())) if callable(self._qt_command) else None)
-        _qt_apply_options(self,kwargs)
-    def set(self,first,last=None):
-        if isinstance(first,str): return
-        lo=max(0.0,min(1.0,float(first))); hi=max(lo,min(1.0,float(last if last is not None else 1)))
-        self.setRange(0,1000); self.setPageStep(max(1,int((hi-lo)*1000))); self.setValue(int(lo*1000))
-
-class _QtProgressBar(Misc,QProgressBar):
-    def __init__(self,master=None,**kwargs): parent=_qt_parent(master); QProgressBar.__init__(self,parent); self._qt_init(); _qt_apply_options(self,kwargs)
-    def __getitem__(self,key):
-        if key == 'value': return self.value()
-        if key == 'maximum': return self.maximum()
-        if key == 'minimum': return self.minimum()
-        raise KeyError(key)
-    def __setitem__(self,key,value):
-        if key == 'value': self.setValue(int(float(value)))
-        elif key == 'maximum': self.setMaximum(int(value))
-        elif key == 'minimum': self.setMinimum(int(value))
-        else: raise KeyError(key)
-    def start(self,interval=100): self.setRange(0,0)
-    def stop(self): self.setRange(0,100)
-
-class _QtComboBox(Misc,QComboBox):
-    def __init__(self,master=None,**kwargs): parent=_qt_parent(master); QComboBox.__init__(self,parent); self._qt_init(); _qt_apply_options(self,kwargs)
-    def get(self): return self.currentText()
-    def set(self,value): self.setCurrentText(str(value))
-
-class _QtNotebook(Misc,QTabWidget):
-    def __init__(self,master=None,**kwargs): parent=_qt_parent(master); QTabWidget.__init__(self,parent); self._qt_init(); _qt_apply_options(self,kwargs)
-    def add(self,widget,text=''): self.addTab(widget,str(text))
-    def tabs(self): return list(range(self.count()))
-    def tab(self,tab,option=None): return {'text':self.tabText(int(tab))}.get(option,self.tabText(int(tab)))
-    def forget(self,tab):
-        index=int(tab) if isinstance(tab,(str,int)) else self.indexOf(tab)
-        if index>=0: self.removeTab(index)
-    def select(self,tab=None):
-        if tab is None: return self.currentIndex()
-        index=int(tab) if isinstance(tab,(str,int)) else self.indexOf(tab)
-        if index>=0: self.setCurrentIndex(index)
-        return self.currentIndex()
-
-class _QtTreeView(Misc,QTreeWidget):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); QTreeWidget.__init__(self,parent); self._qt_init(); self._qt_items={}; self._qt_counter=0
-        cols=kwargs.pop('columns',()); self.setColumnCount(len(cols)); self.setHeaderLabels([str(x) for x in cols]); self.setRootIsDecorated(False); self.setAlternatingRowColors(True)
-        show=kwargs.pop('show','headings'); self.setHeaderHidden(show!='headings'); _qt_apply_options(self,kwargs)
-    def heading(self,column,text='',**kwargs):
-        try: self.headerItem().setText(self._col(column),str(text))
-        except Exception: pass
-    def column(self,column,**kwargs):
-        i=self._col(column)
-        if 'width' in kwargs: self.setColumnWidth(i,int(kwargs['width']))
-    def _col(self,column):
-        if isinstance(column,int): return column
-        try: return int(column)
-        except Exception:
-            hdr=self.headerItem()
-            for i in range(self.columnCount()):
-                if hdr.text(i)==str(column): return i
-            return 0
-    def configure(self,**kwargs):
-        ycommand=kwargs.pop('yscrollcommand',None)
-        xcommand=kwargs.pop('xscrollcommand',None)
-        if callable(ycommand):
-            def _sync_y(*_):
-                bar=self.verticalScrollBar(); maximum=max(1,bar.maximum())
-                ycommand(bar.value()/maximum,min(1.0,(bar.value()+bar.pageStep())/maximum))
-            self.verticalScrollBar().valueChanged.connect(_sync_y)
-            QTimer.singleShot(0,_sync_y)
-        if callable(xcommand):
-            def _sync_x(*_):
-                bar=self.horizontalScrollBar(); maximum=max(1,bar.maximum())
-                xcommand(bar.value()/maximum,min(1.0,(bar.value()+bar.pageStep())/maximum))
-            self.horizontalScrollBar().valueChanged.connect(_sync_x)
-            QTimer.singleShot(0,_sync_x)
-        return Misc.configure(self,**kwargs)
-    config=configure
-    def insert(self,parent,index,values=(),tags=(),**kwargs):
-        item=QTreeWidgetItem([str(v) for v in values]); self._qt_counter+=1; key=str(self._qt_counter); self._qt_items[key]=item
-        self.addTopLevelItem(item); return key
-    def delete(self,*items):
-        for key in items:
-            item=self._qt_items.pop(str(key),None)
-            if item is not None:
-                idx=self.indexOfTopLevelItem(item)
-                if idx>=0: self.takeTopLevelItem(idx)
-    def get_children(self,*args): return list(self._qt_items.keys())
-    def selection(self): return [k for k,v in self._qt_items.items() if v.isSelected()]
-    def selection_set(self,key):
-        item=self._qt_items.get(str(key))
-        if item: item.setSelected(True)
-    def item(self,key,option=None):
-        item=self._qt_items.get(str(key));
-        if item is None: return {}
-        return {'values':[item.text(i) for i in range(self.columnCount())]}.get(option,{})
-    def identify_row(self,y):
-        item=self.itemAt(0,int(y));
-        if item is None: return ''
-        for key,value in self._qt_items.items():
-            if value is item: return key
-        return ''
-
-class _QtMenu(Misc,QMenu):
-    def __init__(self,master=None,**kwargs): parent=_qt_parent(master); QMenu.__init__(self,parent); self._qt_init(); self._qt_vars=[]; _qt_apply_options(self,kwargs)
-    def add_command(self,label='',command=None,**kwargs):
-        action=self.addAction(str(label));
-        if command: action.triggered.connect(command)
-        return action
-    def add_separator(self): return self.addSeparator()
-    def add_cascade(self,label='',menu=None,**kwargs):
-        action=self.addMenu(menu); action.setText(str(label)); return action
-    def add_checkbutton(self,label='',variable=None,command=None,**kwargs):
-        action=self.addAction(str(label)); action.setCheckable(True)
-        if variable: action.setChecked(bool(variable.get())); action.toggled.connect(variable.set)
-        if command: action.triggered.connect(command)
-        return action
-    def post(self,x,y): self.exec(QPoint(int(x),int(y)))
-    def tk_popup(self,x,y): return self.post(x,y)
-
-class _QtRoot(Misc,QMainWindow):
-    def __init__(self,**kwargs):
-        global _qt_default_root
-        QMainWindow.__init__(self); self._qt_init(); self._qt_close_callback=None; self._qt_closing=False; self._qt_fullscreen=False
-        self._central=_QtFrame(None); self.setCentralWidget(self._central); self.setMinimumSize(320,240); _qt_default_root=self
-        if 'qt' in globals(): qt._default_root = self
-        self._qt_apply_options=kwargs
-    def _set_close_callback(self,callback): self._qt_close_callback=callback
-    def closeEvent(self,event):
-        if self._qt_close_callback and not self._qt_closing:
-            self._qt_closing=True
-            try: self._qt_close_callback()
-            except Exception: pass
-        event.accept()
-        # This application deliberately keeps Qt alive while child windows are
-        # open. Quit only after the close event has completed and no top-level
-        # BITOS windows remain visible.
-        def _quit_if_all_windows_closed():
-            try:
-                if _qt_event_loop_running and not any(
-                    widget.isVisible() for widget in _qt_app.topLevelWidgets()
-                ):
-                    _qt_app.quit()
-            except RuntimeError:
-                if _qt_event_loop_running:
-                    _qt_app.quit()
-        QTimer.singleShot(0, _quit_if_all_windows_closed)
-    def _pack_target(self): return self._central
-    def mainloop(self):
-        global _qt_event_loop_running
-        self.show()
-        # Qt allowed nested mainloops in this application. Qt uses one
-        # QApplication event loop; opening another root reuses the active loop.
-        if _qt_event_loop_running:
-            return 0
-        _qt_event_loop_running = True
-        try:
-            return _qt_app.exec()
-        finally:
-            _qt_event_loop_running = False
-    def update(self): _qt_app.processEvents()
-    def geometry(self,value=None):
-        if value is None: return f'{self.width()}x{self.height()}+{self.x()}+{self.y()}'
-        _qt_set_geometry(self,value)
-    wm_geometry=geometry
-    def title(self,value): self.setWindowTitle(str(value))
-    def resizable(self,w,h): self.setFixedSize(self.size()) if not (w or h) else self.setMinimumSize(0,0)
-    def state(self,value=None):
-        if value is None: return 'zoomed' if self.isMaximized() else 'normal'
-        if value=='zoomed': self.showMaximized()
-        elif value=='normal': self.showNormal()
-        elif value=='iconic': self.showMinimized()
-    def overrideredirect(self,value=True):
-        self.setWindowFlag(Qt.WindowType.FramelessWindowHint,bool(value)); self.show()
-    def attributes(self,name,value=None): _qt_window_attribute(self,name,value)
-    def protocol(self,name,callback): self._qt_set_protocol(name,callback)
-    def _qt_set_protocol(self,name,callback):
-        if name=='WM_DELETE_WINDOW': self._set_close_callback(callback)
-    def withdraw(self): self.hide()
-    def deiconify(self): self.showNormal(); self.raise_(); self.activateWindow()
-    def lift(self): self.raise_(); self.activateWindow()
-    def lower(self): self.lower_()
-    def destroy(self):
-        if self._qt_destroyed_flag: return
-        self._qt_destroyed_flag=True
-        self._qt_closing=True
-        for timer in list(self._qt_after_handles.values()):
-            try: timer.stop(); timer.deleteLater()
-            except RuntimeError: pass
-        self._qt_after_handles.clear()
-        self.close()
-        self.deleteLater()
-        def _quit_when_no_windows():
-            if _qt_event_loop_running and not any(w.isVisible() for w in _qt_app.topLevelWidgets()):
-                _qt_app.quit()
-        QTimer.singleShot(0, _quit_when_no_windows)
-
-class _QtToplevel(Misc,QDialog):
-    def __init__(self,parent=None,**kwargs):
-        QtParent = parent.window() if isinstance(parent, QWidget) else _qt_parent(parent)
-        QDialog.__init__(self,QtParent); self._qt_init(); self._qt_close_callback=None; self._qt_closing=False; self.setModal(False); _qt_apply_options(self,kwargs); self.show()
-    def _qt_set_protocol(self,name,callback):
-        if name=='WM_DELETE_WINDOW': self._qt_close_callback=callback
-    def closeEvent(self,event):
-        if self._qt_close_callback and not self._qt_closing:
-            self._qt_closing=True
-            try: self._qt_close_callback()
-            except Exception: pass
-        event.accept()
-    def destroy(self):
-        if self._qt_destroyed_flag: return
-        self._qt_closing=True
-        self._qt_destroyed_flag=True
-        for timer in list(self._qt_after_handles.values()):
-            try: timer.stop(); timer.deleteLater()
-            except RuntimeError: pass
-        self._qt_after_handles.clear()
-        self.close()
-        self.deleteLater()
-    def geometry(self,value=None):
-        if value is None: return f'{self.width()}x{self.height()}+{self.x()}+{self.y()}'
-        _qt_set_geometry(self,value)
-    wm_geometry=geometry
-    def title(self,value): self.setWindowTitle(str(value))
-    def resizable(self,w,h): self.setFixedSize(self.size()) if not (w or h) else self.setMinimumSize(0,0)
-    def attributes(self,name,value=None): _qt_window_attribute(self,name,value)
-    def overrideredirect(self,value=True): self.setWindowFlag(Qt.WindowType.FramelessWindowHint,bool(value)); self.show()
-    wm_overrideredirect=overrideredirect
-    def protocol(self,name,callback): self._qt_set_protocol(name,callback)
-    def transient(self,parent):
-        owner = parent.window() if isinstance(parent, QWidget) else _qt_parent(parent)
-        self.setParent(owner,Qt.WindowType.Dialog)
-    def withdraw(self): self.hide()
-    def deiconify(self): self.showNormal(); self.raise_(); self.activateWindow()
-    def lift(self): self.raise_(); self.activateWindow()
-    def lower(self): self.lower_()
-
-class _QtCanvas(Misc,QGraphicsView):
-    def __init__(self,master=None,**kwargs):
-        parent=_qt_parent(master); self.scene=_CanvasScene(); QGraphicsView.__init__(self,self.scene,parent); self._qt_init()
-        self.setFrameShape(QFrame.Shape.NoFrame); self.setRenderHint(QPainter.RenderHint.Antialiasing,True); self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.viewport().installEventFilter(self._qt_event_filter)
-        self._next_id=0; self._items={}; self._tags={}; self._tag_bindings={}; self._yscrollcommand=None; self._xscrollcommand=None
-        self._embedded_windows=[]; self._hovered_canvas_keys=set()
-        if 'bg' in kwargs or 'background' in kwargs:
-            self.setBackgroundBrush(QBrush(QColor(_qt_color(kwargs.get('bg',kwargs.get('background')),'#ffffff'))))
-        _qt_apply_options(self,kwargs)
-        self.verticalScrollBar().valueChanged.connect(self._notify_scroll)
-        self.horizontalScrollBar().valueChanged.connect(self._notify_xscroll)
-    def _store(self,item,tags=()):
-        self._next_id+=1; key=self._next_id; self._items[key]=item
-        if isinstance(tags,str): tags=(tags,)
-        self._tags[key]=set(tags or ())
-        try: item.setData(0,key)
-        except Exception: pass
-        return key
-    def create_text(self,x,y,**kw):
-        item=QGraphicsTextItem(str(kw.get('text',''))); item.setDefaultTextColor(QColor(_qt_color(kw.get('fill'),'#000000'))); item.setFont(_qt_font(kw.get('font')))
-        width=kw.get('width');
-        if width: item.setTextWidth(float(width))
-        b=item.boundingRect(); anchor=str(kw.get('anchor','center')).lower(); px=float(x); py=float(y)
-        if 'w' in anchor: pass
-        elif 'e' in anchor: px-=b.width()
-        else: px-=b.width()/2
-        if 'n' in anchor: pass
-        elif 's' in anchor: py-=b.height()
-        else: py-=b.height()/2
-        item.setPos(px,py); return self._store(item,kw.get('tags',()))
-    def create_rectangle(self,x1,y1,x2,y2,**kw):
-        item=QGraphicsRectItem(QRectF(float(x1),float(y1),float(x2-x1),float(y2-y1)))
-        outline=_qt_color(kw.get('outline'),'transparent'); fill=_qt_color(kw.get('fill'),'transparent')
-        item.setPen(QPen(QColor(outline),float(kw.get('width',1))) if outline not in ('','transparent','None') else QPen(Qt.PenStyle.NoPen)); item.setBrush(QBrush(QColor(fill)) if fill not in ('','transparent','None') else QBrush(Qt.BrushStyle.NoBrush))
-        return self._store(item,kw.get('tags',()))
-    def create_line(self,*coords,**kw):
-        ids=[]
-        points=list(coords)
-        for i in range(0,len(points)-2,2):
-            item=QGraphicsLineItem(float(points[i]),float(points[i+1]),float(points[i+2]),float(points[i+3])); color=_qt_color(kw.get('fill'),'#000000'); item.setPen(QPen(QColor(color),float(kw.get('width',1))))
-            ids.append(self._store(item,kw.get('tags',())))
-        return ids[0] if len(ids)==1 else ids
-    def create_oval(self,x1,y1,x2,y2,**kw):
-        item=QGraphicsEllipseItem(QRectF(float(x1),float(y1),float(x2-x1),float(y2-y1)))
-        outline=_qt_color(kw.get('outline'),'transparent'); fill=_qt_color(kw.get('fill'),'transparent')
-        item.setPen(QPen(QColor(outline),float(kw.get('width',1))) if outline not in ('','transparent','None') else QPen(Qt.PenStyle.NoPen)); item.setBrush(QBrush(QColor(fill)) if fill not in ('','transparent','None') else QBrush(Qt.BrushStyle.NoBrush))
-        return self._store(item,kw.get('tags',()))
-    def create_image(self,x,y,**kw):
-        photo=kw.get('image'); pix=photo.pixmap() if hasattr(photo,'pixmap') else photo
-        item=QGraphicsPixmapItem(pix if isinstance(pix,QPixmap) else QPixmap()); anchor=str(kw.get('anchor','center')).lower(); b=item.boundingRect(); px=float(x); py=float(y)
-        if 'w' not in anchor and 'e' not in anchor: px-=b.width()/2
-        elif 'e' in anchor: px-=b.width()
-        if 'n' not in anchor and 's' not in anchor: py-=b.height()/2
-        elif 's' in anchor: py-=b.height()
-        item.setPos(px,py); return self._store(item,kw.get('tags',()))
-    def create_window(self,x,y=None,**kw):
-        if y is None and isinstance(x,(tuple,list)) and len(x)>=2: x,y=x[0],x[1]
-        if y is None: y=0
-        widget=kw.get('window');
-        if widget is None: return None
-        if widget.parentWidget() is not None: widget.setParent(None)
-        proxy=self.scene.addWidget(widget); b=proxy.boundingRect(); anchor=str(kw.get('anchor','center')).lower(); px=float(x); py=float(y)
-        if 'w' not in anchor and 'e' not in anchor: px-=b.width()/2
-        elif 'e' in anchor: px-=b.width()
-        if 'n' not in anchor and 's' not in anchor: py-=b.height()/2
-        elif 's' in anchor: py-=b.height()
-        proxy.setPos(px,py)
-        if kw.get('width') or kw.get('height'):
-            proxy.resize(int(kw.get('width',b.width())),int(kw.get('height',b.height())))
-        elif anchor == 'nw':
-            proxy.resize(max(int(b.width()), self.viewport().width()), max(1, int(b.height())))
-        if anchor == 'nw' and not kw.get('width'):
-            self._embedded_windows.append((proxy,widget,kw.get('height')))
-        return self._store(proxy,kw.get('tags',()))
-    def delete(self,target):
-        keys=list(self._items) if target in ('all','ALL') else self._find_ids(target)
-        for key in keys:
-            item=self._items.pop(key,None); self._tags.pop(key,None)
-            # Prevent Qt warnings when a stale canvas id refers to an item
-            # already removed or moved to another QGraphicsScene.
-            if item is not None and item.scene() is self.scene:
-                self.scene.removeItem(item)
-        self.viewport().update()
-    def _find_ids(self,target):
-        try:
-            key=int(target)
-            return [key] if key in self._items else []
-        except Exception: pass
-        return [k for k,tags in self._tags.items() if str(target) in tags]
-    def itemconfig(self,target,**kw):
-        for key in self._find_ids(target):
-            item=self._items[key]
-            if isinstance(item,QGraphicsTextItem):
-                if 'text' in kw: item.setPlainText(str(kw['text']))
-                if 'fill' in kw: item.setDefaultTextColor(QColor(_qt_color(kw['fill'])))
-                if 'font' in kw: item.setFont(_qt_font(kw['font']))
-            elif isinstance(item,(QGraphicsRectItem,QGraphicsEllipseItem)):
-                if 'fill' in kw: item.setBrush(QBrush(QColor(_qt_color(kw['fill']))))
-                if 'outline' in kw: item.setPen(QPen(QColor(_qt_color(kw['outline'])),float(kw.get('width',1))))
-            elif isinstance(item,QGraphicsLineItem):
-                if 'fill' in kw: item.setPen(QPen(QColor(_qt_color(kw['fill'])),float(kw.get('width',1))))
-            if 'state' in kw:
-                item.setVisible(str(kw['state']).lower() not in ('hidden','disabled'))
-            item.update()
-    itemconfigure=itemconfig
-    def coords(self,target,*coords):
-        for key in self._find_ids(target):
-            item=self._items[key]
-            if len(coords)>=2:
-                if isinstance(item,QGraphicsLineItem) and len(coords)>=4: item.setLine(*map(float,coords[:4]))
-                elif isinstance(item,(QGraphicsRectItem,QGraphicsEllipseItem)) and len(coords)>=4: item.setRect(QRectF(float(coords[0]),float(coords[1]),float(coords[2]-coords[0]),float(coords[3]-coords[1])))
-                else: item.setPos(float(coords[0]),float(coords[1]))
-            else:
-                p=item.pos(); return [p.x(),p.y()]
-    def bbox(self,target):
-        keys=list(self._items) if target in ('all','ALL') else self._find_ids(target)
-        rect=QRectF()
-        for key in keys:
-            r=self._items[key].sceneBoundingRect(); rect=rect.united(r)
-        if not rect.isValid(): return None
-        return (int(rect.left()),int(rect.top()),int(rect.right()),int(rect.bottom()))
-    def tag_bind(self,target,sequence,callback,add=None):
-        for key in self._find_ids(target): self._tag_bindings[(key,sequence)]=callback
-        self._tag_bindings[(str(target),sequence)]=callback
-    def gettags(self,target):
-        try: return tuple(self._tags.get(int(target),()))
-        except Exception: return ()
-    def tag_raise(self,target,above=None):
-        ids=self._find_ids(target)
-        for z,key in enumerate(ids): self._items[key].setZValue(10000+z)
-    def tag_lower(self,target,below=None):
-        ids=self._find_ids(target)
-        for z,key in enumerate(ids): self._items[key].setZValue(-10000+z)
-    def find_overlapping(self,x1,y1,x2,y2):
-        rect=QRectF(float(x1),float(y1),float(x2-x1),float(y2-y1)); found=[]
-        for item in self.scene.items(rect):
-            key=item.data(0)
-            if key is not None: found.append(int(key))
-        return tuple(found)
-    def configure(self,**kwargs):
-        if 'scrollregion' in kwargs:
-            vals=kwargs['scrollregion']
-            if isinstance(vals,(tuple,list)) and len(vals)>=4:
-                x1,y1,x2,y2=map(float,vals[:4]); self.scene.setSceneRect(QRectF(x1,y1,max(0,x2-x1),max(0,y2-y1)))
-        self._yscrollcommand=kwargs.get('yscrollcommand',self._yscrollcommand); self._xscrollcommand=kwargs.get('xscrollcommand',self._xscrollcommand)
-        rest={k:v for k,v in kwargs.items() if k not in ('scrollregion','yscrollcommand','xscrollcommand')}
-        if 'bg' in rest or 'background' in rest:
-            color = _qt_color(rest.get('bg', rest.get('background')), '#ffffff')
-            self.setBackgroundBrush(QBrush(QColor(color)))
-        if rest: Misc.configure(self,**rest)
-    config=configure
-    def _notify_scroll(self,*args):
-        if callable(self._yscrollcommand):
-            bar=self.verticalScrollBar(); maximum=max(1,bar.maximum()); first=bar.value()/maximum; last=min(1,first+bar.pageStep()/maximum); self._yscrollcommand(first,last)
-    def _notify_xscroll(self,*args):
-        if callable(self._xscrollcommand):
-            bar=self.horizontalScrollBar(); maximum=max(1,bar.maximum()); first=bar.value()/maximum; last=min(1,first+bar.pageStep()/maximum); self._xscrollcommand(first,last)
-    def xview_scroll(self,number,what='units'):
-        bar=self.horizontalScrollBar(); factor=bar.singleStep() if what=='units' else bar.pageStep(); bar.setValue(bar.value()+int(number)*max(1,factor))
-    def xview_moveto(self,fraction):
-        bar=self.horizontalScrollBar(); bar.setValue(int(float(fraction)*bar.maximum()))
-    def yview_scroll(self,number,what='units'):
-        bar=self.verticalScrollBar(); factor=bar.singleStep() if what=='units' else bar.pageStep(); bar.setValue(bar.value()+int(number)*max(1,factor))
-    def yview_moveto(self,fraction):
-        bar=self.verticalScrollBar(); bar.setValue(int(float(fraction)*bar.maximum()))
-    def _canvas_callbacks(self, keys, sequence, event=None):
-        for key in keys:
-            tags=[key,*self._tags.get(int(key),())]
-            for tag in tags:
-                callback=self._tag_bindings.get((tag,sequence))
-                if callback:
-                    try: callback(_QtEvent(self,event) if event is not None else None)
-                    except TypeError: callback()
-                    except RuntimeError: pass
-    def mouseMoveEvent(self,event):
-        point=self.mapToScene(event.position().toPoint())
-        current=set()
-        for item in self.scene.items(point):
-            key=item.data(0)
-            if key is not None:
-                current.add(int(key))
-                break
-        entered=current-self._hovered_canvas_keys
-        left=self._hovered_canvas_keys-current
-        if left: self._canvas_callbacks(left,'<Leave>',event)
-        if entered: self._canvas_callbacks(entered,'<Enter>',event)
-        self._hovered_canvas_keys=current
-        super().mouseMoveEvent(event)
-    def leaveEvent(self,event):
-        if self._hovered_canvas_keys:
-            self._canvas_callbacks(self._hovered_canvas_keys,'<Leave>',event)
-            self._hovered_canvas_keys.clear()
-        super().leaveEvent(event)
-    def resizeEvent(self,event):
-        super().resizeEvent(event)
-        width=max(1,self.viewport().width())
-        for proxy,widget,height in list(self._embedded_windows):
-            try:
-                h=int(height) if height else max(1,int(proxy.size().height()))
-                proxy.resize(width,h)
-            except RuntimeError:
-                self._embedded_windows.remove((proxy,widget,height))
-    def mousePressEvent(self,event):
-        p=self.mapToScene(event.position().toPoint()); items=self.scene.items(p)
-        for item in items:
-            key=item.data(0)
-            if key is None: continue
-            self._canvas_callbacks([int(key)],'<Button-1>' if event.button()==Qt.MouseButton.LeftButton else '<Button-3>',event)
-            break
-        super().mousePressEvent(event)
-
-class _CanvasScene(QGraphicsScene):
-    pass
-
-class _QtVariable:
-    def __init__(self,value=None): self._value=value; self._traces=[]
-    def get(self): return self._value
-    def set(self,value):
-        self._value=value
-        for callback in list(self._traces):
-            try: callback('','', 'w')
-            except TypeError: callback()
-    def trace(self,mode,callback): self._traces.append(callback); return str(id(callback))
-    def trace_add(self,mode,callback): return self.trace(mode,callback)
-
-class QtPhotoImage:
-    def __init__(self,image=None,**kwargs):
-        if isinstance(image,QPixmap): self._pixmap=image
-        elif isinstance(image,QImage): self._pixmap=QPixmap.fromImage(image)
-        elif image is not None and hasattr(image,'size'):
-            try:
-                rgba=image.convert('RGBA'); w,h=rgba.size; data=rgba.tobytes('raw','RGBA'); self._pixmap=QPixmap.fromImage(QImage(data,w,h,QImage.Format.Format_RGBA8888).copy())
-            except Exception: self._pixmap=QPixmap()
-        else: self._pixmap=QPixmap()
-    def pixmap(self): return self._pixmap
-    def width(self): return self._pixmap.width()
-    def height(self): return self._pixmap.height()
-
-def _qt_parent(master):
-    if isinstance(master,_QtRoot): return master._pack_target()
-    if isinstance(master,_QtToplevel): return master
-    return master if isinstance(master,QWidget) else None
-
-def _qt_apply_options(widget,options):
-    if not options: return
-    opts=dict(options)
-    image_value = opts.pop('image', None)
-    if image_value is not None and isinstance(widget, QLabelQt):
-        try:
-            widget.setPixmap(image_value.pixmap() if hasattr(image_value, 'pixmap') else image_value)
-            widget._qt_image_reference = image_value
-        except Exception:
-            pass
-    if 'text' in opts:
-        val=opts.pop('text')
-        if hasattr(widget,'setText'): widget.setText(str(val))
-        elif hasattr(widget,'setPlainText'): widget.setPlainText(str(val))
-        elif isinstance(widget,QGraphicsTextItem): widget.setPlainText(str(val))
-    if 'command' in opts:
-        cb=opts.pop('command')
-        if isinstance(widget,QPushButtonQt): widget.clicked.connect(cb)
-        elif isinstance(widget,(QCheckBox,QRadioButton)): widget.clicked.connect(cb)
-        elif isinstance(widget,QSlider): widget.valueChanged.connect(cb)
-    if 'textvariable' in opts:
-        var=opts.pop('textvariable')
-        try:
-            initial=str(var.get() if var.get() is not None else '')
-            if isinstance(widget,QComboBox):
-                widget.setCurrentText(initial)
-                widget.currentTextChanged.connect(lambda value: var.set(value))
-                var.trace('w',lambda *_: widget.setCurrentText(str(var.get() if var.get() is not None else '')) if widget.currentText() != str(var.get() if var.get() is not None else '') else None)
-            elif hasattr(widget,'setText'):
-                widget.setText(initial)
-                if isinstance(widget, QLineEdit):
-                    widget.textChanged.connect(lambda value: var.set(value))
-                var.trace('w',lambda *_: widget.setText(str(var.get() if var.get() is not None else '')) if hasattr(widget,'text') and widget.text() != str(var.get() if var.get() is not None else '') else None)
-        except Exception: pass
-    if 'variable' in opts:
-        var=opts.pop('variable')
-        try:
-            if isinstance(widget,(QCheckBox,QRadioButton)):
-                widget.setChecked(bool(var.get())); widget.toggled.connect(var.set)
-            elif isinstance(widget,QSlider): widget.setValue(int(var.get())); widget.valueChanged.connect(var.set)
-        except Exception: pass
-    if 'value' in opts and isinstance(widget,QProgressBar): widget.setValue(int(opts.pop('value')))
-    if 'from_' in opts or 'to' in opts:
-        lo=int(opts.pop('from_',0)); hi=int(opts.pop('to',100))
-        if isinstance(widget,QSlider): widget.setRange(min(lo,hi),max(lo,hi))
-    if 'values' in opts and isinstance(widget,QComboBox): widget.addItems([str(v) for v in opts.pop('values')])
-    if 'show' in opts and isinstance(widget,QLineEdit):
-        show=opts.pop('show'); widget.setEchoMode(QLineEdit.EchoMode.Password if show else QLineEdit.EchoMode.Normal)
-    if 'state' in opts:
-        state=opts.pop('state'); widget.setEnabled(str(state).lower() not in ('disabled','readonly'))
-        if isinstance(widget,QPlainTextEdit): widget.setReadOnly(str(state).lower() in ('disabled','readonly'))
-    if 'font' in opts: widget.setFont(_qt_font(opts.pop('font')))
-    bg=_qt_color(opts.pop('bg',None)); fg=_qt_color(opts.pop('fg',None))
-    if 'background' in opts: bg=_qt_color(opts.pop('background'))
-    if 'foreground' in opts: fg=_qt_color(opts.pop('foreground'))
-    bd=opts.pop('bd',opts.pop('borderwidth',None)); relief=opts.pop('relief',None)
-    highlight=opts.pop('highlightthickness',None); highlight_color=opts.pop('highlightbackground',None)
-    border_color=opts.pop('highlightcolor',None)
-    radius=4 if isinstance(widget,QPushButtonQt) else 0
-    styles=[]
-    if bg: styles.append(f'background-color: {bg}')
-    if fg: styles.append(f'color: {fg}')
-    if bd is not None or relief is not None or highlight is not None:
-        borderw=max(0,int(bd or 0),int(highlight or 0)); borderc=_qt_color(border_color or highlight_color or '#888888')
-        if str(relief).lower() in ('flat','none'): borderw=0
-        if borderw: styles.append(f'border: {borderw}px solid {borderc}')
-        elif isinstance(widget,QPushButtonQt): styles.append('border: 0px')
-    if isinstance(widget,QPushButtonQt): styles.append(f'border-radius: {radius}px')
-    if styles: widget.setStyleSheet('; '.join(styles)+';')
-    if 'cursor' in opts:
-        cursor=str(opts.pop('cursor')).lower(); shape=Qt.CursorShape.PointingHandCursor if cursor in ('hand2','hand') else Qt.CursorShape.IBeamCursor if cursor=='xterm' else Qt.CursorShape.ArrowCursor
-        widget.setCursor(shape)
-    if 'anchor' in opts and isinstance(widget,QLabelQt): widget.setAlignment(_qt_alignment(opts.pop('anchor')))
-    if 'justify' in opts and isinstance(widget,QLabelQt): widget.setAlignment(_qt_alignment(opts.pop('justify')))
-    if 'wraplength' in opts and isinstance(widget,QLabelQt): widget.setWordWrap(True)
-    if 'wrap' in opts and isinstance(widget,QPlainTextEdit): widget.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth if opts.pop('wrap')!='none' else QPlainTextEdit.LineWrapMode.NoWrap)
-    if 'orient' in opts and isinstance(widget,(QScrollBar,QSlider)): pass
-    if 'length' in opts: widget.setMinimumWidth(int(opts.pop('length')))
-    if 'width' in opts:
-        width=opts.pop('width')
-        if isinstance(width,(int,float)):
-            if isinstance(widget,(QLabelQt,QLineEdit,QPushButtonQt)):
-                fm=QFontMetrics(widget.font()); widget.setMinimumWidth(max(1,fm.horizontalAdvance('0'*max(1,int(width)))+12))
-            elif isinstance(widget,QWidget): widget.setMinimumWidth(int(width))
-    if 'height' in opts:
-        height=opts.pop('height')
-        if isinstance(height,(int,float)) and height>0:
-            if isinstance(widget,(QLabelQt,QLineEdit,QPushButtonQt)): widget.setMinimumHeight(max(widget.minimumHeight(),int(height)))
-            elif isinstance(widget,QWidget): widget.setMinimumHeight(int(height))
-    if 'padx' in opts or 'pady' in opts:
-        px=_qt_margins(opts.pop('padx',0)); py=_qt_margins(opts.pop('pady',0)); widget.setContentsMargins(px[0],py[0],px[1],py[1])
-    if 'justify' in opts and isinstance(widget,QPlainTextEdit): pass
-    if 'orient' in opts and isinstance(widget,QProgressBar): widget.setOrientation(Qt.Orientation.Horizontal if opts.pop('orient')=='horizontal' else Qt.Orientation.Vertical)
-    if 'mode' in opts and isinstance(widget,QProgressBar):
-        mode=opts.pop('mode'); widget.setRange(0,0) if mode=='indeterminate' else widget.setRange(0,100)
-    # Deliberately ignore Tk-only drawing hints after mapping the visible equivalents.
-
-def _qt_scroll_command(bar,*args):
-    if not args: return (bar.value()/max(1,bar.maximum()), (bar.value()+bar.pageStep())/max(1,bar.maximum()))
-    if args[0]=='moveto': bar.setValue(int(float(args[1])*bar.maximum()))
-    elif args[0]=='scroll':
-        number=int(args[1]); unit=args[2] if len(args)>2 else 'units'; factor=bar.pageStep() if unit=='pages' else bar.singleStep(); bar.setValue(bar.value()+number*max(1,factor))
-    return None
-
-def _qt_set_geometry(widget,value):
-    import re
-    match=re.match(r'^\s*(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?\s*$',str(value))
-    if match:
-        w,h=int(match.group(1)),int(match.group(2)); widget.resize(w,h)
-        if match.group(3) is not None: widget.move(int(match.group(3)),int(match.group(4)))
-        return
-    match=re.match(r'^\s*([+-]\d+)([+-]\d+)\s*$',str(value))
-    if match: widget.move(int(match.group(1)),int(match.group(2)))
-
-def _qt_window_attribute(widget,name,value=None):
-    name=str(name).lower()
-    if name in ('-fullscreen','fullscreen') and value is not None:
-        widget.showFullScreen() if value else widget.showNormal()
-    elif name in ('-topmost','topmost') and value is not None:
-        widget.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint,bool(value)); widget.show()
-    elif name in ('-alpha','alpha') and value is not None: widget.setWindowOpacity(float(value))
-
-class _QtMessageBox:
-    @staticmethod
-    def _parent(parent=None): return (parent.window() if isinstance(parent,QWidget) else _qt_default_root)
-    @staticmethod
-    def showinfo(title,message,parent=None): return QMessageBox.information(_QtMessageBox._parent(parent),str(title),str(message))
-    @staticmethod
-    def showwarning(title,message,parent=None): return QMessageBox.warning(_QtMessageBox._parent(parent),str(title),str(message))
-    @staticmethod
-    def showerror(title,message,parent=None): return QMessageBox.critical(_QtMessageBox._parent(parent),str(title),str(message))
-    @staticmethod
-    def askyesno(title,message,parent=None): return QMessageBox.question(_QtMessageBox._parent(parent),str(title),str(message),QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes
-    @staticmethod
-    def askokcancel(title,message,parent=None): return QMessageBox.question(_QtMessageBox._parent(parent),str(title),str(message),QMessageBox.StandardButton.Ok|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)==QMessageBox.StandardButton.Ok
-
-class _QtFileDialog:
-    @staticmethod
-    def askopenfilename(parent=None,**kwargs):
-        owner = parent.window() if isinstance(parent,QWidget) else _qt_default_root
-        p,_=QFileDialog.getOpenFileName(owner,kwargs.get('title','Открыть файл'),kwargs.get('initialdir',''),_qt_filetypes(kwargs.get('filetypes'))); return p
-    @staticmethod
-    def asksaveasfilename(parent=None,**kwargs):
-        owner = parent.window() if isinstance(parent,QWidget) else _qt_default_root
-        p,_=QFileDialog.getSaveFileName(owner,kwargs.get('title','Сохранить файл'),kwargs.get('initialdir',''),_qt_filetypes(kwargs.get('filetypes'))); return p
-    @staticmethod
-    def askdirectory(parent=None,**kwargs):
-        owner = parent.window() if isinstance(parent,QWidget) else _qt_default_root
-        return QFileDialog.getExistingDirectory(owner,kwargs.get('title','Выбрать папку'),kwargs.get('initialdir',''))
-def _qt_filetypes(values):
-    if not values: return 'Все файлы (*)'
-    return ';;'.join(f'{name} ({patterns})' for name,patterns in values)
-
-# Compatibility namespace: every object constructed below is a real Qt widget.
-qt = _QtNamespace(
-    Tk=_QtRoot, Toplevel=_QtToplevel, Frame=_QtFrame, Label=_QtLabel,
-    Button=_QtButton, Entry=_QtEntry, Text=_QtText, Canvas=_QtCanvas,
-    Checkbutton=_QtCheckButton, Radiobutton=_QtRadioButton, Scale=_QtScale,
-    Scrollbar=_QtScrollBar, Menu=_QtMenu, StringVar=_QtVariable,
-    BooleanVar=_QtVariable, Misc=Misc, TclError=QtUIError,
-    END='end', BOTH='both', X='x', Y='y', LEFT='left', RIGHT='right',
-    TOP='top', BOTTOM='bottom', HORIZONTAL='horizontal', VERTICAL='vertical',
-    FLAT='flat', RAISED='raised', RIDGE='ridge', SUNKEN='sunken', SOLID='solid',
-    ROUND='round', WORD='word', _default_root=None, QApplication=QApplication,
-    QSlider=QSlider, QVBoxLayout=QVBoxLayout, QHBoxLayout=QHBoxLayout,
-    QGridLayout=QGridLayout, QWidget=QWidget, QColorDialog=QColorDialog
-)
-qtu = _QtNamespace(
-    Frame=_QtFrame, Notebook=_QtNotebook, Progressbar=_QtProgressBar,
-    Scrollbar=_QtScrollBar, Combobox=_QtComboBox, Treeview=_QtTreeView
-)
-messagebox = _QtMessageBox
-filedialog = _QtFileDialog
-scrolledtext = _QtNamespace(ScrolledText=_QtText)
-def _qt_askcolor(initialcolor=None, title='Выбор цвета'):
-    color = QColorDialog.getColor(QColor(initialcolor or '#ffffff'), _qt_default_root, str(title))
-    return (None, color.name()) if color.isValid() else (None, None)
-colorchooser = _QtNamespace(askcolor=_qt_askcolor)
-qt.messagebox = messagebox
-qt.filedialog = filedialog
-qt.scrolledtext = scrolledtext
-qt.colorchooser = colorchooser
-
-
-# Совместимость интерфейса 07.24 обеспечивается только нативными объектами Qt 6.
-PYQT_AVAILABLE = True
 
 try:
     import ctypes
@@ -1286,7 +53,7 @@ def restart_windows():
 
 # Для работы с изображениями
 try:
-    from PIL import Image
+    from PIL import Image, ImageTk
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -1313,7 +80,7 @@ class SplashScreen:
     """Экран загрузки с современным дизайном и синхронизацией цветов"""
     
     def __init__(self):
-        self.root = qt.Tk()
+        self.root = tk.Tk()
         self.root.overrideredirect(True)
         self.root.state('zoomed')
         
@@ -1326,7 +93,7 @@ class SplashScreen:
         self.theme_colors = self._get_theme_colors(self.current_theme)
         
         # Создаем canvas
-        self.canvas = qt.Canvas(self.root, width=self.width, height=self.height,
+        self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
                                 highlightthickness=0, bg=self.theme_colors['canvas_bg'])
         self.canvas.pack()
         
@@ -1612,7 +379,7 @@ class LoginScreen:
     def __init__(self, on_login, bitos_instance=None):
         self.on_login = on_login
         self.bitos = bitos_instance
-        self.root = qt.Tk()
+        self.root = tk.Tk()
         self.root.title("BITOS - Вход")
         self.root.overrideredirect(True)
         self.root.state('zoomed')
@@ -1630,7 +397,7 @@ class LoginScreen:
         self.lock_duration = 60
         
         # Фон
-        self.canvas = qt.Canvas(self.root, width=self.width, height=self.height,
+        self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
                                highlightthickness=0, bg=self.theme_colors['canvas_bg'])
         self.canvas.place(x=0, y=0, width=self.width, height=self.height)
         
@@ -1870,7 +637,7 @@ class LoginScreen:
         self._create_input_field(panel_x + 50, fields_y, 380, 42, "👤 Имя пользователя")
         
         # Используем Entry с цветами темы
-        self.username_entry = qt.Entry(self.root, bg=input_bg, fg=input_fg,
+        self.username_entry = tk.Entry(self.root, bg=input_bg, fg=input_fg,
                                        font=('Segoe UI', 12),
                                        bd=0, highlightthickness=2,
                                        highlightcolor=main_color,
@@ -1884,7 +651,7 @@ class LoginScreen:
         pin_y = fields_y + 72
         self._create_input_field(panel_x + 50, pin_y, 380, 42, "🔒 PIN-код")
         
-        self.pin_entry = qt.Entry(self.root, bg=input_bg, fg=input_fg,
+        self.pin_entry = tk.Entry(self.root, bg=input_bg, fg=input_fg,
                                  font=('Segoe UI', 12),
                                  bd=0, highlightthickness=2,
                                  highlightcolor=main_color,
@@ -1898,7 +665,7 @@ class LoginScreen:
         login_btn_x = panel_x + 50
         login_btn_y = pin_y + 90
         
-        self.login_btn = qt.Button(self.root, text="➜ Войти в систему",
+        self.login_btn = tk.Button(self.root, text="➜ Войти в систему",
                                   bg=button_bg, fg=button_fg,
                                   font=('Segoe UI', 12, 'bold'),
                                   bd=0, cursor='hand2',
@@ -1908,13 +675,13 @@ class LoginScreen:
         self.login_btn.place(x=login_btn_x, y=login_btn_y, width=380, height=45)
         
         # Статус
-        self.status_label = qt.Label(self.root, text='',
+        self.status_label = tk.Label(self.root, text='',
                                     bg=panel_bg, fg='#FF6B6B',
                                     font=('Segoe UI', 10, 'bold'))
         self.status_label.place(x=login_btn_x, y=login_btn_y + 53, width=380, height=22)
         
         # Кнопка смены PIN
-        self.change_pin_btn = qt.Button(self.root, text="🔑 Изменить PIN-код",
+        self.change_pin_btn = tk.Button(self.root, text="🔑 Изменить PIN-код",
                                        bg=panel_outline, fg=sub_color,
                                        font=('Segoe UI', 9),
                                        bd=0, cursor='hand2',
@@ -1944,33 +711,33 @@ class LoginScreen:
     
     def _on_entry_focus(self, entry, default_text):
         if entry.get() == default_text:
-            entry.delete(0, qt.END)
+            entry.delete(0, tk.END)
             entry.config(fg=self.theme_colors.get('input_fg', '#A8D8EA'))
     
     def _create_power_buttons(self):
         """Создает кнопки питания"""
         panel_bg = self.theme_colors.get('panel_bg', '#0a0a2a')
         
-        btn_frame = qt.Frame(self.root, bg=panel_bg, bd=0)
+        btn_frame = tk.Frame(self.root, bg=panel_bg, bd=0)
         btn_frame.place(x=self.width - 250, y=self.height - 65, width=230, height=45)
         
-        shutdown_btn = qt.Button(btn_frame, text='⏻ Выключить',
+        shutdown_btn = tk.Button(btn_frame, text='⏻ Выключить',
                                 bg='#E74C3C', fg='white',
                                 font=('Segoe UI', 10, 'bold'),
                                 bd=0, cursor='hand2', padx=12, pady=6,
                                 activebackground='#C0392B',
                                 activeforeground='white',
                                 command=self.shutdown_system)
-        shutdown_btn.pack(side=qt.RIGHT, padx=4)
+        shutdown_btn.pack(side=tk.RIGHT, padx=4)
         
-        restart_btn = qt.Button(btn_frame, text='🔄 Перезагрузить',
+        restart_btn = tk.Button(btn_frame, text='🔄 Перезагрузить',
                                bg='#E67E22', fg='white',
                                font=('Segoe UI', 10, 'bold'),
                                bd=0, cursor='hand2', padx=12, pady=6,
                                activebackground='#D35400',
                                activeforeground='white',
                                command=self.restart_system)
-        restart_btn.pack(side=qt.RIGHT, padx=4)
+        restart_btn.pack(side=tk.RIGHT, padx=4)
     
     def get_pin_hash(self, pin):
         return hashlib.sha256(pin.encode()).hexdigest()
@@ -2009,7 +776,7 @@ class LoginScreen:
     
     def change_pin_dialog(self):
         """Диалог смены PIN-кода с цветами темы"""
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("Изменить PIN-код")
         dialog.geometry("400x320")
         dialog.transient(self.root)
@@ -2028,7 +795,7 @@ class LoginScreen:
         input_bg = self.theme_colors.get('input_bg', '#1a1a3e')
         input_fg = self.theme_colors.get('input_fg', '#A8D8EA')
         
-        qt.Label(dialog, text="🔑 Изменение PIN-кода",
+        tk.Label(dialog, text="🔑 Изменение PIN-кода",
                 font=('Segoe UI', 16, 'bold'),
                 bg=panel_bg, fg=main_color).pack(pady=15)
         
@@ -2040,9 +807,9 @@ class LoginScreen:
         
         entries = {}
         for label, key in fields:
-            qt.Label(dialog, text=label, bg=panel_bg, fg=sub_color,
+            tk.Label(dialog, text=label, bg=panel_bg, fg=sub_color,
                     font=('Segoe UI', 10)).pack(pady=(8, 3))
-            entry = qt.Entry(dialog, font=('Segoe UI', 12),
+            entry = tk.Entry(dialog, font=('Segoe UI', 12),
                             bg=input_bg, fg=input_fg,
                             bd=0, highlightthickness=2,
                             highlightcolor=main_color,
@@ -2051,7 +818,7 @@ class LoginScreen:
             entry.pack(pady=(0, 5))
             entries[key] = entry
         
-        status_label = qt.Label(dialog, text="", bg=panel_bg, fg='#E74C3C',
+        status_label = tk.Label(dialog, text="", bg=panel_bg, fg='#E74C3C',
                                font=('Segoe UI', 10))
         status_label.pack(pady=5)
         
@@ -2081,18 +848,18 @@ class LoginScreen:
             else:
                 status_label.config(text="❌ Ошибка сохранения", fg='#E74C3C')
         
-        btn_frame = qt.Frame(dialog, bg=panel_bg)
+        btn_frame = tk.Frame(dialog, bg=panel_bg)
         btn_frame.pack(pady=10)
         
-        qt.Button(btn_frame, text="Изменить PIN",
+        tk.Button(btn_frame, text="Изменить PIN",
                  bg=main_color, fg=panel_bg,
                  font=('Segoe UI', 11, 'bold'),
                  bd=0, padx=30, pady=8,
-                 cursor='hand2', command=do_change).pack(side=qt.LEFT, padx=5)
-        qt.Button(btn_frame, text="Отмена",
+                 cursor='hand2', command=do_change).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Отмена",
                  bg=panel_outline, fg=sub_color,
                  font=('Segoe UI', 10), bd=0,
-                 padx=30, pady=8, command=dialog.destroy).pack(side=qt.LEFT, padx=5)
+                 padx=30, pady=8, command=dialog.destroy).pack(side=tk.LEFT, padx=5)
     
     def shutdown_system(self):
         if messagebox.askyesno("Выключение", "Вы действительно хотите выключить компьютер?"):
@@ -2134,11 +901,11 @@ class LoginScreen:
                 self.status_label.config(text=f'❌ Блокировка на {self.lock_duration} сек')
                 if self.bitos and hasattr(self.bitos, 'security'):
                     self.bitos.security.log_security_event("BRUTE_FORCE_ATTEMPT", f"User: {username}")
-                self.pin_entry.delete(0, qt.END)
+                self.pin_entry.delete(0, tk.END)
                 self.failed_attempts = 0
             else:
                 self.status_label.config(text=f'❌ Неверный PIN! Осталось: {remaining}')
-                self.pin_entry.delete(0, qt.END)
+                self.pin_entry.delete(0, tk.END)
             return
         
         self.failed_attempts = 0
@@ -2441,7 +1208,7 @@ class TrashWindow:
         self.load_trash_items()
     
     def create_window(self):
-        self.window = qt.Toplevel(self.parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title("🗑 Корзина BITOS")
         self.window.geometry("900x600")
         self.window.transient(self.parent)
@@ -2459,28 +1226,28 @@ class TrashWindow:
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
     
     def create_toolbar(self):
-        toolbar = qt.Frame(self.window, bg='#E0E0E0', height=50)
-        toolbar.pack(fill=qt.X, padx=1, pady=1)
+        toolbar = tk.Frame(self.window, bg='#E0E0E0', height=50)
+        toolbar.pack(fill=tk.X, padx=1, pady=1)
         
-        qt.Button(toolbar, text="↻ Обновить", bg='#E0E0E0', fg='#2C3E50',
+        tk.Button(toolbar, text="↻ Обновить", bg='#E0E0E0', fg='#2C3E50',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5,
-                 command=self.load_trash_items).pack(side=qt.LEFT, padx=5)
-        qt.Button(toolbar, text="♻ Восстановить", bg='#27AE60', fg='white',
+                 command=self.load_trash_items).pack(side=tk.LEFT, padx=5)
+        tk.Button(toolbar, text="♻ Восстановить", bg='#27AE60', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5,
-                 command=self.restore_selected).pack(side=qt.LEFT, padx=5)
-        qt.Button(toolbar, text="🗑 Удалить навсегда", bg='#E74C3C', fg='white',
+                 command=self.restore_selected).pack(side=tk.LEFT, padx=5)
+        tk.Button(toolbar, text="🗑 Удалить навсегда", bg='#E74C3C', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5,
-                 command=self.delete_selected).pack(side=qt.LEFT, padx=5)
-        qt.Button(toolbar, text="🧹 Очистить корзину", bg='#E67E22', fg='white',
+                 command=self.delete_selected).pack(side=tk.LEFT, padx=5)
+        tk.Button(toolbar, text="🧹 Очистить корзину", bg='#E67E22', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5,
-                 command=self.empty_trash).pack(side=qt.LEFT, padx=5)
+                 command=self.empty_trash).pack(side=tk.LEFT, padx=5)
         
-        self.info_label = qt.Label(toolbar, text="", bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 10))
-        self.info_label.pack(side=qt.RIGHT, padx=15)
+        self.info_label = tk.Label(toolbar, text="", bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 10))
+        self.info_label.pack(side=tk.RIGHT, padx=15)
     
     def create_content_area(self):
         columns = ('Имя', 'Оригинальный путь', 'Дата удаления', 'Размер', 'Тип')
-        self.tree = qtu.Treeview(self.window, columns=columns, show='headings', height=20)
+        self.tree = ttk.Treeview(self.window, columns=columns, show='headings', height=20)
         
         self.tree.heading('Имя', text='Имя файла')
         self.tree.heading('Оригинальный путь', text='Оригинальный путь')
@@ -2494,25 +1261,25 @@ class TrashWindow:
         self.tree.column('Размер', width=100)
         self.tree.column('Тип', width=100)
         
-        scrollbar = qtu.Scrollbar(self.window, orient=qt.VERTICAL, command=self.tree.yview)
+        scrollbar = ttk.Scrollbar(self.window, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         
-        self.tree.pack(side=qt.LEFT, fill=qt.BOTH, expand=True, padx=10, pady=10)
-        scrollbar.pack(side=qt.RIGHT, fill=qt.Y, pady=10, padx=(0, 10))
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10, padx=(0, 10))
         
         self.tree.bind('<Button-3>', self.show_context_menu)
         self.tree.bind('<Double-1>', lambda e: self.restore_selected())
     
     def create_status_bar(self):
-        self.status_bar = qt.Frame(self.window, bg='#E0E0E0', height=25)
-        self.status_bar.pack(fill=qt.X, side=qt.BOTTOM)
-        self.status_label = qt.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 9), anchor='w')
-        self.status_label.pack(side=qt.LEFT, padx=10)
-        self.size_label = qt.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 9))
-        self.size_label.pack(side=qt.RIGHT, padx=10)
+        self.status_bar = tk.Frame(self.window, bg='#E0E0E0', height=25)
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        self.status_label = tk.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 9), anchor='w')
+        self.status_label.pack(side=tk.LEFT, padx=10)
+        self.size_label = tk.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 9))
+        self.size_label.pack(side=tk.RIGHT, padx=10)
     
     def create_context_menu(self):
-        self.context_menu = qt.Menu(self.window, tearoff=0, bg='#2C3E50', fg='white', activebackground='#3498DB')
+        self.context_menu = tk.Menu(self.window, tearoff=0, bg='#2C3E50', fg='white', activebackground='#3498DB')
         self.context_menu.add_command(label="♻ Восстановить", command=self.restore_selected)
         self.context_menu.add_command(label="🗑 Удалить навсегда", command=self.delete_selected)
         self.context_menu.add_separator()
@@ -2532,7 +1299,7 @@ class TrashWindow:
             self.tree.delete(item)
         items = self.trash_manager.get_trash_items()
         if not items:
-            self.tree.insert('', qt.END, values=('Корзина пуста', '', '', '', ''))
+            self.tree.insert('', tk.END, values=('Корзина пуста', '', '', '', ''))
             self.status_label.config(text="Корзина пуста")
             self.size_label.config(text="")
             return
@@ -2543,7 +1310,7 @@ class TrashWindow:
             size_str = self.format_size(size)
             date_str = item.get('deleted_time', '')[:19].replace('T', ' ')
             file_type = "Папка" if item.get('is_dir') else "Файл"
-            self.tree.insert('', qt.END, values=(
+            self.tree.insert('', tk.END, values=(
                 os.path.basename(item.get('trash_name', '')),
                 item.get('original_path', ''),
                 date_str,
@@ -2817,7 +1584,7 @@ class ModernFileExplorer:
         return False
     
     def create_window(self):
-        self.window = qt.Toplevel(self.parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title("📁 Проводник BITOS")
         self.window.geometry("1000x700")
         self.window.transient(self.parent)
@@ -2838,116 +1605,116 @@ class ModernFileExplorer:
         self.check_drives_timer()
     
     def create_toolbar(self):
-        toolbar = qt.Frame(self.window, bg='#E0E0E0', height=50)
-        toolbar.pack(fill=qt.X, padx=1, pady=1)
+        toolbar = tk.Frame(self.window, bg='#E0E0E0', height=50)
+        toolbar.pack(fill=tk.X, padx=1, pady=1)
         
-        nav_frame = qt.Frame(toolbar, bg='#E0E0E0')
-        nav_frame.pack(side=qt.LEFT, padx=5, pady=5)
+        nav_frame = tk.Frame(toolbar, bg='#E0E0E0')
+        nav_frame.pack(side=tk.LEFT, padx=5, pady=5)
         
-        self.back_btn = qt.Button(nav_frame, text='←', font=('Segoe UI', 14), 
+        self.back_btn = tk.Button(nav_frame, text='←', font=('Segoe UI', 14), 
                                  bg='#E0E0E0', fg='#2C3E50', bd=0,
                                  command=self.go_back, state='disabled')
-        self.back_btn.pack(side=qt.LEFT, padx=2)
+        self.back_btn.pack(side=tk.LEFT, padx=2)
         
-        self.forward_btn = qt.Button(nav_frame, text='→', font=('Segoe UI', 14), 
+        self.forward_btn = tk.Button(nav_frame, text='→', font=('Segoe UI', 14), 
                                     bg='#E0E0E0', fg='#2C3E50', bd=0,
                                     command=self.go_forward, state='disabled')
-        self.forward_btn.pack(side=qt.LEFT, padx=2)
+        self.forward_btn.pack(side=tk.LEFT, padx=2)
         
-        up_btn = qt.Button(nav_frame, text='↑', font=('Segoe UI', 14), 
+        up_btn = tk.Button(nav_frame, text='↑', font=('Segoe UI', 14), 
                           bg='#E0E0E0', fg='#2C3E50', bd=0, command=self.go_up)
-        up_btn.pack(side=qt.LEFT, padx=2)
+        up_btn.pack(side=tk.LEFT, padx=2)
         
-        refresh_btn = qt.Button(nav_frame, text='↻', font=('Segoe UI', 14), 
+        refresh_btn = tk.Button(nav_frame, text='↻', font=('Segoe UI', 14), 
                                bg='#E0E0E0', fg='#2C3E50', bd=0, command=self.refresh)
-        refresh_btn.pack(side=qt.LEFT, padx=2)
+        refresh_btn.pack(side=tk.LEFT, padx=2)
         
-        home_btn = qt.Button(nav_frame, text='🏠', font=('Segoe UI', 14), 
+        home_btn = tk.Button(nav_frame, text='🏠', font=('Segoe UI', 14), 
                             bg='#E0E0E0', fg='#2C3E50', bd=0, command=self.go_home)
-        home_btn.pack(side=qt.LEFT, padx=2)
+        home_btn.pack(side=tk.LEFT, padx=2)
         
-        qt.Frame(toolbar, width=2, bg='#BDC3C7').pack(side=qt.LEFT, padx=10, fill=qt.Y)
+        tk.Frame(toolbar, width=2, bg='#BDC3C7').pack(side=tk.LEFT, padx=10, fill=tk.Y)
         
-        actions_frame = qt.Frame(toolbar, bg='#E0E0E0')
-        actions_frame.pack(side=qt.LEFT, padx=5)
+        actions_frame = tk.Frame(toolbar, bg='#E0E0E0')
+        actions_frame.pack(side=tk.LEFT, padx=5)
         
-        qt.Button(actions_frame, text='📁 Новая папка', font=('Segoe UI', 10), 
+        tk.Button(actions_frame, text='📁 Новая папка', font=('Segoe UI', 10), 
                  bg='#E0E0E0', fg='#2C3E50', bd=0,
-                 command=self.new_folder).pack(side=qt.LEFT, padx=2)
-        qt.Button(actions_frame, text='📋 Копировать', font=('Segoe UI', 10), 
+                 command=self.new_folder).pack(side=tk.LEFT, padx=2)
+        tk.Button(actions_frame, text='📋 Копировать', font=('Segoe UI', 10), 
                  bg='#E0E0E0', fg='#2C3E50', bd=0,
-                 command=self.copy_items).pack(side=qt.LEFT, padx=2)
-        qt.Button(actions_frame, text='✂ Вырезать', font=('Segoe UI', 10), 
+                 command=self.copy_items).pack(side=tk.LEFT, padx=2)
+        tk.Button(actions_frame, text='✂ Вырезать', font=('Segoe UI', 10), 
                  bg='#E0E0E0', fg='#2C3E50', bd=0,
-                 command=self.cut_items).pack(side=qt.LEFT, padx=2)
+                 command=self.cut_items).pack(side=tk.LEFT, padx=2)
         
-        self.paste_btn = qt.Button(actions_frame, text='📌 Вставить', font=('Segoe UI', 10), 
+        self.paste_btn = tk.Button(actions_frame, text='📌 Вставить', font=('Segoe UI', 10), 
                                    bg='#E0E0E0', fg='#2C3E50', bd=0,
                                    command=self.paste_items, state='disabled')
-        self.paste_btn.pack(side=qt.LEFT, padx=2)
+        self.paste_btn.pack(side=tk.LEFT, padx=2)
         
-        qt.Button(actions_frame, text='🗑 Удалить', font=('Segoe UI', 10), 
+        tk.Button(actions_frame, text='🗑 Удалить', font=('Segoe UI', 10), 
                  bg='#E74C3C', fg='white', bd=0,
-                 command=self.delete_items).pack(side=qt.LEFT, padx=2)
+                 command=self.delete_items).pack(side=tk.LEFT, padx=2)
         
-        qt.Frame(toolbar, width=2, bg='#BDC3C7').pack(side=qt.LEFT, padx=10, fill=qt.Y)
+        tk.Frame(toolbar, width=2, bg='#BDC3C7').pack(side=tk.LEFT, padx=10, fill=tk.Y)
         
-        view_frame = qt.Frame(toolbar, bg='#E0E0E0')
-        view_frame.pack(side=qt.LEFT, padx=5)
+        view_frame = tk.Frame(toolbar, bg='#E0E0E0')
+        view_frame.pack(side=tk.LEFT, padx=5)
         
-        qt.Button(view_frame, text='📋 Список', font=('Segoe UI', 10), 
+        tk.Button(view_frame, text='📋 Список', font=('Segoe UI', 10), 
                  bg='#E0E0E0', fg='#2C3E50', bd=0,
-                 command=lambda: self.set_view_mode('list')).pack(side=qt.LEFT, padx=2)
-        qt.Button(view_frame, text='🖼 Иконки', font=('Segoe UI', 10), 
+                 command=lambda: self.set_view_mode('list')).pack(side=tk.LEFT, padx=2)
+        tk.Button(view_frame, text='🖼 Иконки', font=('Segoe UI', 10), 
                  bg='#E0E0E0', fg='#2C3E50', bd=0,
-                 command=lambda: self.set_view_mode('icons')).pack(side=qt.LEFT, padx=2)
+                 command=lambda: self.set_view_mode('icons')).pack(side=tk.LEFT, padx=2)
         
-        qt.Frame(toolbar, width=2, bg='#BDC3C7').pack(side=qt.LEFT, padx=10, fill=qt.Y)
+        tk.Frame(toolbar, width=2, bg='#BDC3C7').pack(side=tk.LEFT, padx=10, fill=tk.Y)
         
-        self.drives_frame = qt.Frame(toolbar, bg='#E0E0E0')
-        self.drives_frame.pack(side=qt.LEFT, fill=qt.X, expand=True, padx=5)
-        qt.Label(self.drives_frame, text="💾 Съёмные диски:", bg='#E0E0E0', 
-                fg='#2C3E50', font=('Segoe UI', 10)).pack(side=qt.LEFT, padx=5)
-        self.drives_container = qt.Frame(self.drives_frame, bg='#E0E0E0')
-        self.drives_container.pack(side=qt.LEFT, fill=qt.X, expand=True)
+        self.drives_frame = tk.Frame(toolbar, bg='#E0E0E0')
+        self.drives_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        tk.Label(self.drives_frame, text="💾 Съёмные диски:", bg='#E0E0E0', 
+                fg='#2C3E50', font=('Segoe UI', 10)).pack(side=tk.LEFT, padx=5)
+        self.drives_container = tk.Frame(self.drives_frame, bg='#E0E0E0')
+        self.drives_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
     
     def create_search_bar(self):
-        search_frame = qt.Frame(self.window, bg='white', height=35)
-        search_frame.pack(fill=qt.X, padx=10, pady=(5, 0))
+        search_frame = tk.Frame(self.window, bg='white', height=35)
+        search_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
         
-        qt.Label(search_frame, text="🔍", font=('Segoe UI', 12), 
-                bg='white', fg='#7F8C8D').pack(side=qt.LEFT, padx=5)
+        tk.Label(search_frame, text="🔍", font=('Segoe UI', 12), 
+                bg='white', fg='#7F8C8D').pack(side=tk.LEFT, padx=5)
         
-        self.search_var = qt.StringVar()
+        self.search_var = tk.StringVar()
         self.search_var.trace('w', lambda *args: self.on_search_change())
         
-        self.search_entry = qt.Entry(search_frame, textvariable=self.search_var, 
+        self.search_entry = tk.Entry(search_frame, textvariable=self.search_var, 
                                      font=('Segoe UI', 10), bg='#F5F7FA', fg='#2C3E50', 
                                      bd=0, highlightthickness=1, 
                                      highlightcolor='#3498DB', highlightbackground='#BDC3C7')
-        self.search_entry.pack(side=qt.LEFT, fill=qt.X, expand=True, padx=5, pady=5, ipady=3)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5, ipady=3)
         
-        self.clear_search_btn = qt.Label(search_frame, text="✕", font=('Segoe UI', 12), 
+        self.clear_search_btn = tk.Label(search_frame, text="✕", font=('Segoe UI', 12), 
                                          bg='white', fg='#95A5A6', cursor='hand2')
-        self.clear_search_btn.pack(side=qt.RIGHT, padx=5)
+        self.clear_search_btn.pack(side=tk.RIGHT, padx=5)
         self.clear_search_btn.bind('<Button-1>', lambda e: self.clear_search())
         
-        options_frame = qt.Frame(search_frame, bg='white')
-        options_frame.pack(side=qt.RIGHT, padx=5)
+        options_frame = tk.Frame(search_frame, bg='white')
+        options_frame.pack(side=tk.RIGHT, padx=5)
         
-        self.search_in_subfolders = qt.BooleanVar(value=True)
-        qt.Checkbutton(options_frame, text="В подпапках", variable=self.search_in_subfolders,
+        self.search_in_subfolders = tk.BooleanVar(value=True)
+        tk.Checkbutton(options_frame, text="В подпапках", variable=self.search_in_subfolders,
                       bg='white', fg='#7F8C8D', font=('Segoe UI', 9),
-                      selectcolor='white', command=self.on_search_change).pack(side=qt.LEFT, padx=5)
+                      selectcolor='white', command=self.on_search_change).pack(side=tk.LEFT, padx=5)
         
-        self.search_by_content = qt.BooleanVar(value=False)
-        qt.Checkbutton(options_frame, text="По содержимому", variable=self.search_by_content,
+        self.search_by_content = tk.BooleanVar(value=False)
+        tk.Checkbutton(options_frame, text="По содержимому", variable=self.search_by_content,
                       bg='white', fg='#7F8C8D', font=('Segoe UI', 9),
-                      selectcolor='white', command=self.on_search_change).pack(side=qt.LEFT, padx=5)
+                      selectcolor='white', command=self.on_search_change).pack(side=tk.LEFT, padx=5)
         
-        self.search_status = qt.Label(search_frame, text="", bg='white', fg='#3498DB', 
+        self.search_status = tk.Label(search_frame, text="", bg='white', fg='#3498DB', 
                                       font=('Segoe UI', 9))
-        self.search_status.pack(side=qt.RIGHT, padx=5)
+        self.search_status.pack(side=tk.RIGHT, padx=5)
     
     def on_search_change(self):
         query = self.search_var.get().strip()
@@ -2966,7 +1733,9 @@ class ModernFileExplorer:
         self.search_status.config(text="🔍 Поиск...")
         self.search_results = []
         
-        _start_managed_thread(self.bitos, self._search_thread, args=(query,), name="ExplorerSearch")
+        thread = threading.Thread(target=self._search_thread, args=(query,))
+        thread.daemon = True
+        thread.start()
     
     def _search_thread(self, query):
         results = []
@@ -3050,54 +1819,54 @@ class ModernFileExplorer:
         self.search_status.config(text=f"Найдено: {len(self.search_results)}")
         
         if not self.search_results:
-            no_result = qt.Label(self.scrollable_frame, text="🔍 Ничего не найдено", 
+            no_result = tk.Label(self.scrollable_frame, text="🔍 Ничего не найдено", 
                                 bg='white', fg='#7F8C8D', font=('Segoe UI', 14))
             no_result.pack(expand=True)
             return
         
-        header = qt.Frame(self.scrollable_frame, bg='#3498DB', height=30)
-        header.pack(fill=qt.X, pady=(0, 5))
-        qt.Label(header, text=f"🔍 Результаты поиска ({len(self.search_results)})", 
-                bg='#3498DB', fg='white', font=('Segoe UI', 10, 'bold')).pack(side=qt.LEFT, padx=10)
+        header = tk.Frame(self.scrollable_frame, bg='#3498DB', height=30)
+        header.pack(fill=tk.X, pady=(0, 5))
+        tk.Label(header, text=f"🔍 Результаты поиска ({len(self.search_results)})", 
+                bg='#3498DB', fg='white', font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=10)
         
-        qt.Button(header, text="✕ Закрыть поиск", bg='#E74C3C', fg='white',
+        tk.Button(header, text="✕ Закрыть поиск", bg='#E74C3C', fg='white',
                  font=('Segoe UI', 9), bd=0, padx=10, pady=3,
-                 command=self.clear_search).pack(side=qt.RIGHT, padx=10)
+                 command=self.clear_search).pack(side=tk.RIGHT, padx=10)
         
         folders = [r for r in self.search_results if r['is_dir']]
         files = [r for r in self.search_results if not r['is_dir']]
         
         if folders:
-            qt.Label(self.scrollable_frame, text="📁 Папки:", bg='white', fg='#7F8C8D',
+            tk.Label(self.scrollable_frame, text="📁 Папки:", bg='white', fg='#7F8C8D',
                     font=('Segoe UI', 9, 'bold')).pack(anchor='w', padx=10, pady=(10, 5))
             for result in folders:
                 self._create_search_item(result)
         
         if files:
-            qt.Label(self.scrollable_frame, text="📄 Файлы:", bg='white', fg='#7F8C8D',
+            tk.Label(self.scrollable_frame, text="📄 Файлы:", bg='white', fg='#7F8C8D',
                     font=('Segoe UI', 9, 'bold')).pack(anchor='w', padx=10, pady=(10, 5))
             for result in files:
                 self._create_search_item(result)
     
     def _create_search_item(self, result):
-        item_frame = qt.Frame(self.scrollable_frame, bg='white', height=30)
-        item_frame.pack(fill=qt.X, pady=1)
+        item_frame = tk.Frame(self.scrollable_frame, bg='white', height=30)
+        item_frame.pack(fill=tk.X, pady=1)
         item_frame.item_data = result
         
         icon = "📁" if result['is_dir'] else self.get_file_icon(result['name'])
         
-        name_label = qt.Label(item_frame, text=f"{icon} {result['name']}", 
+        name_label = tk.Label(item_frame, text=f"{icon} {result['name']}", 
                              bg='white', fg='#2C3E50', font=('Segoe UI', 10), anchor='w')
-        name_label.pack(side=qt.LEFT, padx=10, fill=qt.X, expand=True)
+        name_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
-        path_label = qt.Label(item_frame, text=result['path'], bg='white', 
+        path_label = tk.Label(item_frame, text=result['path'], bg='white', 
                              fg='#7F8C8D', font=('Segoe UI', 8), anchor='w')
-        path_label.pack(side=qt.LEFT, padx=10, fill=qt.X, expand=True)
+        path_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         
         if not result['is_dir']:
             size_str = self.format_size(result['size'])
-            qt.Label(item_frame, text=size_str, bg='white', fg='#7F8C8D', 
-                    font=('Segoe UI', 9)).pack(side=qt.RIGHT, padx=10)
+            tk.Label(item_frame, text=size_str, bg='white', fg='#7F8C8D', 
+                    font=('Segoe UI', 9)).pack(side=tk.RIGHT, padx=10)
         
         for widget in [item_frame, name_label, path_label]:
             widget.bind('<Button-1>', lambda e, f=item_frame: self.select_item(f))
@@ -3122,40 +1891,40 @@ class ModernFileExplorer:
         self.load_directory()
     
     def create_address_bar(self):
-        addr_frame = qt.Frame(self.window, bg='white', height=35)
-        addr_frame.pack(fill=qt.X, padx=10, pady=5)
-        qt.Label(addr_frame, text="📍", font=('Segoe UI', 12), bg='white', fg='#7F8C8D').pack(side=qt.LEFT, padx=5)
-        self.address_var = qt.StringVar()
-        self.address_entry = qt.Entry(addr_frame, textvariable=self.address_var, font=('Segoe UI', 10),
+        addr_frame = tk.Frame(self.window, bg='white', height=35)
+        addr_frame.pack(fill=tk.X, padx=10, pady=5)
+        tk.Label(addr_frame, text="📍", font=('Segoe UI', 12), bg='white', fg='#7F8C8D').pack(side=tk.LEFT, padx=5)
+        self.address_var = tk.StringVar()
+        self.address_entry = tk.Entry(addr_frame, textvariable=self.address_var, font=('Segoe UI', 10),
                                      bg='#F5F7FA', fg='#2C3E50', bd=0, highlightthickness=1,
                                      highlightcolor='#3498DB', highlightbackground='#BDC3C7')
-        self.address_entry.pack(side=qt.LEFT, fill=qt.X, expand=True, padx=5, pady=5, ipady=3)
+        self.address_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5, ipady=3)
         self.address_entry.bind('<Return>', lambda e: self.navigate_to(self.address_var.get()))
-        go_btn = qt.Button(addr_frame, text="Перейти", bg='#3498DB', fg='white', font=('Segoe UI', 10), 
+        go_btn = tk.Button(addr_frame, text="Перейти", bg='#3498DB', fg='white', font=('Segoe UI', 10), 
                           bd=0, padx=15, pady=2, command=lambda: self.navigate_to(self.address_var.get()))
-        go_btn.pack(side=qt.RIGHT, padx=5)
+        go_btn.pack(side=tk.RIGHT, padx=5)
     
     def create_content_area(self):
-        main_frame = qt.Frame(self.window, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=10, pady=5)
+        main_frame = tk.Frame(self.window, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         self.create_sidebar(main_frame)
-        self.content_frame = qt.Frame(main_frame, bg='white')
-        self.content_frame.pack(side=qt.LEFT, fill=qt.BOTH, expand=True, padx=(5, 0))
-        self.canvas = qt.Canvas(self.content_frame, bg='white', highlightthickness=0)
-        self.scrollbar = qt.Scrollbar(self.content_frame, orient=qt.VERTICAL, command=self.canvas.yview)
-        self.scrollable_frame = qt.Frame(self.canvas, bg='white')
+        self.content_frame = tk.Frame(main_frame, bg='white')
+        self.content_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        self.canvas = tk.Canvas(self.content_frame, bg='white', highlightthickness=0)
+        self.scrollbar = tk.Scrollbar(self.content_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg='white')
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.pack(side=qt.LEFT, fill=qt.BOTH, expand=True)
-        self.scrollbar.pack(side=qt.RIGHT, fill=qt.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
     
     def create_sidebar(self, parent):
-        sidebar = qt.Frame(parent, bg='#F0F3F4', width=200)
-        sidebar.pack(side=qt.LEFT, fill=qt.Y, padx=(0, 5))
+        sidebar = tk.Frame(parent, bg='#F0F3F4', width=200)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
         sidebar.pack_propagate(False)
-        qt.Label(sidebar, text="📌 Быстрый доступ", bg='#F0F3F4', fg='#2C3E50', 
+        tk.Label(sidebar, text="📌 Быстрый доступ", bg='#F0F3F4', fg='#2C3E50', 
                 font=('Segoe UI', 10, 'bold')).pack(anchor='w', padx=10, pady=5)
         quick_items = [
             ("🏠 Домой", self.bitos.user_paths["home"]),
@@ -3165,31 +1934,31 @@ class ModernFileExplorer:
             ("📥 Загрузки", self.bitos.downloads_path),
         ]
         for name, path in quick_items:
-            btn = qt.Button(sidebar, text=name, bg='#F0F3F4', fg='#2C3E50', font=('Segoe UI', 10), 
+            btn = tk.Button(sidebar, text=name, bg='#F0F3F4', fg='#2C3E50', font=('Segoe UI', 10), 
                            bd=0, anchor='w', command=lambda p=path: self.navigate_to(p))
-            btn.pack(fill=qt.X, padx=5, pady=2)
-        qt.Frame(sidebar, height=2, bg='#BDC3C7').pack(fill=qt.X, padx=10, pady=10)
-        qt.Label(sidebar, text="💾 Съёмные диски", bg='#F0F3F4', fg='#2C3E50', 
+            btn.pack(fill=tk.X, padx=5, pady=2)
+        tk.Frame(sidebar, height=2, bg='#BDC3C7').pack(fill=tk.X, padx=10, pady=10)
+        tk.Label(sidebar, text="💾 Съёмные диски", bg='#F0F3F4', fg='#2C3E50', 
                 font=('Segoe UI', 10, 'bold')).pack(anchor='w', padx=10, pady=5)
-        self.sidebar_drives = qt.Frame(sidebar, bg='#F0F3F4')
-        self.sidebar_drives.pack(fill=qt.X, padx=5)
-        qt.Frame(sidebar, height=2, bg='#BDC3C7').pack(fill=qt.X, padx=10, pady=10)
-        trash_btn = qt.Button(sidebar, text="🗑 Корзина", bg='#F0F3F4', fg='#E74C3C', font=('Segoe UI', 10), 
+        self.sidebar_drives = tk.Frame(sidebar, bg='#F0F3F4')
+        self.sidebar_drives.pack(fill=tk.X, padx=5)
+        tk.Frame(sidebar, height=2, bg='#BDC3C7').pack(fill=tk.X, padx=10, pady=10)
+        trash_btn = tk.Button(sidebar, text="🗑 Корзина", bg='#F0F3F4', fg='#E74C3C', font=('Segoe UI', 10), 
                              bd=0, anchor='w', command=self.open_trash)
-        trash_btn.pack(fill=qt.X, padx=5, pady=2)
+        trash_btn.pack(fill=tk.X, padx=5, pady=2)
     
     def create_status_bar(self):
-        self.status_bar = qt.Frame(self.window, bg='#E0E0E0', height=25)
-        self.status_bar.pack(fill=qt.X, side=qt.BOTTOM)
-        self.status_label = qt.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', 
+        self.status_bar = tk.Frame(self.window, bg='#E0E0E0', height=25)
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        self.status_label = tk.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', 
                                      font=('Segoe UI', 9), anchor='w')
-        self.status_label.pack(side=qt.LEFT, padx=10)
-        self.items_count_label = qt.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', 
+        self.status_label.pack(side=tk.LEFT, padx=10)
+        self.items_count_label = tk.Label(self.status_bar, bg='#E0E0E0', fg='#2C3E50', 
                                           font=('Segoe UI', 9))
-        self.items_count_label.pack(side=qt.RIGHT, padx=10)
+        self.items_count_label.pack(side=tk.RIGHT, padx=10)
     
     def create_context_menu(self):
-        self.context_menu = qt.Menu(self.window, tearoff=0, bg='#2C3E50', fg='white', 
+        self.context_menu = tk.Menu(self.window, tearoff=0, bg='#2C3E50', fg='white', 
                                    activebackground='#3498DB')
         self.context_menu.add_command(label="Открыть", command=self.open_selected)
         self.context_menu.add_separator()
@@ -3310,10 +2079,10 @@ class ModernFileExplorer:
         for widget in self.sidebar_drives.winfo_children():
             widget.destroy()
         
-        label = qt.Label(self.drives_container, text="нет подключённых устройств", 
+        label = tk.Label(self.drives_container, text="нет подключённых устройств", 
                         font=('Segoe UI', 9), bg='#E0E0E0', fg='#7F8C8D')
-        label.pack(side=qt.LEFT, padx=5)
-        label2 = qt.Label(self.sidebar_drives, text="нет подключённых устройств", 
+        label.pack(side=tk.LEFT, padx=5)
+        label2 = tk.Label(self.sidebar_drives, text="нет подключённых устройств", 
                          font=('Segoe UI', 9), bg='#F0F3F4', fg='#7F8C8D')
         label2.pack(padx=5, pady=2)
     
@@ -3334,17 +2103,17 @@ class ModernFileExplorer:
         
         short_name = drive_path[:2] if platform.system() == "Windows" else os.path.basename(drive_path)
         
-        btn = qt.Button(self.drives_container, text=f'💾 {short_name}', font=('Segoe UI', 10), 
+        btn = tk.Button(self.drives_container, text=f'💾 {short_name}', font=('Segoe UI', 10), 
                        bg='#E0E0E0', fg='#2C3E50', bd=0,
                        command=lambda p=drive_path: self.navigate_to(p))
         btn.drive_path = drive_path
-        btn.pack(side=qt.LEFT, padx=2)
+        btn.pack(side=tk.LEFT, padx=2)
         
-        sidebar_btn = qt.Button(self.sidebar_drives, text=f'💾 {drive_label}', bg='#F0F3F4', 
+        sidebar_btn = tk.Button(self.sidebar_drives, text=f'💾 {drive_label}', bg='#F0F3F4', 
                                fg='#2C3E50', font=('Segoe UI', 10), bd=0, anchor='w', 
                                command=lambda p=drive_path: self.navigate_to(p))
         sidebar_btn.drive_path = drive_path
-        sidebar_btn.pack(fill=qt.X, padx=5, pady=2)
+        sidebar_btn.pack(fill=tk.X, padx=5, pady=2)
     
     def update_drive_buttons(self):
         for widget in self.drives_container.winfo_children():
@@ -3416,35 +2185,35 @@ class ModernFileExplorer:
             messagebox.showerror("Ошибка", str(e))
     
     def display_list_view(self, items):
-        header = qt.Frame(self.scrollable_frame, bg='#F0F3F4', height=25)
-        header.pack(fill=qt.X, pady=(0, 2))
-        qt.Label(header, text="Имя", bg='#F0F3F4', fg='#2C3E50', 
-                font=('Segoe UI', 10, 'bold')).pack(side=qt.LEFT, padx=10)
-        qt.Label(header, text="Размер", bg='#F0F3F4', fg='#2C3E50', 
-                font=('Segoe UI', 10, 'bold'), width=10).pack(side=qt.RIGHT, padx=10)
-        qt.Label(header, text="Изменён", bg='#F0F3F4', fg='#2C3E50', 
-                font=('Segoe UI', 10, 'bold'), width=15).pack(side=qt.RIGHT, padx=10)
+        header = tk.Frame(self.scrollable_frame, bg='#F0F3F4', height=25)
+        header.pack(fill=tk.X, pady=(0, 2))
+        tk.Label(header, text="Имя", bg='#F0F3F4', fg='#2C3E50', 
+                font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=10)
+        tk.Label(header, text="Размер", bg='#F0F3F4', fg='#2C3E50', 
+                font=('Segoe UI', 10, 'bold'), width=10).pack(side=tk.RIGHT, padx=10)
+        tk.Label(header, text="Изменён", bg='#F0F3F4', fg='#2C3E50', 
+                font=('Segoe UI', 10, 'bold'), width=15).pack(side=tk.RIGHT, padx=10)
         for item in items:
             self.create_list_item(item)
     
     def create_list_item(self, item):
         item_path = os.path.join(self.current_path, item)
         is_dir = os.path.isdir(item_path)
-        item_frame = qt.Frame(self.scrollable_frame, bg='white', height=25)
-        item_frame.pack(fill=qt.X, pady=1)
+        item_frame = tk.Frame(self.scrollable_frame, bg='white', height=25)
+        item_frame.pack(fill=tk.X, pady=1)
         item_frame.item_data = {'name': item, 'path': item_path, 'is_dir': is_dir}
         icon = "📁" if is_dir else self.get_file_icon(item)
-        name_label = qt.Label(item_frame, text=f"{icon} {item}", bg='white', fg='#2C3E50', 
+        name_label = tk.Label(item_frame, text=f"{icon} {item}", bg='white', fg='#2C3E50', 
                              font=('Segoe UI', 10), anchor='w')
-        name_label.pack(side=qt.LEFT, padx=10, fill=qt.X, expand=True)
+        name_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
         if not is_dir:
             size = os.path.getsize(item_path)
             size_str = self.format_size(size)
-            qt.Label(item_frame, text=size_str, bg='white', fg='#7F8C8D', 
-                    font=('Segoe UI', 10), width=10).pack(side=qt.RIGHT, padx=10)
+            tk.Label(item_frame, text=size_str, bg='white', fg='#7F8C8D', 
+                    font=('Segoe UI', 10), width=10).pack(side=tk.RIGHT, padx=10)
         mtime = datetime.fromtimestamp(os.path.getmtime(item_path))
-        qt.Label(item_frame, text=mtime.strftime('%Y-%m-%d %H:%M'), bg='white', fg='#7F8C8D', 
-                font=('Segoe UI', 10), width=15).pack(side=qt.RIGHT, padx=10)
+        tk.Label(item_frame, text=mtime.strftime('%Y-%m-%d %H:%M'), bg='white', fg='#7F8C8D', 
+                font=('Segoe UI', 10), width=15).pack(side=tk.RIGHT, padx=10)
         for widget in [item_frame, name_label]:
             widget.bind('<Button-1>', lambda e, f=item_frame: self.select_item(f))
             widget.bind('<Double-1>', lambda e, p=item_path, d=is_dir: self.open_item(p, d))
@@ -3462,15 +2231,15 @@ class ModernFileExplorer:
     def create_icon_item(self, item, row, col):
         item_path = os.path.join(self.current_path, item)
         is_dir = os.path.isdir(item_path)
-        icon_frame = qt.Frame(self.scrollable_frame, bg='white', width=120, height=120)
+        icon_frame = tk.Frame(self.scrollable_frame, bg='white', width=120, height=120)
         icon_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
         icon_frame.grid_propagate(False)
         icon_frame.item_data = {'name': item, 'path': item_path, 'is_dir': is_dir}
         icon = "📁" if is_dir else self.get_file_icon(item)
-        icon_label = qt.Label(icon_frame, text=icon, bg='white', fg='#2C3E50', font=('Segoe UI', 36))
+        icon_label = tk.Label(icon_frame, text=icon, bg='white', fg='#2C3E50', font=('Segoe UI', 36))
         icon_label.pack(expand=True)
         display_name = item if len(item) <= 15 else item[:12] + '...'
-        name_label = qt.Label(icon_frame, text=display_name, bg='white', fg='#2C3E50', 
+        name_label = tk.Label(icon_frame, text=display_name, bg='white', fg='#2C3E50', 
                              font=('Segoe UI', 9), wraplength=100)
         name_label.pack()
         for widget in [icon_frame, icon_label, name_label]:
@@ -3491,14 +2260,14 @@ class ModernFileExplorer:
     
     def select_item(self, item_frame):
         for widget in self.scrollable_frame.winfo_children():
-            if isinstance(widget, qt.Frame):
+            if isinstance(widget, tk.Frame):
                 widget.config(bg='white')
                 for child in widget.winfo_children():
-                    if isinstance(child, qt.Label):
+                    if isinstance(child, tk.Label):
                         child.config(bg='white')
         item_frame.config(bg='#3498DB')
         for child in item_frame.winfo_children():
-            if isinstance(child, qt.Label):
+            if isinstance(child, tk.Label):
                 child.config(bg='#3498DB', fg='white')
         self.selected_items = [item_frame.item_data]
     
@@ -3519,25 +2288,25 @@ class ModernFileExplorer:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            dialog = qt.Toplevel(self.window)
+            dialog = tk.Toplevel(self.window)
             dialog.title(f"📄 {os.path.basename(path)}")
             dialog.geometry("700x600")
             dialog.transient(self.window)
             dialog.configure(bg='#F5F7FA')
             text_area = scrolledtext.ScrolledText(dialog, font=('Consolas', 11))
-            text_area.pack(fill=qt.BOTH, expand=True, padx=10, pady=10)
+            text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             text_area.insert('1.0', content)
-            btn_frame = qt.Frame(dialog, bg='#F5F7FA')
-            btn_frame.pack(fill=qt.X, padx=10, pady=5)
+            btn_frame = tk.Frame(dialog, bg='#F5F7FA')
+            btn_frame.pack(fill=tk.X, padx=10, pady=5)
             def save():
-                new_content = text_area.get('1.0', qt.END)
+                new_content = text_area.get('1.0', tk.END)
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(new_content)
                 messagebox.showinfo("Успех", "Файл сохранён")
-            qt.Button(btn_frame, text="Сохранить", bg='#3498DB', fg='white', 
-                     font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=save).pack(side=qt.LEFT, padx=5)
-            qt.Button(btn_frame, text="Закрыть", bg='#E74C3C', fg='white', 
-                     font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=dialog.destroy).pack(side=qt.LEFT, padx=5)
+            tk.Button(btn_frame, text="Сохранить", bg='#3498DB', fg='white', 
+                     font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=save).pack(side=tk.LEFT, padx=5)
+            tk.Button(btn_frame, text="Закрыть", bg='#E74C3C', fg='white', 
+                     font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=dialog.destroy).pack(side=tk.LEFT, padx=5)
         except Exception as e:
             messagebox.showerror("Ошибка", str(e))
     
@@ -3545,7 +2314,7 @@ class ModernFileExplorer:
         if not PIL_AVAILABLE:
             messagebox.showerror("Ошибка", "Для просмотра изображений установите Pillow")
             return
-        dialog = qt.Toplevel(self.window)
+        dialog = tk.Toplevel(self.window)
         dialog.title(f"🖼 {os.path.basename(path)}")
         dialog.geometry("800x600")
         dialog.transient(self.window)
@@ -3553,8 +2322,8 @@ class ModernFileExplorer:
             img = Image.open(path)
             max_size = (700, 500)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            photo = QtPhotoImage(img)
-            label = qt.Label(dialog, image=photo)
+            photo = ImageTk.PhotoImage(img)
+            label = tk.Label(dialog, image=photo)
             label.image = photo
             label.pack(expand=True, padx=10, pady=10)
         except Exception as e:
@@ -3568,14 +2337,14 @@ class ModernFileExplorer:
         return f"{size:.1f} ТБ"
     
     def new_folder(self):
-        dialog = qt.Toplevel(self.window)
+        dialog = tk.Toplevel(self.window)
         dialog.title("Новая папка")
         dialog.geometry("400x150")
         dialog.transient(self.window)
         dialog.configure(bg='#F5F7FA')
-        qt.Label(dialog, text="Имя папки:", bg='#F5F7FA', fg='#2C3E50', 
+        tk.Label(dialog, text="Имя папки:", bg='#F5F7FA', fg='#2C3E50', 
                 font=('Segoe UI', 10)).pack(padx=10, pady=10)
-        name_entry = qt.Entry(dialog, font=('Segoe UI', 11), width=30)
+        name_entry = tk.Entry(dialog, font=('Segoe UI', 11), width=30)
         name_entry.pack(padx=10, pady=5)
         name_entry.focus_set()
         def create():
@@ -3594,7 +2363,7 @@ class ModernFileExplorer:
                     self.refresh()
                 except Exception as e:
                     messagebox.showerror("Ошибка", str(e))
-        qt.Button(dialog, text="Создать", bg='#3498DB', fg='white', 
+        tk.Button(dialog, text="Создать", bg='#3498DB', fg='white', 
                  font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=create).pack(pady=10)
         name_entry.bind('<Return>', lambda e: create())
     
@@ -3602,7 +2371,7 @@ class ModernFileExplorer:
         if not self.selected_items:
             messagebox.showinfo("Информация", "Ничего не выбрано")
             return
-        dialog = qt.Toplevel(self.window)
+        dialog = tk.Toplevel(self.window)
         dialog.title("Удаление")
         dialog.geometry("400x200")
         dialog.transient(self.window)
@@ -3612,9 +2381,9 @@ class ModernFileExplorer:
         y = (dialog.winfo_screenheight() - 200) // 2
         dialog.geometry(f'+{x}+{y}')
         items_count = len(self.selected_items)
-        qt.Label(dialog, text="🗑 Удаление", font=('Segoe UI', 16, 'bold'), 
+        tk.Label(dialog, text="🗑 Удаление", font=('Segoe UI', 16, 'bold'), 
                 bg='#F5F7FA', fg='#2C3E50').pack(pady=10)
-        qt.Label(dialog, text=f"Выбрано элементов: {items_count}", 
+        tk.Label(dialog, text=f"Выбрано элементов: {items_count}", 
                 font=('Segoe UI', 11), bg='#F5F7FA', fg='#7F8C8D').pack()
         def trash():
             dialog.destroy()
@@ -3635,13 +2404,13 @@ class ModernFileExplorer:
                         messagebox.showerror("Ошибка", str(e))
                 self.selected_items = []
                 self.refresh()
-        btn_frame = qt.Frame(dialog, bg='#F5F7FA')
+        btn_frame = tk.Frame(dialog, bg='#F5F7FA')
         btn_frame.pack(expand=True)
-        qt.Button(btn_frame, text="♻ В корзину", bg='#3498DB', fg='white', 
-                 font=('Segoe UI', 11), bd=0, padx=30, pady=10, command=trash).pack(side=qt.LEFT, padx=10)
-        qt.Button(btn_frame, text="🗑 Навсегда", bg='#E74C3C', fg='white', 
-                 font=('Segoe UI', 11), bd=0, padx=30, pady=10, command=permanent).pack(side=qt.LEFT, padx=10)
-        qt.Button(dialog, text="Отмена", bg='#95A5A6', fg='white', 
+        tk.Button(btn_frame, text="♻ В корзину", bg='#3498DB', fg='white', 
+                 font=('Segoe UI', 11), bd=0, padx=30, pady=10, command=trash).pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame, text="🗑 Навсегда", bg='#E74C3C', fg='white', 
+                 font=('Segoe UI', 11), bd=0, padx=30, pady=10, command=permanent).pack(side=tk.LEFT, padx=10)
+        tk.Button(dialog, text="Отмена", bg='#95A5A6', fg='white', 
                  font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=dialog.destroy).pack(pady=10)
     
     def delete_to_trash(self):
@@ -3722,14 +2491,14 @@ class ModernFileExplorer:
         if not self.selected_items:
             return
         item = self.selected_items[0]
-        dialog = qt.Toplevel(self.window)
+        dialog = tk.Toplevel(self.window)
         dialog.title("Переименовать")
         dialog.geometry("400x150")
         dialog.transient(self.window)
         dialog.configure(bg='#F5F7FA')
-        qt.Label(dialog, text="Новое имя:", bg='#F5F7FA', fg='#2C3E50', 
+        tk.Label(dialog, text="Новое имя:", bg='#F5F7FA', fg='#2C3E50', 
                 font=('Segoe UI', 10)).pack(padx=10, pady=10)
-        name_entry = qt.Entry(dialog, font=('Segoe UI', 11), width=30)
+        name_entry = tk.Entry(dialog, font=('Segoe UI', 11), width=30)
         name_entry.pack(padx=10, pady=5)
         name_entry.insert(0, item['name'])
         name_entry.focus_set()
@@ -3748,7 +2517,7 @@ class ModernFileExplorer:
                     self.refresh()
                 except Exception as e:
                     messagebox.showerror("Ошибка", str(e))
-        qt.Button(dialog, text="Переименовать", bg='#3498DB', fg='white', 
+        tk.Button(dialog, text="Переименовать", bg='#3498DB', fg='white', 
                  font=('Segoe UI', 10), bd=0, padx=20, pady=5, command=rename).pack(pady=10)
         name_entry.bind('<Return>', lambda e: rename())
     
@@ -3826,7 +2595,7 @@ class Gallery:
         self.create_window()
     
     def create_window(self):
-        self.window = qt.Toplevel(self.parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title("🖼 Галерея BITOS")
         self.window.geometry("1000x700")
         self.window.transient(self.parent)
@@ -3835,36 +2604,36 @@ class Gallery:
         y = (self.window.winfo_screenheight() - 700) // 2
         self.window.geometry(f'+{x}+{y}')
         
-        toolbar = qt.Frame(self.window, bg='#E0E0E0', height=40)
-        toolbar.pack(fill=qt.X)
-        qt.Label(toolbar, text="🖼 Галерея изображений", bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 12, 'bold')).pack(side=qt.LEFT, padx=10)
-        refresh_btn = qt.Button(toolbar, text="↻ Обновить", bg='#E0E0E0', fg='#2C3E50', bd=0, font=('Segoe UI', 10),
+        toolbar = tk.Frame(self.window, bg='#E0E0E0', height=40)
+        toolbar.pack(fill=tk.X)
+        tk.Label(toolbar, text="🖼 Галерея изображений", bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 12, 'bold')).pack(side=tk.LEFT, padx=10)
+        refresh_btn = tk.Button(toolbar, text="↻ Обновить", bg='#E0E0E0', fg='#2C3E50', bd=0, font=('Segoe UI', 10),
                                command=self.load_images)
-        refresh_btn.pack(side=qt.RIGHT, padx=10)
+        refresh_btn.pack(side=tk.RIGHT, padx=10)
         
-        self.canvas = qt.Canvas(self.window, bg='white', highlightthickness=0)
-        self.scrollbar = qt.Scrollbar(self.window, orient=qt.VERTICAL, command=self.canvas.yview)
-        self.images_frame = qt.Frame(self.canvas, bg='white')
+        self.canvas = tk.Canvas(self.window, bg='white', highlightthickness=0)
+        self.scrollbar = tk.Scrollbar(self.window, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.images_frame = tk.Frame(self.canvas, bg='white')
         self.images_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.images_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.pack(side=qt.LEFT, fill=qt.BOTH, expand=True, padx=10, pady=10)
-        self.scrollbar.pack(side=qt.RIGHT, fill=qt.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.status_bar = qt.Label(self.window, text="", bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 9), anchor='w')
-        self.status_bar.pack(fill=qt.X, side=qt.BOTTOM)
+        self.status_bar = tk.Label(self.window, text="", bg='#E0E0E0', fg='#2C3E50', font=('Segoe UI', 9), anchor='w')
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
         self.load_images()
     
     def load_images(self):
         for widget in self.images_frame.winfo_children():
             widget.destroy()
         if not PIL_AVAILABLE:
-            qt.Label(self.images_frame, text="⚠️ Для просмотра изображений установите Pillow",
+            tk.Label(self.images_frame, text="⚠️ Для просмотра изображений установите Pillow",
                     font=('Segoe UI', 14), fg='#E74C3C', bg='white').pack(pady=50)
             return
         images = [f for f in os.listdir(self.pictures_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
         if not images:
-            qt.Label(self.images_frame, text="📸 Нет изображений в папке Pictures",
+            tk.Label(self.images_frame, text="📸 Нет изображений в папке Pictures",
                     font=('Segoe UI', 14), fg='#7F8C8D', bg='white').pack(pady=50)
             self.status_bar.config(text="Нет изображений")
             return
@@ -3883,25 +2652,25 @@ class Gallery:
             img_path = os.path.join(self.pictures_path, img_file)
             img = Image.open(img_path)
             img.thumbnail((200, 200), Image.Resampling.LANCZOS)
-            photo = QtPhotoImage(img)
-            frame = qt.Frame(self.images_frame, bg='white', relief=qt.RAISED, bd=1)
+            photo = ImageTk.PhotoImage(img)
+            frame = tk.Frame(self.images_frame, bg='white', relief=tk.RAISED, bd=1)
             frame.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
-            label = qt.Label(frame, image=photo, bg='white')
+            label = tk.Label(frame, image=photo, bg='white')
             label.image = photo
             label.pack(padx=5, pady=5)
             name = img_file if len(img_file) <= 20 else img_file[:17] + '...'
-            qt.Label(frame, text=name, bg='white', fg='#2C3E50', font=('Segoe UI', 9)).pack()
-            btn_frame = qt.Frame(frame, bg='white')
+            tk.Label(frame, text=name, bg='white', fg='#2C3E50', font=('Segoe UI', 9)).pack()
+            btn_frame = tk.Frame(frame, bg='white')
             btn_frame.pack(pady=5)
-            qt.Button(btn_frame, text="👁 Открыть", bg='#3498DB', fg='white', font=('Segoe UI', 8), bd=0, padx=5,
-                     command=lambda p=img_path: self.open_image(p)).pack(side=qt.LEFT, padx=2)
-            qt.Button(btn_frame, text="🗑 Удалить", bg='#E74C3C', fg='white', font=('Segoe UI', 8), bd=0, padx=5,
-                     command=lambda f=img_file: self.delete_image(f)).pack(side=qt.LEFT, padx=2)
+            tk.Button(btn_frame, text="👁 Открыть", bg='#3498DB', fg='white', font=('Segoe UI', 8), bd=0, padx=5,
+                     command=lambda p=img_path: self.open_image(p)).pack(side=tk.LEFT, padx=2)
+            tk.Button(btn_frame, text="🗑 Удалить", bg='#E74C3C', fg='white', font=('Segoe UI', 8), bd=0, padx=5,
+                     command=lambda f=img_file: self.delete_image(f)).pack(side=tk.LEFT, padx=2)
         except Exception as e:
             print(f"Ошибка загрузки {img_file}: {e}")
     
     def open_image(self, path):
-        dialog = qt.Toplevel(self.window)
+        dialog = tk.Toplevel(self.window)
         dialog.title(os.path.basename(path))
         dialog.geometry("800x600")
         dialog.transient(self.window)
@@ -3909,8 +2678,8 @@ class Gallery:
             img = Image.open(path)
             max_size = (750, 500)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            photo = QtPhotoImage(img)
-            label = qt.Label(dialog, image=photo)
+            photo = ImageTk.PhotoImage(img)
+            label = tk.Label(dialog, image=photo)
             label.image = photo
             label.pack(expand=True, padx=10, pady=10)
         except Exception as e:
@@ -3935,7 +2704,7 @@ class Paint:
         self.create_window()
     
     def create_window(self):
-        self.window = qt.Toplevel(self.parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title("🎨 Paint")
         self.window.geometry("800x600")
         self.window.transient(self.parent)
@@ -3947,21 +2716,21 @@ class Paint:
         self.last_x = None
         self.last_y = None
         
-        toolbar = qt.Frame(self.window, bg='#E0E0E0', height=40)
-        toolbar.pack(fill=qt.X)
+        toolbar = tk.Frame(self.window, bg='#E0E0E0', height=40)
+        toolbar.pack(fill=tk.X)
         
         colors = ['black', 'red', 'green', 'blue', 'yellow', 'orange', 'purple', 'white']
         for c in colors:
-            btn = qt.Button(toolbar, bg=c, width=3, height=1, command=lambda col=c: self.set_color(col))
-            btn.pack(side=qt.LEFT, padx=2, pady=5)
+            btn = tk.Button(toolbar, bg=c, width=3, height=1, command=lambda col=c: self.set_color(col))
+            btn.pack(side=tk.LEFT, padx=2, pady=5)
         
-        qt.Button(toolbar, text="Ластик", bg='#E0E0E0', command=self.toggle_eraser).pack(side=qt.LEFT, padx=5)
-        qt.Scale(toolbar, from_=1, to=20, orient=qt.HORIZONTAL, label="Размер",
-                command=lambda v: self.set_brush_size(int(v))).pack(side=qt.LEFT, padx=10)
-        qt.Button(toolbar, text="Очистить", bg='#E74C3C', fg='white', command=self.clear_canvas).pack(side=qt.RIGHT, padx=5)
+        tk.Button(toolbar, text="Ластик", bg='#E0E0E0', command=self.toggle_eraser).pack(side=tk.LEFT, padx=5)
+        tk.Scale(toolbar, from_=1, to=20, orient=tk.HORIZONTAL, label="Размер",
+                command=lambda v: self.set_brush_size(int(v))).pack(side=tk.LEFT, padx=10)
+        tk.Button(toolbar, text="Очистить", bg='#E74C3C', fg='white', command=self.clear_canvas).pack(side=tk.RIGHT, padx=5)
         
-        self.canvas = qt.Canvas(self.window, bg='white', cursor='cross')
-        self.canvas.pack(fill=qt.BOTH, expand=True, padx=5, pady=5)
+        self.canvas = tk.Canvas(self.window, bg='white', cursor='cross')
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         self.canvas.bind('<B1-Motion>', self.paint)
         self.canvas.bind('<ButtonRelease-1>', self.reset)
@@ -3984,7 +2753,7 @@ class Paint:
         if self.last_x and self.last_y:
             color = "white" if self.eraser_mode else self.color
             self.canvas.create_line(self.last_x, self.last_y, x, y, width=self.brush_size, fill=color,
-                                   capstyle=qt.ROUND, smooth=True)
+                                   capstyle=tk.ROUND, smooth=True)
         self.last_x = x
         self.last_y = y
     
@@ -4096,7 +2865,7 @@ class DesktopIcon:
         try:
             self.canvas.itemconfig(self.icon_id_obj, fill='#3498DB')
             self.canvas.itemconfig(self.text_id, fill='#3498DB')
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def on_leave(self, event):
@@ -4105,7 +2874,7 @@ class DesktopIcon:
             try:
                 self.canvas.itemconfig(self.icon_id_obj, fill='white')
                 self.canvas.itemconfig(self.text_id, fill='white')
-            except qt.TclError:
+            except tk.TclError:
                 pass
     
     def on_click(self, event):
@@ -4118,14 +2887,14 @@ class DesktopIcon:
                         try:
                             icon.canvas.itemconfig(icon.icon_id_obj, fill='white')
                             icon.canvas.itemconfig(icon.text_id, fill='white')
-                        except qt.TclError:
+                        except tk.TclError:
                             pass
         
         self.selected = True
         try:
             self.canvas.itemconfig(self.icon_id_obj, fill='#3498DB')
             self.canvas.itemconfig(self.text_id, fill='#3498DB')
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def on_double_click(self, event):
@@ -4138,7 +2907,7 @@ class DesktopIcon:
     def on_right_click(self, event):
         self.on_click(event)
         
-        menu = qt.Menu(self.canvas, tearoff=0, bg='#2C3E50', fg='white', activebackground='#3498DB')
+        menu = tk.Menu(self.canvas, tearoff=0, bg='#2C3E50', fg='white', activebackground='#3498DB')
         menu.add_command(label="Открыть", command=self.command if self.command else lambda: None)
         menu.add_separator()
         
@@ -4163,7 +2932,7 @@ class DesktopIcon:
                 self.canvas.delete(f'hitbox_{self.icon_id}')
                 self.canvas.delete(f'icon_{self.icon_id}')
                 self.canvas.delete(f'text_{self.icon_id}')
-            except qt.TclError:
+            except tk.TclError:
                 pass
             
             if hasattr(self.canvas, 'desktop_icons') and self in self.canvas.desktop_icons:
@@ -4199,7 +2968,7 @@ class DesktopIcon:
             self.canvas.coords(self.hitbox_id, x1, y1, x2, y2)
             self.canvas.coords(self.icon_id_obj, self.x, self.y - 12)
             self.canvas.coords(self.text_id, self.x, self.y + 28)
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def update_theme(self, fg_color):
@@ -4207,7 +2976,7 @@ class DesktopIcon:
             try:
                 self.canvas.itemconfig(self.icon_id_obj, fill=fg_color)
                 self.canvas.itemconfig(self.text_id, fill=fg_color)
-            except qt.TclError:
+            except tk.TclError:
                 pass
     
     def to_dict(self):
@@ -4290,35 +3059,35 @@ class Taskbar:
         self.unread_count = 0
         
         # Создание панели
-        self.taskbar = qt.Frame(parent, bg=theme_colors['taskbar_bg'], height=40)
-        self.taskbar.pack(fill=qt.X, side=qt.BOTTOM)
+        self.taskbar = tk.Frame(parent, bg=theme_colors['taskbar_bg'], height=40)
+        self.taskbar.pack(fill=tk.X, side=tk.BOTTOM)
         self.taskbar.pack_propagate(False)
         
         # Кнопка ПУСК
-        self.start_btn = qt.Button(self.taskbar, text="ПУСК", bg='#2C3E50', fg='white',
+        self.start_btn = tk.Button(self.taskbar, text="ПУСК", bg='#2C3E50', fg='white',
                                    font=('Segoe UI', 10, 'bold'), bd=0, padx=15, pady=5,
                                    cursor='hand2', command=self.show_start_menu)
-        self.start_btn.pack(side=qt.LEFT, padx=5, pady=5)
+        self.start_btn.pack(side=tk.LEFT, padx=5, pady=5)
         self.start_btn.bind('<Enter>', lambda e: self.start_btn.config(bg='#3498DB'))
         self.start_btn.bind('<Leave>', lambda e: self.start_btn.config(bg='#2C3E50'))
         
         # Разделитель
-        qt.Frame(self.taskbar, width=2, bg='#34495E').pack(side=qt.LEFT, fill=qt.Y, padx=5)
+        tk.Frame(self.taskbar, width=2, bg='#34495E').pack(side=tk.LEFT, fill=tk.Y, padx=5)
         
         # Контейнер для кнопок открытых окон
-        self.windows_container = qt.Frame(self.taskbar, bg=theme_colors['taskbar_bg'])
-        self.windows_container.pack(side=qt.LEFT, fill=qt.X, expand=True, padx=5)
+        self.windows_container = tk.Frame(self.taskbar, bg=theme_colors['taskbar_bg'])
+        self.windows_container.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
         # Системный трей (правая часть)
-        self.tray_frame = qt.Frame(self.taskbar, bg=theme_colors['taskbar_bg'])
-        self.tray_frame.pack(side=qt.RIGHT, padx=10)
+        self.tray_frame = tk.Frame(self.taskbar, bg=theme_colors['taskbar_bg'])
+        self.tray_frame.pack(side=tk.RIGHT, padx=10)
         
         # Кнопка уведомлений
-        self.notify_btn = qt.Label(self.tray_frame, text="🔔", 
+        self.notify_btn = tk.Label(self.tray_frame, text="🔔", 
                                    bg=theme_colors['taskbar_bg'],
                                    fg=theme_colors['taskbar_fg'], 
                                    font=('Segoe UI', 14), cursor='hand2')
-        self.notify_btn.pack(side=qt.LEFT, padx=5)
+        self.notify_btn.pack(side=tk.LEFT, padx=5)
         self.notify_btn.bind('<Button-1>', self.toggle_notification_panel)
         self.notify_btn.bind('<Enter>', lambda e: self.notify_btn.config(bg='#34495E'))
         self.notify_btn.bind('<Leave>', lambda e: self.notify_btn.config(
@@ -4326,15 +3095,15 @@ class Taskbar:
         self.create_tooltip(self.notify_btn, "Центр уведомлений\nНажмите для просмотра")
         
         # Счетчик уведомлений
-        self.notify_badge = qt.Label(self.tray_frame, text="", bg='#E74C3C', fg='white',
+        self.notify_badge = tk.Label(self.tray_frame, text="", bg='#E74C3C', fg='white',
                                      font=('Segoe UI', 8, 'bold'))
         
         # Кнопка громкости
-        self.volume_btn = qt.Label(self.tray_frame, text=self._get_volume_icon(), 
+        self.volume_btn = tk.Label(self.tray_frame, text=self._get_volume_icon(), 
                                     bg=theme_colors['taskbar_bg'],
                                     fg=theme_colors['taskbar_fg'], 
                                     font=('Segoe UI', 14), cursor='hand2')
-        self.volume_btn.pack(side=qt.LEFT, padx=5)
+        self.volume_btn.pack(side=tk.LEFT, padx=5)
         self.volume_btn.bind('<Button-1>', self.toggle_mixer)
         self.volume_btn.bind('<Enter>', lambda e: self.volume_btn.config(bg='#34495E'))
         self.volume_btn.bind('<Leave>', lambda e: self.volume_btn.config(
@@ -4343,11 +3112,11 @@ class Taskbar:
                            f"Громкость BITOS: {self.current_volume}%\nНажмите для настройки")
         
         # Кнопка языка
-        self.lang_label = qt.Label(self.tray_frame, text=self.current_lang, 
+        self.lang_label = tk.Label(self.tray_frame, text=self.current_lang, 
                                     bg=theme_colors['taskbar_bg'],
                                     fg=theme_colors['taskbar_fg'], 
                                     font=('Segoe UI', 10, 'bold'), cursor='hand2')
-        self.lang_label.pack(side=qt.LEFT, padx=5)
+        self.lang_label.pack(side=tk.LEFT, padx=5)
         self.lang_label.bind('<Button-1>', self.toggle_language)
         self.lang_label.bind('<Enter>', lambda e: self.lang_label.config(bg='#34495E'))
         self.lang_label.bind('<Leave>', lambda e: self.lang_label.config(
@@ -4356,34 +3125,34 @@ class Taskbar:
                            "Сменить раскладку клавиатуры\nТекущий: Русский (RU)\nНажмите для переключения")
         
         # Индикатор батареи
-        self.battery_label = qt.Label(self.tray_frame, text="🔋 ---%", 
+        self.battery_label = tk.Label(self.tray_frame, text="🔋 ---%", 
                                        bg=theme_colors['taskbar_bg'],
                                        fg=theme_colors['taskbar_fg'], 
                                        font=('Segoe UI', 10))
-        self.battery_label.pack(side=qt.LEFT, padx=5)
+        self.battery_label.pack(side=tk.LEFT, padx=5)
         self.create_tooltip(self.battery_label, "Состояние батареи")
         
         # Имя пользователя
-        self.user_label = qt.Label(self.tray_frame, text=f"👤 {self.username}", 
+        self.user_label = tk.Label(self.tray_frame, text=f"👤 {self.username}", 
                                     bg=theme_colors['taskbar_bg'],
                                     fg=theme_colors['taskbar_fg'], 
                                     font=('Segoe UI', 10))
-        self.user_label.pack(side=qt.LEFT, padx=5)
+        self.user_label.pack(side=tk.LEFT, padx=5)
         
         # Время и дата
-        self.time_label = qt.Label(self.tray_frame, text="", bg=theme_colors['taskbar_bg'],
+        self.time_label = tk.Label(self.tray_frame, text="", bg=theme_colors['taskbar_bg'],
                                     fg=theme_colors['taskbar_fg'], font=('Segoe UI', 10))
-        self.time_label.pack(side=qt.LEFT, padx=5)
+        self.time_label.pack(side=tk.LEFT, padx=5)
         
-        self.date_label = qt.Label(self.tray_frame, text="", bg=theme_colors['taskbar_bg'],
+        self.date_label = tk.Label(self.tray_frame, text="", bg=theme_colors['taskbar_bg'],
                                     fg=theme_colors['taskbar_fg'], font=('Segoe UI', 10))
-        self.date_label.pack(side=qt.LEFT, padx=5)
+        self.date_label.pack(side=tk.LEFT, padx=5)
         
         # Кнопка питания
-        self.power_btn = qt.Button(self.tray_frame, text="⏻", bg=theme_colors['taskbar_bg'], 
+        self.power_btn = tk.Button(self.tray_frame, text="⏻", bg=theme_colors['taskbar_bg'], 
                                     fg='#E74C3C', font=('Segoe UI', 12), bd=0, padx=5, 
                                     cursor='hand2', command=self.show_power_menu)
-        self.power_btn.pack(side=qt.LEFT, padx=5)
+        self.power_btn.pack(side=tk.LEFT, padx=5)
         self.power_btn.bind('<Enter>', lambda e: self.power_btn.config(bg='#34495E'))
         self.power_btn.bind('<Leave>', lambda e: self.power_btn.config(
             bg=theme_colors['taskbar_bg']))
@@ -4402,8 +3171,8 @@ class Taskbar:
     def _setup_window_tracking(self):
         """Настройка отслеживания открытых окон"""
         # Сохраняем оригинальные конструкторы
-        self._original_tk_toplevel = qt.Toplevel
-        self._original_tk_tk = qt.Tk
+        self._original_tk_toplevel = tk.Toplevel
+        self._original_tk_tk = tk.Tk
         
         # Переопределяем для перехвата
         def patched_toplevel(master=None, **kwargs):
@@ -4417,8 +3186,8 @@ class Taskbar:
             return window
         
         try:
-            qt.Toplevel = patched_toplevel
-            qt.Tk = patched_tk
+            tk.Toplevel = patched_toplevel
+            tk.Tk = patched_tk
         except:
             pass
 
@@ -4516,7 +3285,7 @@ class Taskbar:
         if len(window_info['title']) > 25:
             title += "..."
         
-        button = qt.Button(
+        button = tk.Button(
             self.windows_container,
             text=f"{window_info['icon']} {title}",
             bg=self.theme_colors['taskbar_bg'],
@@ -4526,7 +3295,7 @@ class Taskbar:
             padx=8,
             pady=3,
             cursor='hand2',
-            relief=qt.FLAT,
+            relief=tk.FLAT,
             anchor='w'
         )
         
@@ -4541,7 +3310,7 @@ class Taskbar:
         
         self.create_tooltip(button, f"{window_info['title']}\nНажмите для активации")
         
-        button.pack(side=qt.LEFT, padx=2, pady=2)
+        button.pack(side=tk.LEFT, padx=2, pady=2)
         
         if window_info.get('is_active', False):
             button.config(bg='#3498DB', fg='white')
@@ -4592,7 +3361,7 @@ class Taskbar:
 
     def _show_window_context_menu(self, event, window_id):
         """Контекстное меню для кнопки окна"""
-        menu = qt.Menu(self.parent, tearoff=0, bg='#2C3E50', fg='white', 
+        menu = tk.Menu(self.parent, tearoff=0, bg='#2C3E50', fg='white', 
                        activebackground='#3498DB')
         
         menu.add_command(label="🔄 Активировать", 
@@ -4688,7 +3457,7 @@ class Taskbar:
             return
         
         try:
-            self.notification_panel = qt.Toplevel(self.parent)
+            self.notification_panel = tk.Toplevel(self.parent)
             self.notification_panel.title("🔔 Центр уведомлений")
             self.notification_panel.configure(bg='#2C3E50')
             self.notification_panel.overrideredirect(True)
@@ -4702,21 +3471,21 @@ class Taskbar:
             
             self.notification_panel.geometry(f"{panel_w}x{panel_h}+{x}+{y}")
             
-            header = qt.Frame(self.notification_panel, bg='#3498DB', height=50)
-            header.pack(fill=qt.X)
-            qt.Label(header, text="🔔 Центр уведомлений", bg='#3498DB', fg='white',
-                    font=('Segoe UI', 12, 'bold')).pack(side=qt.LEFT, padx=15, pady=12)
+            header = tk.Frame(self.notification_panel, bg='#3498DB', height=50)
+            header.pack(fill=tk.X)
+            tk.Label(header, text="🔔 Центр уведомлений", bg='#3498DB', fg='white',
+                    font=('Segoe UI', 12, 'bold')).pack(side=tk.LEFT, padx=15, pady=12)
             
-            clear_btn = qt.Label(header, text="Очистить всё", bg='#3498DB', fg='white',
+            clear_btn = tk.Label(header, text="Очистить всё", bg='#3498DB', fg='white',
                                 font=('Segoe UI', 9), cursor='hand2')
-            clear_btn.pack(side=qt.RIGHT, padx=15)
+            clear_btn.pack(side=tk.RIGHT, padx=15)
             clear_btn.bind('<Button-1>', lambda e: self.clear_all_notifications())
             
-            self.notify_canvas = qt.Canvas(self.notification_panel, bg='#2C3E50', 
+            self.notify_canvas = tk.Canvas(self.notification_panel, bg='#2C3E50', 
                                            highlightthickness=0)
-            scrollbar = qt.Scrollbar(self.notification_panel, orient=qt.VERTICAL, 
+            scrollbar = tk.Scrollbar(self.notification_panel, orient=tk.VERTICAL, 
                                     command=self.notify_canvas.yview)
-            self.notify_frame = qt.Frame(self.notify_canvas, bg='#2C3E50')
+            self.notify_frame = tk.Frame(self.notify_canvas, bg='#2C3E50')
             
             self.notify_frame.bind("<Configure>", 
                 lambda e: self.notify_canvas.configure(
@@ -4726,8 +3495,8 @@ class Taskbar:
             self.notify_canvas.create_window((0, 0), window=self.notify_frame, anchor="nw")
             self.notify_canvas.configure(yscrollcommand=scrollbar.set)
             
-            self.notify_canvas.pack(side=qt.LEFT, fill=qt.BOTH, expand=True, padx=5, pady=5)
-            scrollbar.pack(side=qt.RIGHT, fill=qt.Y)
+            self.notify_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             
             self.load_notifications()
             
@@ -4759,7 +3528,7 @@ class Taskbar:
         
         if not notifications:
             try:
-                qt.Label(self.notify_frame, text="📭 Нет уведомлений", bg='#2C3E50', fg='#95A5A6',
+                tk.Label(self.notify_frame, text="📭 Нет уведомлений", bg='#2C3E50', fg='#95A5A6',
                         font=('Segoe UI', 12)).pack(pady=50)
             except:
                 pass
@@ -4773,36 +3542,36 @@ class Taskbar:
         bg_color = '#34495E' if not notification.get('read', False) else '#2C3E50'
         
         try:
-            item_frame = qt.Frame(self.notify_frame, bg=bg_color, relief=qt.RAISED, bd=1)
-            item_frame.pack(fill=qt.X, padx=5, pady=2)
+            item_frame = tk.Frame(self.notify_frame, bg=bg_color, relief=tk.RAISED, bd=1)
+            item_frame.pack(fill=tk.X, padx=5, pady=2)
             
-            icon_label = qt.Label(item_frame, text=notification.get('icon', '🔔'), 
+            icon_label = tk.Label(item_frame, text=notification.get('icon', '🔔'), 
                                  bg=bg_color, fg='white', font=('Segoe UI', 16))
-            icon_label.pack(side=qt.LEFT, padx=10, pady=8)
+            icon_label.pack(side=tk.LEFT, padx=10, pady=8)
             
-            text_frame = qt.Frame(item_frame, bg=bg_color)
-            text_frame.pack(side=qt.LEFT, fill=qt.BOTH, expand=True, pady=5)
+            text_frame = tk.Frame(item_frame, bg=bg_color)
+            text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=5)
             
-            qt.Label(text_frame, text=notification.get('title', ''), bg=bg_color, 
-                    fg='#3498DB', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill=qt.X)
+            tk.Label(text_frame, text=notification.get('title', ''), bg=bg_color, 
+                    fg='#3498DB', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill=tk.X)
             
-            qt.Label(text_frame, text=notification.get('message', ''), bg=bg_color, 
+            tk.Label(text_frame, text=notification.get('message', ''), bg=bg_color, 
                     fg='#BDC3C7', font=('Segoe UI', 9), anchor='w', 
-                    wraplength=250, justify='left').pack(fill=qt.X)
+                    wraplength=250, justify='left').pack(fill=tk.X)
             
             timestamp = notification.get('timestamp', '')
             if timestamp:
                 try:
                     dt = datetime.fromisoformat(timestamp)
                     time_str = dt.strftime('%H:%M')
-                    qt.Label(text_frame, text=time_str, bg=bg_color, fg='#7F8C8D',
+                    tk.Label(text_frame, text=time_str, bg=bg_color, fg='#7F8C8D',
                             font=('Segoe UI', 8)).pack(anchor='e')
                 except:
                     pass
             
-            del_btn = qt.Label(item_frame, text="✕", bg=bg_color, fg='#E74C3C',
+            del_btn = tk.Label(item_frame, text="✕", bg=bg_color, fg='#E74C3C',
                               font=('Segoe UI', 10), cursor='hand2')
-            del_btn.pack(side=qt.RIGHT, padx=5)
+            del_btn.pack(side=tk.RIGHT, padx=5)
             del_btn.bind('<Button-1>', lambda e, n=notification: self.delete_notification(n))
         except:
             pass
@@ -4904,7 +3673,7 @@ class Taskbar:
             return
         
         try:
-            self.mixer_window = qt.Toplevel(self.parent)
+            self.mixer_window = tk.Toplevel(self.parent)
             self.mixer_window.title("🔊 Микшер BITOS")
             self.mixer_window.configure(bg='#2C3E50')
             self.mixer_window.overrideredirect(True)
@@ -4918,25 +3687,25 @@ class Taskbar:
             
             self.mixer_window.geometry(f"{mixer_w}x{mixer_h}+{x}+{y}")
             
-            qt.Label(self.mixer_window, text="🔊 Громкость BITOS", bg='#2C3E50', fg='white',
+            tk.Label(self.mixer_window, text="🔊 Громкость BITOS", bg='#2C3E50', fg='white',
                      font=('Segoe UI', 12, 'bold')).pack(pady=(15, 5))
             
-            self.mixer_percent_label = qt.Label(self.mixer_window, 
+            self.mixer_percent_label = tk.Label(self.mixer_window, 
                                                   text=f"{self.current_volume}%" if not self.is_muted else "ВЫКЛЮЧЕНО",
                                                  bg='#2C3E50', fg='#3498DB',
                                                  font=('Segoe UI', 20, 'bold'))
             self.mixer_percent_label.pack(pady=5)
             
-            self.volume_slider = qt.Scale(self.mixer_window, from_=0, to=100, orient=qt.HORIZONTAL,
+            self.volume_slider = tk.Scale(self.mixer_window, from_=0, to=100, orient=tk.HORIZONTAL,
                                            bg='#2C3E50', fg='white', highlightthickness=0,
-                                           troughcolor='#34495E', sliderrelief=qt.FLAT,
+                                           troughcolor='#34495E', sliderrelief=tk.FLAT,
                                            activebackground='#3498DB', length=240,
                                            showvalue=False, command=self._on_volume_change)
             self.volume_slider.set(self.current_volume)
             self.volume_slider.pack(pady=5)
             
             mute_text = "🔊 Включить звук" if self.is_muted else "🔇 Выключить звук"
-            self.mute_btn = qt.Button(self.mixer_window, text=mute_text, bg='#34495E', fg='white',
+            self.mute_btn = tk.Button(self.mixer_window, text=mute_text, bg='#34495E', fg='white',
                                        font=('Segoe UI', 10), bd=0, padx=15, pady=5,
                                        cursor='hand2', command=self._toggle_mute)
             self.mute_btn.pack(pady=10)
@@ -5156,7 +3925,7 @@ class Taskbar:
             return
         
         try:
-            self.start_menu = qt.Toplevel(self.parent)
+            self.start_menu = tk.Toplevel(self.parent)
             self.start_menu.title("Меню Пуск")
             self.start_menu.configure(bg='#2C3E50')
             self.start_menu.overrideredirect(True)
@@ -5170,25 +3939,25 @@ class Taskbar:
                 y = self.start_btn.winfo_rooty() + 50
             self.start_menu.geometry(f"{menu_width}x{menu_height}+{x}+{y}")
             
-            header = qt.Frame(self.start_menu, bg='#3498DB', height=80)
-            header.pack(fill=qt.X)
-            qt.Label(header, text=f"👤 {self.username}", bg='#3498DB', fg='white',
+            header = tk.Frame(self.start_menu, bg='#3498DB', height=80)
+            header.pack(fill=tk.X)
+            tk.Label(header, text=f"👤 {self.username}", bg='#3498DB', fg='white',
                     font=('Segoe UI', 18, 'bold')).pack(pady=20)
             
-            main_frame = qt.Frame(self.start_menu, bg='#2C3E50')
-            main_frame.pack(fill=qt.BOTH, expand=True, padx=10, pady=10)
+            main_frame = tk.Frame(self.start_menu, bg='#2C3E50')
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            canvas = qt.Canvas(main_frame, bg='#2C3E50', highlightthickness=0)
-            scrollbar = qt.Scrollbar(main_frame, orient=qt.VERTICAL, command=canvas.yview)
-            scrollable_frame = qt.Frame(canvas, bg='#2C3E50')
+            canvas = tk.Canvas(main_frame, bg='#2C3E50', highlightthickness=0)
+            scrollbar = tk.Scrollbar(main_frame, orient=tk.VERTICAL, command=canvas.yview)
+            scrollable_frame = tk.Frame(canvas, bg='#2C3E50')
             
             scrollable_frame.bind("<Configure>", 
                 lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
             canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
             canvas.configure(yscrollcommand=scrollbar.set)
             
-            canvas.pack(side=qt.LEFT, fill=qt.BOTH, expand=True)
-            scrollbar.pack(side=qt.RIGHT, fill=qt.Y)
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             
             all_apps = [
                 ('📁', 'Проводник', 'explorer', 'Системные'),
@@ -5222,28 +3991,28 @@ class Taskbar:
                 categories[category].append((icon, name, cmd))
             
             for category, apps in categories.items():
-                cat_frame = qt.Frame(scrollable_frame, bg='#2C3E50')
-                cat_frame.pack(fill=qt.X, pady=(10, 5))
-                qt.Label(cat_frame, text=f"── {category} ──", bg='#2C3E50', fg='#3498DB',
+                cat_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
+                cat_frame.pack(fill=tk.X, pady=(10, 5))
+                tk.Label(cat_frame, text=f"── {category} ──", bg='#2C3E50', fg='#3498DB',
                         font=('Segoe UI', 12, 'bold')).pack(anchor='w')
                 
-                apps_frame = qt.Frame(scrollable_frame, bg='#2C3E50')
-                apps_frame.pack(fill=qt.X, pady=5)
+                apps_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
+                apps_frame.pack(fill=tk.X, pady=5)
                 
                 for i, (icon, name, cmd) in enumerate(apps):
                     row = i // 4
                     col = i % 4
                     
-                    app_frame = qt.Frame(apps_frame, bg='#34495E', relief=qt.RAISED, bd=1)
+                    app_frame = tk.Frame(apps_frame, bg='#34495E', relief=tk.RAISED, bd=1)
                     app_frame.grid(row=row, column=col, padx=5, pady=5, sticky='nsew')
                     app_frame.configure(width=180, height=70)
                     app_frame.grid_propagate(False)
                     
-                    icon_label = qt.Label(app_frame, text=icon, bg='#34495E', fg='white',
+                    icon_label = tk.Label(app_frame, text=icon, bg='#34495E', fg='white',
                                          font=('Segoe UI', 24))
                     icon_label.pack(pady=(5, 0))
                     
-                    name_label = qt.Label(app_frame, text=name, bg='#34495E', fg='white',
+                    name_label = tk.Label(app_frame, text=name, bg='#34495E', fg='white',
                                          font=('Segoe UI', 9))
                     name_label.pack()
                     
@@ -5287,13 +4056,13 @@ class Taskbar:
                 for col in range(4):
                     apps_frame.grid_columnconfigure(col, weight=1)
             
-            exit_frame = qt.Frame(scrollable_frame, bg='#2C3E50')
-            exit_frame.pack(fill=qt.X, pady=(20, 10))
-            exit_btn = qt.Button(exit_frame, text="🚪 Выйти из системы", bg='#E74C3C', fg='white',
+            exit_frame = tk.Frame(scrollable_frame, bg='#2C3E50')
+            exit_frame.pack(fill=tk.X, pady=(20, 10))
+            exit_btn = tk.Button(exit_frame, text="🚪 Выйти из системы", bg='#E74C3C', fg='white',
                                 font=('Segoe UI', 12, 'bold'), bd=0, padx=20, pady=10, 
                                 cursor='hand2',
                                 command=lambda: self.launch_app('logout', self.start_menu))
-            exit_btn.pack(fill=qt.X, padx=50)
+            exit_btn.pack(fill=tk.X, padx=50)
             exit_btn.bind('<Enter>', lambda e: exit_btn.config(bg='#C0392B'))
             exit_btn.bind('<Leave>', lambda e: exit_btn.config(bg='#E74C3C'))
             
@@ -5442,7 +4211,7 @@ class Taskbar:
     
     def show_power_menu(self):
         try:
-            power_menu = qt.Menu(self.parent, tearoff=0, bg='#2C3E50', fg='white', 
+            power_menu = tk.Menu(self.parent, tearoff=0, bg='#2C3E50', fg='white', 
                                 activebackground='#3498DB')
             power_menu.add_command(label="🔄 Перезагрузка", command=self.restart_system)
             power_menu.add_separator()
@@ -5500,11 +4269,11 @@ class Taskbar:
             try:
                 x = widget.winfo_rootx() + 25
                 y = widget.winfo_rooty() - 30
-                self.tooltip = qt.Toplevel(widget)
+                self.tooltip = tk.Toplevel(widget)
                 self.tooltip.wm_overrideredirect(True)
                 self.tooltip.wm_geometry(f"+{x}+{y}")
-                label = qt.Label(self.tooltip, text=text, background="#FFFFE0", 
-                               relief=qt.SOLID, borderwidth=1, font=('Segoe UI', 9))
+                label = tk.Label(self.tooltip, text=text, background="#FFFFE0", 
+                               relief=tk.SOLID, borderwidth=1, font=('Segoe UI', 9))
                 label.pack()
             except:
                 pass
@@ -5551,7 +4320,7 @@ class DevModeDialog:
         self.bitos = bitos_instance
         self.result = False
         
-        self.dialog = qt.Toplevel(parent)
+        self.dialog = tk.Toplevel(parent)
         self.dialog.title("🔧 Режим разработчика")
         self.dialog.geometry("400x280")
         self.dialog.transient(parent)
@@ -5563,33 +4332,33 @@ class DevModeDialog:
         y = (self.dialog.winfo_screenheight() - 280) // 2
         self.dialog.geometry(f'+{x}+{y}')
         
-        title_frame = qt.Frame(self.dialog, bg='#F5F7FA')
-        title_frame.pack(fill=qt.X, padx=20, pady=(20, 10))
-        qt.Label(title_frame, text="🔧", font=('Segoe UI', 48), bg='#F5F7FA', fg='#2C3E50').pack()
-        qt.Label(title_frame, text="Вход в режим разработчика", font=('Segoe UI', 14, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(pady=(5, 0))
-        qt.Label(title_frame, text="Введите пароль для доступа к расширенным функциям", font=('Segoe UI', 10), bg='#F5F7FA', fg='#7F8C8D').pack(pady=(5, 0))
+        title_frame = tk.Frame(self.dialog, bg='#F5F7FA')
+        title_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
+        tk.Label(title_frame, text="🔧", font=('Segoe UI', 48), bg='#F5F7FA', fg='#2C3E50').pack()
+        tk.Label(title_frame, text="Вход в режим разработчика", font=('Segoe UI', 14, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(pady=(5, 0))
+        tk.Label(title_frame, text="Введите пароль для доступа к расширенным функциям", font=('Segoe UI', 10), bg='#F5F7FA', fg='#7F8C8D').pack(pady=(5, 0))
         
-        password_frame = qt.Frame(self.dialog, bg='#F5F7FA')
-        password_frame.pack(fill=qt.X, padx=20, pady=20)
-        qt.Label(password_frame, text="Пароль:", font=('Segoe UI', 11), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w')
-        self.password_entry = qt.Entry(password_frame, font=('Segoe UI', 11), show='•', bd=0, bg='white',
+        password_frame = tk.Frame(self.dialog, bg='#F5F7FA')
+        password_frame.pack(fill=tk.X, padx=20, pady=20)
+        tk.Label(password_frame, text="Пароль:", font=('Segoe UI', 11), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w')
+        self.password_entry = tk.Entry(password_frame, font=('Segoe UI', 11), show='•', bd=0, bg='white',
                                       highlightthickness=2, highlightcolor='#3498DB', highlightbackground='#BDC3C7')
-        self.password_entry.pack(fill=qt.X, ipady=8, pady=(5, 0))
+        self.password_entry.pack(fill=tk.X, ipady=8, pady=(5, 0))
         self.password_entry.bind('<Return>', lambda e: self.check_password())
         self.password_entry.focus_set()
         
-        info_label = qt.Label(self.dialog, text="Подсказка: стандартный пароль BIT642Os", font=('Segoe UI', 9), bg='#F5F7FA', fg='#3498DB', cursor='hand2')
+        info_label = tk.Label(self.dialog, text="Подсказка: стандартный пароль BIT642Os", font=('Segoe UI', 9), bg='#F5F7FA', fg='#3498DB', cursor='hand2')
         info_label.pack(pady=5)
         info_label.bind('<Button-1>', lambda e: self.show_hint())
         
-        button_frame = qt.Frame(self.dialog, bg='#F5F7FA')
-        button_frame.pack(fill=qt.X, padx=20, pady=10)
-        qt.Button(button_frame, text="Войти", bg='#3498DB', fg='white', font=('Segoe UI', 10, 'bold'), bd=0, padx=30, pady=8, cursor='hand2',
-                 command=self.check_password).pack(side=qt.LEFT, padx=5)
-        qt.Button(button_frame, text="Отмена", bg='#E74C3C', fg='white', font=('Segoe UI', 10, 'bold'), bd=0, padx=30, pady=8, cursor='hand2',
-                 command=self.cancel).pack(side=qt.LEFT, padx=5)
+        button_frame = tk.Frame(self.dialog, bg='#F5F7FA')
+        button_frame.pack(fill=tk.X, padx=20, pady=10)
+        tk.Button(button_frame, text="Войти", bg='#3498DB', fg='white', font=('Segoe UI', 10, 'bold'), bd=0, padx=30, pady=8, cursor='hand2',
+                 command=self.check_password).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Отмена", bg='#E74C3C', fg='white', font=('Segoe UI', 10, 'bold'), bd=0, padx=30, pady=8, cursor='hand2',
+                 command=self.cancel).pack(side=tk.LEFT, padx=5)
         
-        self.message_label = qt.Label(self.dialog, text='', bg='#F5F7FA', fg='#E74C3C', font=('Segoe UI', 10))
+        self.message_label = tk.Label(self.dialog, text='', bg='#F5F7FA', fg='#E74C3C', font=('Segoe UI', 10))
         self.message_label.pack(pady=5)
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
     
@@ -5606,7 +4375,7 @@ class DevModeDialog:
             messagebox.showinfo("Режим разработчика", "✅ Режим разработчика активирован!\n\nДоступные команды можно ввести в терминале:\nhedev - полная справка\nsystem - команды системы\nuser - команды пользователей\nnetwork - сетевые команды\ndiag - диагностика\nutil - утилиты")
         else:
             self.message_label.config(text='❌ Неверный пароль')
-            self.password_entry.delete(0, qt.END)
+            self.password_entry.delete(0, tk.END)
             self.password_entry.focus_set()
     
     def cancel(self):
@@ -5834,7 +4603,7 @@ class BipInstallWindow:
         self.bip_path = bip_path
         self.metadata = None
         
-        self.window = qt.Toplevel(parent)
+        self.window = tk.Toplevel(parent)
         self.window.title("📦 Установщик BIP")
         self.window.geometry("500x650")
         self.window.transient(parent)
@@ -5873,70 +4642,70 @@ class BipInstallWindow:
         self.file_label.config(text="Выберите файл .bip в проводнике...")
     
     def create_ui(self):
-        header = qt.Frame(self.window, bg='#3498DB', height=60)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="📦 Установщик пакетов BIP", bg='#3498DB', fg='white',
+        header = tk.Frame(self.window, bg='#3498DB', height=60)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="📦 Установщик пакетов BIP", bg='#3498DB', fg='white',
                 font=('Segoe UI', 14, 'bold')).pack(pady=15)
         
-        self.content = qt.Frame(self.window, bg='#F5F7FA')
-        self.content.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        self.content = tk.Frame(self.window, bg='#F5F7FA')
+        self.content.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # Выбор файла
-        select_frame = qt.Frame(self.content, bg='#F5F7FA')
-        select_frame.pack(fill=qt.X, pady=10)
+        select_frame = tk.Frame(self.content, bg='#F5F7FA')
+        select_frame.pack(fill=tk.X, pady=10)
         
-        self.file_label = qt.Label(select_frame, text="Проводник открыт...", bg='white', fg='#7F8C8D',
-                                   font=('Segoe UI', 10), anchor='w', relief=qt.SUNKEN, bd=1)
-        self.file_label.pack(side=qt.LEFT, fill=qt.X, expand=True, ipady=5, padx=(0, 5))
+        self.file_label = tk.Label(select_frame, text="Проводник открыт...", bg='white', fg='#7F8C8D',
+                                   font=('Segoe UI', 10), anchor='w', relief=tk.SUNKEN, bd=1)
+        self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 5))
         
-        qt.Button(select_frame, text="📂 Проводник", bg='#3498DB', fg='white',
+        tk.Button(select_frame, text="📂 Проводник", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5, cursor='hand2',
-                 command=self.open_builtin_explorer).pack(side=qt.RIGHT)
+                 command=self.open_builtin_explorer).pack(side=tk.RIGHT)
         
         # Информация о пакете
-        self.info_frame = qt.Frame(self.content, bg='white', relief=qt.RIDGE, bd=1)
-        self.info_frame.pack(fill=qt.X, pady=10)
+        self.info_frame = tk.Frame(self.content, bg='white', relief=tk.RIDGE, bd=1)
+        self.info_frame.pack(fill=tk.X, pady=10)
         
-        qt.Label(self.info_frame, text="Информация о пакете", bg='white', fg='#2C3E50',
+        tk.Label(self.info_frame, text="Информация о пакете", bg='white', fg='#2C3E50',
                 font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=5)
         
-        self.info_text = qt.Label(self.info_frame, text="Выберите файл .bip в проводнике",
+        self.info_text = tk.Label(self.info_frame, text="Выберите файл .bip в проводнике",
                                   bg='white', fg='#7F8C8D', font=('Segoe UI', 10),
                                   justify='left', wraplength=420)
         self.info_text.pack(anchor='w', padx=10, pady=5)
         
         # Прогресс
-        self.progress_frame = qt.Frame(self.content, bg='#F5F7FA')
-        self.progress_frame.pack(fill=qt.X, pady=10)
+        self.progress_frame = tk.Frame(self.content, bg='#F5F7FA')
+        self.progress_frame.pack(fill=tk.X, pady=10)
         
-        self.progress_bar = qtu.Progressbar(self.progress_frame, mode='determinate', length=460)
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', length=460)
         self.progress_bar.pack()
         
-        self.progress_label = qt.Label(self.progress_frame, text="", bg='#F5F7FA',
+        self.progress_label = tk.Label(self.progress_frame, text="", bg='#F5F7FA',
                                        fg='#2C3E50', font=('Segoe UI', 9))
         self.progress_label.pack(pady=5)
         
         # Опции
-        self.options_frame = qt.Frame(self.content, bg='#F5F7FA')
-        self.options_frame.pack(fill=qt.X, pady=10)
+        self.options_frame = tk.Frame(self.content, bg='#F5F7FA')
+        self.options_frame.pack(fill=tk.X, pady=10)
         
-        qt.Label(self.options_frame, text="Параметры установки:", bg='#F5F7FA',
+        tk.Label(self.options_frame, text="Параметры установки:", bg='#F5F7FA',
                 fg='#2C3E50', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
         
-        self.add_to_desktop_var = qt.BooleanVar(value=False)
-        qt.Checkbutton(self.options_frame, text="Добавить ярлык на рабочий стол",
+        self.add_to_desktop_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(self.options_frame, text="Добавить ярлык на рабочий стол",
                       variable=self.add_to_desktop_var, bg='#F5F7FA', fg='#2C3E50',
                       font=('Segoe UI', 10)).pack(anchor='w', padx=20, pady=5)
         
         # Кнопка установки
-        self.install_btn = qt.Button(self.content, text="📥 Установить", bg='#27AE60', fg='white',
+        self.install_btn = tk.Button(self.content, text="📥 Установить", bg='#27AE60', fg='white',
                                      font=('Segoe UI', 12, 'bold'), bd=0, padx=30, pady=10,
                                      cursor='hand2', command=self.start_install, state='disabled')
         self.install_btn.pack(pady=10)
         self.install_btn.bind('<Enter>', lambda e: self.install_btn.config(bg='#219A52'))
         self.install_btn.bind('<Leave>', lambda e: self.install_btn.config(bg='#27AE60'))
         
-        self.status_label = qt.Label(self.content, text="", bg='#F5F7FA',
+        self.status_label = tk.Label(self.content, text="", bg='#F5F7FA',
                                      fg='#2C3E50', font=('Segoe UI', 10))
         self.status_label.pack(pady=5)
     
@@ -5992,7 +4761,9 @@ class BipInstallWindow:
         self.install_btn.config(state='disabled')
         self.status_label.config(text="⏳ Установка...")
         
-        _start_managed_thread(self.bitos, self.install_process, name="BIPInstall")
+        thread = threading.Thread(target=self.install_process)
+        thread.daemon = True
+        thread.start()
     
     def install_process(self):
         for i in range(101):
@@ -6130,7 +4901,7 @@ class Desktop:
         self._resize_timer = None
         
         # Основной canvas для рабочего стола
-        self.canvas = qt.Canvas(self.root, highlightthickness=0, 
+        self.canvas = tk.Canvas(self.root, highlightthickness=0, 
                                bg=self.theme_colors['canvas_bg'], bd=0)
         self.canvas.place(x=0, y=0, relwidth=1, relheight=1, height=-40)
         
@@ -6390,7 +5161,7 @@ class Desktop:
         for icon in self.canvas.desktop_icons:
             try:
                 icon.update_theme(self.theme_colors['icon_fg'])
-            except qt.TclError:
+            except tk.TclError:
                 pass
         
         for widget in self.widgets[:]:
@@ -6408,7 +5179,7 @@ class Desktop:
                 try:
                     self.canvas.itemconfig(icon.icon_id_obj, fill=self.theme_colors['icon_fg'])
                     self.canvas.itemconfig(icon.text_id, fill=self.theme_colors['icon_fg'])
-                except qt.TclError:
+                except tk.TclError:
                     pass
         
         if hasattr(self.bitos, 'security'):
@@ -6742,7 +5513,7 @@ class Desktop:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            dialog = qt.Toplevel(self.root)
+            dialog = tk.Toplevel(self.root)
             dialog.title(f"📄 {os.path.basename(file_path)}")
             dialog.geometry("800x600")
             dialog.transient(self.root)
@@ -6750,15 +5521,15 @@ class Desktop:
             
             text_area = scrolledtext.ScrolledText(dialog, font=('Consolas', 12),
                                                   bg='white', fg='#2C3E50')
-            text_area.pack(fill=qt.BOTH, expand=True, padx=10, pady=10)
+            text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             text_area.insert('1.0', content)
             
-            btn_frame = qt.Frame(dialog, bg='#F5F7FA')
-            btn_frame.pack(fill=qt.X, padx=10, pady=5)
+            btn_frame = tk.Frame(dialog, bg='#F5F7FA')
+            btn_frame.pack(fill=tk.X, padx=10, pady=5)
             
             def save():
                 try:
-                    new_content = text_area.get('1.0', qt.END)
+                    new_content = text_area.get('1.0', tk.END)
                     with open(file_path, 'w', encoding='utf-8') as f:
                         f.write(new_content)
                     
@@ -6774,13 +5545,13 @@ class Desktop:
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\n{str(e)}", parent=dialog)
             
-            qt.Button(btn_frame, text="💾 Сохранить", bg='#3498DB', fg='white',
+            tk.Button(btn_frame, text="💾 Сохранить", bg='#3498DB', fg='white',
                      font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=8,
-                     command=save).pack(side=qt.LEFT, padx=5)
+                     command=save).pack(side=tk.LEFT, padx=5)
             
-            qt.Button(btn_frame, text="❌ Закрыть", bg='#E74C3C', fg='white',
+            tk.Button(btn_frame, text="❌ Закрыть", bg='#E74C3C', fg='white',
                      font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                     command=dialog.destroy).pack(side=qt.LEFT, padx=5)
+                     command=dialog.destroy).pack(side=tk.LEFT, padx=5)
             
             dialog.bind('<Control-s>', lambda e: save())
             dialog.bind('<Control-S>', lambda e: save())
@@ -6817,7 +5588,7 @@ class Desktop:
     
     def create_new_folder(self):
         """Создание новой папки на виртуальном рабочем столе"""
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("📁 Новая папка")
         dialog.geometry("450x200")
         dialog.transient(self.root)
@@ -6829,26 +5600,26 @@ class Desktop:
         y = (dialog.winfo_screenheight() - 200) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        header = qt.Frame(dialog, bg='#3498DB', height=50)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="📁 Создание новой папки", bg='#3498DB', fg='white',
+        header = tk.Frame(dialog, bg='#3498DB', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="📁 Создание новой папки", bg='#3498DB', fg='white',
                 font=('Segoe UI', 12, 'bold')).pack(pady=12)
         
-        main_frame = qt.Frame(dialog, bg='#F5F7FA')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(dialog, bg='#F5F7FA')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="Имя папки:", bg='#F5F7FA', fg='#2C3E50',
+        tk.Label(main_frame, text="Имя папки:", bg='#F5F7FA', fg='#2C3E50',
                 font=('Segoe UI', 11)).pack(anchor='w')
         
-        name_entry = qt.Entry(main_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
-                             relief=qt.SOLID, bd=1)
-        name_entry.pack(fill=qt.X, ipady=5, pady=(5, 15))
+        name_entry = tk.Entry(main_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
+                             relief=tk.SOLID, bd=1)
+        name_entry.pack(fill=tk.X, ipady=5, pady=(5, 15))
         name_entry.insert(0, "Новая папка")
         name_entry.focus_set()
-        name_entry.select_range(0, qt.END)
+        name_entry.select_range(0, tk.END)
         
-        btn_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X)
+        btn_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X)
         
         def create():
             name = name_entry.get().strip()
@@ -6881,18 +5652,18 @@ class Desktop:
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось создать папку:\n{str(e)}", parent=dialog)
         
-        qt.Button(btn_frame, text="Создать", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="Создать", bg='#27AE60', fg='white',
                  font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=8,
-                 command=create).pack(side=qt.RIGHT, padx=5)
-        qt.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+                 command=create).pack(side=tk.RIGHT, padx=5)
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
         
         name_entry.bind('<Return>', lambda e: create())
     
     def create_new_file(self, extension):
         """Создание нового файла с указанным расширением"""
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title(f"📄 Новый файл .{extension}")
         dialog.geometry("500x450")
         dialog.transient(self.root)
@@ -6904,40 +5675,40 @@ class Desktop:
         y = (dialog.winfo_screenheight() - 450) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        header = qt.Frame(dialog, bg='#3498DB', height=50)
-        header.pack(fill=qt.X)
-        qt.Label(header, text=f"📄 Создание .{extension} файла", bg='#3498DB', fg='white',
+        header = tk.Frame(dialog, bg='#3498DB', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text=f"📄 Создание .{extension} файла", bg='#3498DB', fg='white',
                 font=('Segoe UI', 12, 'bold')).pack(pady=12)
         
-        main_frame = qt.Frame(dialog, bg='#F5F7FA')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(dialog, bg='#F5F7FA')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="Имя файла:", bg='#F5F7FA', fg='#2C3E50',
+        tk.Label(main_frame, text="Имя файла:", bg='#F5F7FA', fg='#2C3E50',
                 font=('Segoe UI', 11)).pack(anchor='w')
         
-        name_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        name_frame.pack(fill=qt.X, pady=(5, 10))
+        name_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        name_frame.pack(fill=tk.X, pady=(5, 10))
         
-        name_entry = qt.Entry(name_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
-                             relief=qt.SOLID, bd=1)
-        name_entry.pack(side=qt.LEFT, fill=qt.X, expand=True, ipady=5)
+        name_entry = tk.Entry(name_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
+                             relief=tk.SOLID, bd=1)
+        name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
         name_entry.insert(0, "новый_файл")
         
-        qt.Label(name_frame, text=f".{extension}", bg='#F5F7FA', fg='#7F8C8D',
-                font=('Segoe UI', 12)).pack(side=qt.LEFT, padx=5)
+        tk.Label(name_frame, text=f".{extension}", bg='#F5F7FA', fg='#7F8C8D',
+                font=('Segoe UI', 12)).pack(side=tk.LEFT, padx=5)
         
         initial_content = self._get_initial_content(extension)
         
-        qt.Label(main_frame, text="Содержимое:", bg='#F5F7FA', fg='#2C3E50',
+        tk.Label(main_frame, text="Содержимое:", bg='#F5F7FA', fg='#2C3E50',
                 font=('Segoe UI', 11)).pack(anchor='w', pady=(10, 5))
         
         text_area = scrolledtext.ScrolledText(main_frame, font=('Consolas', 11),
                                               bg='white', fg='#2C3E50', height=10)
-        text_area.pack(fill=qt.BOTH, expand=True, pady=(0, 10))
+        text_area.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         text_area.insert('1.0', initial_content)
         
-        btn_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X)
+        btn_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X)
         
         def create():
             name = name_entry.get().strip()
@@ -6957,7 +5728,7 @@ class Desktop:
                     return
             
             try:
-                content = text_area.get('1.0', qt.END)
+                content = text_area.get('1.0', tk.END)
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 
@@ -6980,19 +5751,19 @@ class Desktop:
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось создать файл:\n{str(e)}", parent=dialog)
         
-        qt.Button(btn_frame, text="Создать и открыть", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="Создать и открыть", bg='#27AE60', fg='white',
                  font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=8,
-                 command=create).pack(side=qt.RIGHT, padx=5)
-        qt.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+                 command=create).pack(side=tk.RIGHT, padx=5)
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
         
         name_entry.bind('<Return>', lambda e: create())
         name_entry.focus_set()
     
     def create_custom_file(self):
         """Создание файла с произвольным расширением"""
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("📋 Создать файл")
         dialog.geometry("500x450")
         dialog.transient(self.root)
@@ -7004,33 +5775,33 @@ class Desktop:
         y = (dialog.winfo_screenheight() - 450) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        header = qt.Frame(dialog, bg='#3498DB', height=50)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="📋 Создание файла", bg='#3498DB', fg='white',
+        header = tk.Frame(dialog, bg='#3498DB', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="📋 Создание файла", bg='#3498DB', fg='white',
                 font=('Segoe UI', 12, 'bold')).pack(pady=12)
         
-        main_frame = qt.Frame(dialog, bg='#F5F7FA')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(dialog, bg='#F5F7FA')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="Имя файла (с расширением):", bg='#F5F7FA', fg='#2C3E50',
+        tk.Label(main_frame, text="Имя файла (с расширением):", bg='#F5F7FA', fg='#2C3E50',
                 font=('Segoe UI', 11)).pack(anchor='w')
         
-        name_entry = qt.Entry(main_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
-                             relief=qt.SOLID, bd=1)
-        name_entry.pack(fill=qt.X, ipady=5, pady=(5, 10))
+        name_entry = tk.Entry(main_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
+                             relief=tk.SOLID, bd=1)
+        name_entry.pack(fill=tk.X, ipady=5, pady=(5, 10))
         name_entry.insert(0, "новый_файл.txt")
         name_entry.focus_set()
-        name_entry.select_range(0, qt.END)
+        name_entry.select_range(0, tk.END)
         
-        qt.Label(main_frame, text="Содержимое:", bg='#F5F7FA', fg='#2C3E50',
+        tk.Label(main_frame, text="Содержимое:", bg='#F5F7FA', fg='#2C3E50',
                 font=('Segoe UI', 11)).pack(anchor='w', pady=(10, 5))
         
         text_area = scrolledtext.ScrolledText(main_frame, font=('Consolas', 11),
                                               bg='white', fg='#2C3E50', height=10)
-        text_area.pack(fill=qt.BOTH, expand=True, pady=(0, 10))
+        text_area.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        btn_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X)
+        btn_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X)
         
         def create():
             name = name_entry.get().strip()
@@ -7053,7 +5824,7 @@ class Desktop:
                     return
             
             try:
-                content = text_area.get('1.0', qt.END)
+                content = text_area.get('1.0', tk.END)
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 
@@ -7076,12 +5847,12 @@ class Desktop:
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось создать файл:\n{str(e)}", parent=dialog)
         
-        qt.Button(btn_frame, text="Создать и открыть", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="Создать и открыть", bg='#27AE60', fg='white',
                  font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=8,
-                 command=create).pack(side=qt.RIGHT, padx=5)
-        qt.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+                 command=create).pack(side=tk.RIGHT, padx=5)
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
         
         name_entry.bind('<Return>', lambda e: create())
     
@@ -7102,7 +5873,7 @@ class Desktop:
     
     def show_add_shortcut_dialog(self):
         """Показать диалог добавления ярлыка"""
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("🔗 Добавить ярлык")
         dialog.geometry("550x520")
         dialog.transient(self.root)
@@ -7114,56 +5885,56 @@ class Desktop:
         y = (dialog.winfo_screenheight() - 520) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        header = qt.Frame(dialog, bg='#3498DB', height=50)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="🔗 Создание ярлыка", bg='#3498DB', fg='white',
+        header = tk.Frame(dialog, bg='#3498DB', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="🔗 Создание ярлыка", bg='#3498DB', fg='white',
                 font=('Segoe UI', 14, 'bold')).pack(pady=12)
         
-        main_frame = qt.Frame(dialog, bg='#F5F7FA')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(dialog, bg='#F5F7FA')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="Тип ярлыка:", font=('Segoe UI', 11, 'bold'),
+        tk.Label(main_frame, text="Тип ярлыка:", font=('Segoe UI', 11, 'bold'),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(0, 5))
         
-        type_var = qt.StringVar(value="website")
+        type_var = tk.StringVar(value="website")
         
-        type_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        type_frame.pack(fill=qt.X, pady=(0, 15))
+        type_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        type_frame.pack(fill=tk.X, pady=(0, 15))
         
-        qt.Radiobutton(type_frame, text="🌐 Веб-сайт", variable=type_var, value="website",
+        tk.Radiobutton(type_frame, text="🌐 Веб-сайт", variable=type_var, value="website",
                       bg='#F5F7FA', fg='#2C3E50', font=('Segoe UI', 10),
                       activebackground='#F5F7FA', 
-                      command=lambda: self._toggle_shortcut_fields(type_var, website_frame, app_frame)).pack(side=qt.LEFT, padx=10)
+                      command=lambda: self._toggle_shortcut_fields(type_var, website_frame, app_frame)).pack(side=tk.LEFT, padx=10)
         
-        qt.Radiobutton(type_frame, text="📄 Приложение (.exe)", variable=type_var, value="app",
+        tk.Radiobutton(type_frame, text="📄 Приложение (.exe)", variable=type_var, value="app",
                       bg='#F5F7FA', fg='#2C3E50', font=('Segoe UI', 10),
                       activebackground='#F5F7FA',
-                      command=lambda: self._toggle_shortcut_fields(type_var, website_frame, app_frame)).pack(side=qt.LEFT, padx=10)
+                      command=lambda: self._toggle_shortcut_fields(type_var, website_frame, app_frame)).pack(side=tk.LEFT, padx=10)
         
-        website_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        website_frame.pack(fill=qt.X, pady=5)
+        website_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        website_frame.pack(fill=tk.X, pady=5)
         
-        qt.Label(website_frame, text="URL веб-сайта:", font=('Segoe UI', 10),
+        tk.Label(website_frame, text="URL веб-сайта:", font=('Segoe UI', 10),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w')
-        url_entry = qt.Entry(website_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
+        url_entry = tk.Entry(website_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
                             bd=0, highlightthickness=2, highlightcolor='#3498DB',
                             highlightbackground='#BDC3C7')
-        url_entry.pack(fill=qt.X, ipady=8, pady=(5, 10))
+        url_entry.pack(fill=tk.X, ipady=8, pady=(5, 10))
         url_entry.insert(0, "https://")
         
-        app_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        app_frame.pack(fill=qt.X, pady=5)
+        app_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        app_frame.pack(fill=tk.X, pady=5)
         
-        qt.Label(app_frame, text="Путь к приложению:", font=('Segoe UI', 10),
+        tk.Label(app_frame, text="Путь к приложению:", font=('Segoe UI', 10),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w')
         
-        app_path_frame = qt.Frame(app_frame, bg='#F5F7FA')
-        app_path_frame.pack(fill=qt.X, pady=(5, 10))
+        app_path_frame = tk.Frame(app_frame, bg='#F5F7FA')
+        app_path_frame.pack(fill=tk.X, pady=(5, 10))
         
-        app_entry = qt.Entry(app_path_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
+        app_entry = tk.Entry(app_path_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
                             bd=0, highlightthickness=2, highlightcolor='#3498DB',
                             highlightbackground='#BDC3C7')
-        app_entry.pack(side=qt.LEFT, fill=qt.X, expand=True, ipady=8)
+        app_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
         app_entry.insert(0, "Выберите .exe файл...")
         app_entry.config(state='disabled')
         
@@ -7174,33 +5945,33 @@ class Desktop:
             )
             if file_path:
                 app_entry.config(state='normal')
-                app_entry.delete(0, qt.END)
+                app_entry.delete(0, tk.END)
                 app_entry.insert(0, file_path)
                 app_entry.config(state='disabled')
-                name_entry.delete(0, qt.END)
+                name_entry.delete(0, tk.END)
                 name_entry.insert(0, os.path.splitext(os.path.basename(file_path))[0])
         
-        qt.Button(app_path_frame, text="📂 Обзор", bg='#3498DB', fg='white',
+        tk.Button(app_path_frame, text="📂 Обзор", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=8,
-                 cursor='hand2', command=browse_exe).pack(side=qt.RIGHT, padx=(10, 0))
+                 cursor='hand2', command=browse_exe).pack(side=tk.RIGHT, padx=(10, 0))
         
         app_frame.pack_forget()
         
-        qt.Label(main_frame, text="Имя ярлыка:", font=('Segoe UI', 10),
+        tk.Label(main_frame, text="Имя ярлыка:", font=('Segoe UI', 10),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(10, 5))
-        name_entry = qt.Entry(main_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
+        name_entry = tk.Entry(main_frame, font=('Segoe UI', 11), bg='white', fg='#2C3E50',
                              bd=0, highlightthickness=2, highlightcolor='#3498DB',
                              highlightbackground='#BDC3C7')
-        name_entry.pack(fill=qt.X, ipady=8, pady=(5, 10))
+        name_entry.pack(fill=tk.X, ipady=8, pady=(5, 10))
         name_entry.insert(0, "Мой ярлык")
         
-        qt.Label(main_frame, text="Иконка:", font=('Segoe UI', 10),
+        tk.Label(main_frame, text="Иконка:", font=('Segoe UI', 10),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w')
         
-        icon_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        icon_frame.pack(fill=qt.X, pady=(5, 10))
+        icon_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        icon_frame.pack(fill=tk.X, pady=(5, 10))
         
-        icon_var = qt.StringVar(value="🌐")
+        icon_var = tk.StringVar(value="🌐")
         
         icon_presets = [
             ("🌐", "Веб"), ("📁", "Папка"), ("⚙️", "Настройки"),
@@ -7210,41 +5981,41 @@ class Desktop:
             ("🛒", "Магазин"), ("📊", "График"), ("🔒", "Безопасность"),
         ]
         
-        icon_grid = qt.Frame(icon_frame, bg='#F5F7FA')
-        icon_grid.pack(fill=qt.X)
+        icon_grid = tk.Frame(icon_frame, bg='#F5F7FA')
+        icon_grid.pack(fill=tk.X)
         
         for i, (icon, label) in enumerate(icon_presets):
             row = i // 8
             col = i % 8
             
-            btn = qt.Button(icon_grid, text=icon, font=('Segoe UI', 14),
-                           bg='white', fg='#2C3E50', relief=qt.RAISED, bd=1,
+            btn = tk.Button(icon_grid, text=icon, font=('Segoe UI', 14),
+                           bg='white', fg='#2C3E50', relief=tk.RAISED, bd=1,
                            width=3, height=1, cursor='hand2')
             btn.grid(row=row, column=col, padx=2, pady=2)
             
             def on_click(e, b=btn, ic=icon):
                 icon_var.set(ic)
                 for child in icon_grid.winfo_children():
-                    child.config(bg='white', relief=qt.RAISED)
-                b.config(bg='#3498DB', relief=qt.SUNKEN)
+                    child.config(bg='white', relief=tk.RAISED)
+                b.config(bg='#3498DB', relief=tk.SUNKEN)
             
             btn.bind('<Button-1>', on_click)
         
-        custom_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        custom_frame.pack(fill=qt.X, pady=(5, 0))
+        custom_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        custom_frame.pack(fill=tk.X, pady=(5, 0))
         
-        qt.Label(custom_frame, text="Или введите свой символ:", font=('Segoe UI', 9),
+        tk.Label(custom_frame, text="Или введите свой символ:", font=('Segoe UI', 9),
                 bg='#F5F7FA', fg='#7F8C8D').pack(anchor='w')
         
-        icon_entry = qt.Entry(custom_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
+        icon_entry = tk.Entry(custom_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
                              bd=0, highlightthickness=2, highlightcolor='#3498DB',
                              highlightbackground='#BDC3C7', width=5)
-        icon_entry.pack(side=qt.LEFT, ipady=5, pady=(5, 10))
+        icon_entry.pack(side=tk.LEFT, ipady=5, pady=(5, 10))
         icon_entry.insert(0, "🌐")
         icon_entry.bind('<KeyRelease>', lambda e: icon_var.set(icon_entry.get().strip() or "📄"))
         
-        btn_frame = qt.Frame(main_frame, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X, pady=10)
+        btn_frame = tk.Frame(main_frame, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X, pady=10)
         
         def create_shortcut():
             shortcut_type = type_var.get()
@@ -7325,30 +6096,30 @@ class Desktop:
             dialog.destroy()
             self.canvas.tag_raise('icon')
         
-        qt.Button(btn_frame, text="✅ Создать ярлык", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="✅ Создать ярлык", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=create_shortcut).pack(side=qt.RIGHT, padx=5)
+                 cursor='hand2', command=create_shortcut).pack(side=tk.RIGHT, padx=5)
         
-        qt.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 cursor='hand2', command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
         
         name_entry.bind('<Return>', lambda e: create_shortcut())
         url_entry.bind('<Return>', lambda e: create_shortcut())
         
         for child in icon_grid.winfo_children():
             if child.cget('text') == "🌐":
-                child.config(bg='#3498DB', relief=qt.SUNKEN)
+                child.config(bg='#3498DB', relief=tk.SUNKEN)
                 break
     
     def _toggle_shortcut_fields(self, type_var, website_frame, app_frame):
         """Переключение полей в зависимости от типа ярлыка"""
         if type_var.get() == "website":
-            website_frame.pack(fill=qt.X, pady=5)
+            website_frame.pack(fill=tk.X, pady=5)
             app_frame.pack_forget()
         else:
             website_frame.pack_forget()
-            app_frame.pack(fill=qt.X, pady=5)
+            app_frame.pack(fill=tk.X, pady=5)
 
     # ==================== МАГАЗИН ПРИЛОЖЕНИЙ ====================
     
@@ -7357,7 +6128,7 @@ class Desktop:
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_app_launch("App Store", self.username)
         
-        store_window = qt.Toplevel(self.root)
+        store_window = tk.Toplevel(self.root)
         store_window.title("🛒 Магазин приложений BITOS")
         store_window.geometry("800x600")
         store_window.transient(self.root)
@@ -7368,31 +6139,31 @@ class Desktop:
         y = (store_window.winfo_screenheight() - 600) // 2
         store_window.geometry(f'+{x}+{y}')
         
-        header = qt.Frame(store_window, bg='#3498DB', height=70)
-        header.pack(fill=qt.X)
+        header = tk.Frame(store_window, bg='#3498DB', height=70)
+        header.pack(fill=tk.X)
         
-        qt.Label(header, text="🛒 Магазин приложений BITOS", bg='#3498DB', fg='white',
+        tk.Label(header, text="🛒 Магазин приложений BITOS", bg='#3498DB', fg='white',
                 font=('Segoe UI', 18, 'bold')).pack(pady=15)
         
-        qt.Label(header, text="Скоро здесь появятся приложения для скачивания", 
+        tk.Label(header, text="Скоро здесь появятся приложения для скачивания", 
                 bg='#3498DB', fg='#D4E6F1', font=('Segoe UI', 11)).pack()
         
-        main_frame = qt.Frame(store_window, bg='#F5F7FA')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=30, pady=30)
+        main_frame = tk.Frame(store_window, bg='#F5F7FA')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=30)
         
-        dev_frame = qt.Frame(main_frame, bg='white', relief=qt.RIDGE, bd=2)
-        dev_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        dev_frame = tk.Frame(main_frame, bg='white', relief=tk.RIDGE, bd=2)
+        dev_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(dev_frame, text="🚧", font=('Segoe UI', 80), bg='white').pack(expand=True, pady=20)
+        tk.Label(dev_frame, text="🚧", font=('Segoe UI', 80), bg='white').pack(expand=True, pady=20)
         
-        qt.Label(dev_frame, text="Магазин приложений в разработке", 
+        tk.Label(dev_frame, text="Магазин приложений в разработке", 
                 font=('Segoe UI', 18, 'bold'), bg='white', fg='#2C3E50').pack()
         
-        qt.Label(dev_frame, text="В ближайшее время здесь появятся приложения для скачивания\n"
+        tk.Label(dev_frame, text="В ближайшее время здесь появятся приложения для скачивания\n"
                                  "Вы сможете устанавливать новые программы прямо из магазина", 
                 font=('Segoe UI', 11), bg='white', fg='#7F8C8D', justify='center').pack(pady=10)
         
-        features_frame = qt.Frame(dev_frame, bg='white')
+        features_frame = tk.Frame(dev_frame, bg='white')
         features_frame.pack(pady=20)
         
         features = [
@@ -7403,10 +6174,10 @@ class Desktop:
         ]
         
         for feature in features:
-            qt.Label(features_frame, text=feature, font=('Segoe UI', 11), 
+            tk.Label(features_frame, text=feature, font=('Segoe UI', 11), 
                     bg='white', fg='#27AE60').pack(anchor='w', pady=3)
         
-        qt.Button(main_frame, text="Закрыть", bg='#95A5A6', fg='white',
+        tk.Button(main_frame, text="Закрыть", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=30, pady=10,
                  cursor='hand2', command=store_window.destroy).pack(pady=10)
         
@@ -7430,10 +6201,10 @@ class Desktop:
     
     def create_context_menu(self):
         """Создание контекстного меню рабочего стола"""
-        self.context_menu = qt.Menu(self.root, tearoff=0, bg='#2C3E50', fg='white', 
+        self.context_menu = tk.Menu(self.root, tearoff=0, bg='#2C3E50', fg='white', 
                                    activebackground='#3498DB', activeforeground='white')
         
-        create_menu = qt.Menu(self.context_menu, tearoff=0, bg='#2C3E50', fg='white',
+        create_menu = tk.Menu(self.context_menu, tearoff=0, bg='#2C3E50', fg='white',
                              activebackground='#3498DB')
         create_menu.add_command(label='📁 Новую папку', command=self.create_new_folder)
         create_menu.add_separator()
@@ -7463,7 +6234,7 @@ class Desktop:
         self.context_menu.add_command(label='📦 Установщик BIP', command=self.open_bip_installer)
         self.context_menu.add_separator()
         
-        widget_menu = qt.Menu(self.context_menu, tearoff=0, bg='#2C3E50', fg='white',
+        widget_menu = tk.Menu(self.context_menu, tearoff=0, bg='#2C3E50', fg='white',
                              activebackground='#3498DB')
         widget_menu.add_command(label='⏰ Добавить часы', 
                                command=lambda: self.add_widget('clock'))
@@ -7517,7 +6288,7 @@ class Desktop:
                 try:
                     self.canvas.itemconfig(icon.icon_id_obj, fill=self.theme_colors['icon_fg'])
                     self.canvas.itemconfig(icon.text_id, fill=self.theme_colors['icon_fg'])
-                except qt.TclError:
+                except tk.TclError:
                     pass
 
     # ==================== ОБНОВЛЕНИЕ РАБОЧЕГО СТОЛА ====================
@@ -7626,16 +6397,16 @@ class Desktop:
         """Открыть калькулятор"""
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_app_launch("Calculator", self.username)
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("🧮 Калькулятор")
         dialog.geometry("300x400")
         dialog.transient(self.root)
         dialog.configure(bg='#F5F7FA')
         dialog.resizable(False, False)
         
-        display = qt.Entry(dialog, font=('Arial', 18), justify='right', bd=0, 
+        display = tk.Entry(dialog, font=('Arial', 18), justify='right', bd=0, 
                           bg='white', fg='#2C3E50')
-        display.pack(fill=qt.X, padx=10, pady=10, ipady=10)
+        display.pack(fill=tk.X, padx=10, pady=10, ipady=10)
         
         buttons = [
             ['7', '8', '9', '/'],
@@ -7648,38 +6419,38 @@ class Desktop:
         def click(btn):
             current = display.get()
             if btn == 'C':
-                display.delete(0, qt.END)
+                display.delete(0, tk.END)
             elif btn == '=':
                 try:
                     result = eval(current)
-                    display.delete(0, qt.END)
+                    display.delete(0, tk.END)
                     display.insert(0, str(result))
                 except:
-                    display.delete(0, qt.END)
+                    display.delete(0, tk.END)
                     display.insert(0, "Ошибка")
             elif btn == '√':
                 try:
                     result = math.sqrt(float(current))
-                    display.delete(0, qt.END)
+                    display.delete(0, tk.END)
                     display.insert(0, str(result))
                 except:
-                    display.delete(0, qt.END)
+                    display.delete(0, tk.END)
                     display.insert(0, "Ошибка")
             elif btn == 'π':
-                display.insert(qt.END, str(math.pi))
+                display.insert(tk.END, str(math.pi))
             elif btn == 'e':
-                display.insert(qt.END, str(math.e))
+                display.insert(tk.END, str(math.e))
             else:
-                display.insert(qt.END, btn)
+                display.insert(tk.END, btn)
         
-        btn_frame = qt.Frame(dialog, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.BOTH, expand=True, padx=10, pady=5)
+        btn_frame = tk.Frame(dialog, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         for i, row in enumerate(buttons):
             for j, btn in enumerate(row):
-                b = qt.Button(btn_frame, text=btn, command=lambda x=btn: click(x),
+                b = tk.Button(btn_frame, text=btn, command=lambda x=btn: click(x),
                              bg='white', fg='#2C3E50', font=('Arial', 12, 'bold'),
-                             bd=1, relief=qt.RAISED, cursor='hand2')
+                             bd=1, relief=tk.RAISED, cursor='hand2')
                 b.grid(row=i, column=j, padx=2, pady=2, sticky='nsew')
                 btn_frame.grid_columnconfigure(j, weight=1)
             btn_frame.grid_rowconfigure(i, weight=1)
@@ -7688,13 +6459,13 @@ class Desktop:
         """Открыть заметки"""
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_app_launch("Notes", self.username)
-        dialog = qt.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("📝 Заметки")
         dialog.geometry("700x500")
         dialog.transient(self.root)
         dialog.configure(bg='#F5F7FA')
         text_area = scrolledtext.ScrolledText(dialog, font=('Arial', 12))
-        text_area.pack(fill=qt.BOTH, expand=True, padx=10, pady=10)
+        text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
     def open_terminal(self):
         """Открыть терминал"""
@@ -7898,163 +6669,12 @@ class Desktop:
             self.root.destroy()
             shutdown_windows()
 
-class OptimizationManager:
-    """Профили энергосбережения BITOS: 0/25/50/75/100%."""
-    LEVELS = (0, 25, 50, 75, 100)
-    PROFILES = {
-        0:   {"name": "Без ограничений", "autosave": 10, "timer_scale": 1.00, "priority": "normal", "workers": 4},
-        25:  {"name": "Лёгкая оптимизация", "autosave": 12, "timer_scale": 1.08, "priority": "normal", "workers": 4},
-        50:  {"name": "Сбалансированный режим", "autosave": 15, "timer_scale": 1.20, "priority": "below_normal", "workers": 3},
-        75:  {"name": "Энергосбережение", "autosave": 20, "timer_scale": 1.45, "priority": "below_normal", "workers": 2},
-        100: {"name": "Максимальная экономия", "autosave": 30, "timer_scale": 1.80, "priority": "idle", "workers": 1},
-    }
-
-    def __init__(self, config_dir, bitos=None):
-        self.config_dir = os.path.abspath(config_dir)
-        self.config_path = os.path.join(self.config_dir, "performance.json")
-        self.bitos = bitos
-        self.level = 0
-        self._original_priority = None
-        self._priority_applied = None
-        os.makedirs(self.config_dir, exist_ok=True)
-        self.load()
-        self.apply(save=False)
-
-    @property
-    def profile(self):
-        return dict(self.PROFILES.get(self.level, self.PROFILES[0]))
-
-    @property
-    def autosave_interval(self):
-        return int(self.profile["autosave"])
-
-    @property
-    def timer_scale(self):
-        return float(self.profile["timer_scale"])
-
-    @property
-    def max_background_workers(self):
-        return int(self.profile["workers"])
-
-    def load(self):
-        try:
-            with open(self.config_path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-            level = int(data.get("level", 0))
-            self.level = level if level in self.LEVELS else 0
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            self.level = 0
-        return self.level
-
-    def save(self):
-        payload = {
-            "level": self.level,
-            "profile": self.profile["name"],
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "autosave_interval": self.autosave_interval,
-            "timer_scale": self.timer_scale,
-            "max_background_workers": self.max_background_workers,
-        }
-        temp_path = self.config_path + ".tmp"
-        try:
-            os.makedirs(self.config_dir, exist_ok=True)
-            with open(temp_path, "w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temp_path, self.config_path)
-            return True
-        except OSError as exc:
-            print(f"[Optimization] Не удалось сохранить профиль: {exc}")
-            try:
-                if os.path.exists(temp_path): os.remove(temp_path)
-            except OSError:
-                pass
-            return False
-
-    def set_level(self, level, persist=True):
-        try:
-            value = int(round(float(level) / 25.0) * 25)
-        except (TypeError, ValueError):
-            value = self.level
-        previous = self.level
-        self.level = min(100, max(0, value))
-        if self.level != previous:
-            self._worker_semaphore = threading.BoundedSemaphore(self.max_background_workers)
-        self.apply(save=False)
-        if persist:
-            self.save()
-        return self.level
-
-    def _apply_process_priority(self):
-        if platform.system() != "Windows":
-            return
-        try:
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            process = kernel32.GetCurrentProcess()
-            priority_map = {
-                "normal": 0x00000020,
-                "below_normal": 0x00004000,
-                "idle": 0x00000040,
-            }
-            target = priority_map[self.profile["priority"]]
-            if self._original_priority is None:
-                self._original_priority = kernel32.GetPriorityClass(process)
-            if target == priority_map["normal"] and self._original_priority:
-                target = self._original_priority
-            if target != self._priority_applied:
-                kernel32.SetPriorityClass(process, target)
-                self._priority_applied = target
-        except Exception as exc:
-            print(f"[Optimization] Не удалось изменить приоритет процесса: {exc}")
-
-    def apply(self, save=False):
-        # Timer pacing affects low-frequency visual effects and background refreshes;
-        # level 0 retains the original 07.24 timing exactly.
-        try:
-            _qt_runtime_profile["timer_scale"] = self.timer_scale
-        except Exception:
-            pass
-        self._apply_process_priority()
-        if save:
-            self.save()
-        return self.profile
-
-    def start_background(self, target, args=(), kwargs=None, name=None):
-        """Запуск фоновой задачи с лимитом одновременных задач профиля."""
-        kwargs = kwargs or {}
-        semaphore = getattr(self, "_worker_semaphore", None)
-        if semaphore is None:
-            self._worker_semaphore = threading.BoundedSemaphore(self.max_background_workers)
-            semaphore = self._worker_semaphore
-        def runner():
-            with semaphore:
-                target(*args, **kwargs)
-        thread = threading.Thread(target=runner, daemon=True, name=name)
-        thread.start()
-        return thread
-
-
-
-def _start_managed_thread(owner, target, args=(), kwargs=None, name=None):
-    """Запуск короткой фоновой задачи с учётом выбранного профиля."""
-    kwargs = kwargs or {}
-    manager = getattr(owner, "performance_manager", None)
-    if manager is None:
-        manager = getattr(getattr(owner, "bitos", None), "performance_manager", None)
-    if manager is not None and getattr(manager, "level", 0) > 0:
-        return manager.start_background(target, args=args, kwargs=kwargs, name=name)
-    thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True, name=name)
-    thread.start()
-    return thread
-
 class BITOS:
     """Ядро операционной системы BITOS"""
     
     def __init__(self):
-        self.version = "06V6"
-        self.build = "11.01 BETA"
+        self.version = "06V6_24.07"
+        self.build = "2026.07 BETA"
         self.running = True
         self.start_time = time.time()
         self.current_user = "User"
@@ -8084,7 +6704,6 @@ class BITOS:
         }
         
         self._init_user_paths()
-        self.performance_manager = OptimizationManager(self.system_paths["config"], self)
         
         self.system_files = {
             "serial": os.path.join(self.system_paths["security"], "serial.bin"),
@@ -8721,7 +7340,7 @@ class BITOS:
         
         self.play_sound("logon")
         
-        desktop_root = qt.Tk()
+        desktop_root = tk.Tk()
         desktop = Desktop(desktop_root, username, self)
         
         # ============================================================
@@ -8955,7 +7574,7 @@ class WallpaperManager:
     
     def open_wallpaper_selector(self, parent, callback=None):
         """Открывает окно выбора обоев через встроенный проводник"""
-        dialog = qt.Toplevel(parent)
+        dialog = tk.Toplevel(parent)
         dialog.title("🖼 Выбор обоев рабочего стола")
         dialog.geometry("800x600")
         dialog.transient(parent)
@@ -8966,44 +7585,44 @@ class WallpaperManager:
         dialog.geometry(f'+{x}+{y}')
         
         # Заголовок
-        header = qt.Frame(dialog, bg='#3498DB', height=60)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="🖼 Выбор обоев рабочего стола", bg='#3498DB', fg='white',
+        header = tk.Frame(dialog, bg='#3498DB', height=60)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="🖼 Выбор обоев рабочего стола", bg='#3498DB', fg='white',
                 font=('Segoe UI', 14, 'bold')).pack(pady=15)
         
         # Панель выбора файла
-        select_frame = qt.Frame(dialog, bg='#F5F7FA')
-        select_frame.pack(fill=qt.X, padx=20, pady=10)
+        select_frame = tk.Frame(dialog, bg='#F5F7FA')
+        select_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        self.wp_file_label = qt.Label(select_frame, text="Файл не выбран", bg='white', fg='#7F8C8D',
-                                      font=('Segoe UI', 10), anchor='w', relief=qt.SUNKEN, bd=1)
-        self.wp_file_label.pack(side=qt.LEFT, fill=qt.X, expand=True, ipady=5, padx=(0, 5))
+        self.wp_file_label = tk.Label(select_frame, text="Файл не выбран", bg='white', fg='#7F8C8D',
+                                      font=('Segoe UI', 10), anchor='w', relief=tk.SUNKEN, bd=1)
+        self.wp_file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 5))
         
-        qt.Button(select_frame, text="📂 Открыть проводник", bg='#3498DB', fg='white',
+        tk.Button(select_frame, text="📂 Открыть проводник", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5, cursor='hand2',
-                 command=lambda: self._open_bitos_explorer(dialog)).pack(side=qt.RIGHT)
+                 command=lambda: self._open_bitos_explorer(dialog)).pack(side=tk.RIGHT)
         
         # Выбор стиля
-        style_frame = qt.Frame(dialog, bg='#F5F7FA')
-        style_frame.pack(fill=qt.X, padx=20, pady=5)
+        style_frame = tk.Frame(dialog, bg='#F5F7FA')
+        style_frame.pack(fill=tk.X, padx=20, pady=5)
         
-        qt.Label(style_frame, text="Стиль отображения:", bg='#F5F7FA', fg='#2C3E50',
-                font=('Segoe UI', 10)).pack(side=qt.LEFT, padx=5)
+        tk.Label(style_frame, text="Стиль отображения:", bg='#F5F7FA', fg='#2C3E50',
+                font=('Segoe UI', 10)).pack(side=tk.LEFT, padx=5)
         
-        self.wp_style_var = qt.StringVar(value=self.wallpaper_style)
-        style_menu = qtu.Combobox(style_frame, textvariable=self.wp_style_var, width=12,
+        self.wp_style_var = tk.StringVar(value=self.wallpaper_style)
+        style_menu = ttk.Combobox(style_frame, textvariable=self.wp_style_var, width=12,
                                   values=['fill', 'fit', 'stretch', 'tile', 'center'],
                                   state='readonly')
-        style_menu.pack(side=qt.LEFT, padx=5)
+        style_menu.pack(side=tk.LEFT, padx=5)
         
         # Область предпросмотра
-        preview_frame = qt.Frame(dialog, bg='white', relief=qt.SUNKEN, bd=2)
-        preview_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=10)
+        preview_frame = tk.Frame(dialog, bg='white', relief=tk.SUNKEN, bd=2)
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
-        self.wp_preview_label = qt.Label(preview_frame, bg='#2C3E50', fg='white',
+        self.wp_preview_label = tk.Label(preview_frame, bg='#2C3E50', fg='white',
                                          text="Предпросмотр обоев\n\nНажмите 'Открыть проводник'\nдля выбора изображения",
                                          font=('Segoe UI', 12))
-        self.wp_preview_label.pack(expand=True, fill=qt.BOTH)
+        self.wp_preview_label.pack(expand=True, fill=tk.BOTH)
         
         # Показываем текущие обои если есть
         if self.wallpaper_path and os.path.exists(self.wallpaper_path):
@@ -9011,20 +7630,20 @@ class WallpaperManager:
             self._show_preview_in_label(self.wallpaper_path)
         
         # Кнопки
-        btn_frame = qt.Frame(dialog, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X, padx=20, pady=10)
+        btn_frame = tk.Frame(dialog, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        qt.Button(btn_frame, text="🗑 Удалить обои", bg='#E74C3C', fg='white',
+        tk.Button(btn_frame, text="🗑 Удалить обои", bg='#E74C3C', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=8, cursor='hand2',
-                 command=lambda: self._clear_wp(dialog, callback)).pack(side=qt.LEFT, padx=5)
+                 command=lambda: self._clear_wp(dialog, callback)).pack(side=tk.LEFT, padx=5)
         
-        qt.Button(btn_frame, text="✅ Применить", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="✅ Применить", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=8, cursor='hand2',
-                 command=lambda: self._apply_wp(dialog, callback)).pack(side=qt.RIGHT, padx=5)
+                 command=lambda: self._apply_wp(dialog, callback)).pack(side=tk.RIGHT, padx=5)
         
-        qt.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=30, pady=8,
-                 command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
         
         self.wp_selected_file = self.wallpaper_path
     
@@ -9088,7 +7707,7 @@ class WallpaperManager:
             elif style == 'stretch':
                 img = img.resize((max_w, max_h), Image.Resampling.LANCZOS)
             
-            photo = QtPhotoImage(img)
+            photo = ImageTk.PhotoImage(img)
             self.wp_preview_label.config(image=photo, text='', bg='white')
             self.wp_preview_label.image = photo
         except Exception as e:
@@ -9177,7 +7796,7 @@ class WallpaperManager:
                 new_img.paste(img, (x, y))
                 img = new_img
             
-            photo = QtPhotoImage(img)
+            photo = ImageTk.PhotoImage(img)
             canvas.create_image(0, 0, image=photo, anchor='nw', tags='wallpaper')
             canvas.wallpaper_image = photo
             canvas.tag_lower('wallpaper')
@@ -9261,7 +7880,7 @@ class NotificationCenter:
     
     def show_popup(self, notification, duration=5000):
         """Показывает всплывающее уведомление"""
-        popup = qt.Toplevel(self.parent)
+        popup = tk.Toplevel(self.parent)
         popup.overrideredirect(True)
         popup.attributes('-topmost', True)
         popup.configure(bg='#2C3E50')
@@ -9282,35 +7901,35 @@ class NotificationCenter:
         popup.attributes('-alpha', 0)
         self._fade_in(popup)
         
-        frame = qt.Frame(popup, bg='#34495E', relief=qt.RAISED, bd=2)
-        frame.pack(fill=qt.BOTH, expand=True, padx=2, pady=2)
+        frame = tk.Frame(popup, bg='#34495E', relief=tk.RAISED, bd=2)
+        frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         
-        header_frame = qt.Frame(frame, bg='#34495E')
-        header_frame.pack(fill=qt.X, padx=10, pady=(10, 0))
+        header_frame = tk.Frame(frame, bg='#34495E')
+        header_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
         
-        qt.Label(header_frame, text=notification['icon'], font=('Segoe UI', 20),
-                bg='#34495E', fg='white').pack(side=qt.LEFT, padx=(0, 10))
+        tk.Label(header_frame, text=notification['icon'], font=('Segoe UI', 20),
+                bg='#34495E', fg='white').pack(side=tk.LEFT, padx=(0, 10))
         
-        qt.Label(header_frame, text=notification['title'], font=('Segoe UI', 11, 'bold'),
-                bg='#34495E', fg='#3498DB').pack(side=qt.LEFT)
+        tk.Label(header_frame, text=notification['title'], font=('Segoe UI', 11, 'bold'),
+                bg='#34495E', fg='#3498DB').pack(side=tk.LEFT)
         
-        close_label = qt.Label(header_frame, text="✕", font=('Segoe UI', 12),
+        close_label = tk.Label(header_frame, text="✕", font=('Segoe UI', 12),
                               bg='#34495E', fg='#95A5A6', cursor='hand2')
-        close_label.pack(side=qt.RIGHT)
+        close_label.pack(side=tk.RIGHT)
         close_label.bind('<Button-1>', lambda e: self.close_popup(popup))
         
-        msg_frame = qt.Frame(frame, bg='#34495E')
-        msg_frame.pack(fill=qt.BOTH, expand=True, padx=10, pady=5)
+        msg_frame = tk.Frame(frame, bg='#34495E')
+        msg_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # Ограничиваем длину сообщения
         display_message = notification['message'][:100]
         if len(notification['message']) > 100:
             display_message += "..."
         
-        qt.Label(msg_frame, text=display_message, font=('Segoe UI', 9),
+        tk.Label(msg_frame, text=display_message, font=('Segoe UI', 9),
                 bg='#34495E', fg='#BDC3C7', wraplength=300, justify='left').pack(anchor='w')
         
-        progress = qtu.Progressbar(frame, mode='determinate', length=popup_width-20)
+        progress = ttk.Progressbar(frame, mode='determinate', length=popup_width-20)
         progress.pack(padx=10, pady=(0, 10))
         
         steps = 20
@@ -9412,31 +8031,31 @@ class ClockWidget:
         self.update_time()
     
     def create_widget(self):
-        self.frame = qt.Frame(self.canvas, bg=self.theme_colors['widget_bg'],
-                              relief=qt.RAISED, bd=2)
+        self.frame = tk.Frame(self.canvas, bg=self.theme_colors['widget_bg'],
+                              relief=tk.RAISED, bd=2)
         self.frame.place(x=self.x, y=self.y, width=180, height=120)
         
-        title_bar = qt.Frame(self.frame, bg=self.theme_colors['taskbar_bg'], height=25)
-        title_bar.pack(fill=qt.X)
+        title_bar = tk.Frame(self.frame, bg=self.theme_colors['taskbar_bg'], height=25)
+        title_bar.pack(fill=tk.X)
         
-        self.title_label = qt.Label(title_bar, text="⏰ Часы", bg=self.theme_colors['taskbar_bg'],
+        self.title_label = tk.Label(title_bar, text="⏰ Часы", bg=self.theme_colors['taskbar_bg'],
                                      fg=self.theme_colors['widget_fg'], font=('Segoe UI', 9, 'bold'))
-        self.title_label.pack(side=qt.LEFT, padx=5)
+        self.title_label.pack(side=tk.LEFT, padx=5)
         
-        close_btn = qt.Label(title_bar, text="✕", bg=self.theme_colors['taskbar_bg'],
+        close_btn = tk.Label(title_bar, text="✕", bg=self.theme_colors['taskbar_bg'],
                             fg=self.theme_colors['widget_fg'], cursor='hand2')
-        close_btn.pack(side=qt.RIGHT, padx=5)
+        close_btn.pack(side=tk.RIGHT, padx=5)
         close_btn.bind('<Button-1>', lambda e: self.destroy())
         
         title_bar.bind('<Button-1>', self.start_drag)
         title_bar.bind('<B1-Motion>', self.drag)
         title_bar.bind('<ButtonRelease-1>', self.stop_drag)
         
-        self.time_label = qt.Label(self.frame, text="", bg=self.theme_colors['widget_bg'],
+        self.time_label = tk.Label(self.frame, text="", bg=self.theme_colors['widget_bg'],
                                     fg=self.theme_colors['widget_fg'], font=('Segoe UI', 36, 'bold'))
         self.time_label.pack(expand=True)
         
-        self.date_label = qt.Label(self.frame, text="", bg=self.theme_colors['widget_bg'],
+        self.date_label = tk.Label(self.frame, text="", bg=self.theme_colors['widget_bg'],
                                     fg=self.theme_colors['widget_fg'], font=('Segoe UI', 10))
         self.date_label.pack()
     
@@ -9447,7 +8066,7 @@ class ClockWidget:
                 self.time_label.config(text=now.strftime("%H:%M:%S"))
                 self.date_label.config(text=now.strftime("%d %B %Y"))
                 self.frame.after(1000, self.update_time)
-            except qt.TclError:
+            except tk.TclError:
                 pass
     
     def start_drag(self, event):
@@ -9462,7 +8081,7 @@ class ClockWidget:
                 self.frame.place(x=x, y=y)
                 self.x = x
                 self.y = y
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def stop_drag(self, event):
@@ -9476,7 +8095,7 @@ class ClockWidget:
                 self.title_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['widget_fg'])
                 self.time_label.config(bg=theme_colors['widget_bg'], fg=theme_colors['widget_fg'])
                 self.date_label.config(bg=theme_colors['widget_bg'], fg=theme_colors['widget_fg'])
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def show(self):
@@ -9484,7 +8103,7 @@ class ClockWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.place(x=self.x, y=self.y, width=180, height=120)
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def hide(self):
@@ -9492,14 +8111,14 @@ class ClockWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.place_forget()
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def destroy(self):
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.destroy()
-        except qt.TclError:
+        except tk.TclError:
             pass
         
         try:
@@ -9514,7 +8133,7 @@ class ClockWidget:
             try:
                 if self.frame and self.frame.winfo_exists():
                     self.frame.place(x=self.x, y=self.y)
-            except qt.TclError:
+            except tk.TclError:
                 pass
     
     def get_config(self):
@@ -9535,41 +8154,41 @@ class CalendarWidget:
         self.create_widget()
     
     def create_widget(self):
-        self.frame = qt.Frame(self.canvas, bg=self.theme_colors['widget_bg'],
-                              relief=qt.RAISED, bd=2)
+        self.frame = tk.Frame(self.canvas, bg=self.theme_colors['widget_bg'],
+                              relief=tk.RAISED, bd=2)
         self.frame.place(x=self.x, y=self.y, width=200, height=220)
         
-        title_bar = qt.Frame(self.frame, bg=self.theme_colors['taskbar_bg'], height=25)
-        title_bar.pack(fill=qt.X)
+        title_bar = tk.Frame(self.frame, bg=self.theme_colors['taskbar_bg'], height=25)
+        title_bar.pack(fill=tk.X)
         
-        self.title_label = qt.Label(title_bar, text="📅 Календарь", bg=self.theme_colors['taskbar_bg'],
+        self.title_label = tk.Label(title_bar, text="📅 Календарь", bg=self.theme_colors['taskbar_bg'],
                                      fg=self.theme_colors['widget_fg'], font=('Segoe UI', 9, 'bold'))
-        self.title_label.pack(side=qt.LEFT, padx=5)
+        self.title_label.pack(side=tk.LEFT, padx=5)
         
-        close_btn = qt.Label(title_bar, text="✕", bg=self.theme_colors['taskbar_bg'],
+        close_btn = tk.Label(title_bar, text="✕", bg=self.theme_colors['taskbar_bg'],
                             fg=self.theme_colors['widget_fg'], cursor='hand2')
-        close_btn.pack(side=qt.RIGHT, padx=5)
+        close_btn.pack(side=tk.RIGHT, padx=5)
         close_btn.bind('<Button-1>', lambda e: self.destroy())
         
         title_bar.bind('<Button-1>', self.start_drag)
         title_bar.bind('<B1-Motion>', self.drag)
         title_bar.bind('<ButtonRelease-1>', self.stop_drag)
         
-        self.month_label = qt.Label(self.frame, text="", bg=self.theme_colors['widget_bg'],
+        self.month_label = tk.Label(self.frame, text="", bg=self.theme_colors['widget_bg'],
                                      fg=self.theme_colors['widget_fg'],
                                      font=('Segoe UI', 11, 'bold'))
         self.month_label.pack(pady=5)
         
-        days_frame = qt.Frame(self.frame, bg=self.theme_colors['widget_bg'])
+        days_frame = tk.Frame(self.frame, bg=self.theme_colors['widget_bg'])
         days_frame.pack(padx=5, pady=5)
         
         days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
         for i, day in enumerate(days):
-            qt.Label(days_frame, text=day, bg=self.theme_colors['widget_bg'],
+            tk.Label(days_frame, text=day, bg=self.theme_colors['widget_bg'],
                     fg=self.theme_colors['widget_fg'], font=('Segoe UI', 8),
                     width=3).grid(row=0, column=i)
         
-        self.calendar_grid = qt.Frame(self.frame, bg=self.theme_colors['widget_bg'])
+        self.calendar_grid = tk.Frame(self.frame, bg=self.theme_colors['widget_bg'])
         self.calendar_grid.pack(padx=5, pady=5)
         
         self.update_calendar()
@@ -9600,7 +8219,7 @@ class CalendarWidget:
             today = datetime.now().date()
             
             for i in range(first_weekday):
-                qt.Label(self.calendar_grid, text="", bg=self.theme_colors['widget_bg'],
+                tk.Label(self.calendar_grid, text="", bg=self.theme_colors['widget_bg'],
                         width=3).grid(row=(i // 7) + 1, column=i % 7)
             
             for day in range(1, days_in_month + 1):
@@ -9615,9 +8234,9 @@ class CalendarWidget:
                     bg_color = '#3498DB'
                     fg_color = 'white'
                 
-                qt.Label(self.calendar_grid, text=str(day), bg=bg_color, fg=fg_color,
+                tk.Label(self.calendar_grid, text=str(day), bg=bg_color, fg=fg_color,
                         font=('Segoe UI', 8), width=3).grid(row=row, column=col, padx=1, pady=1)
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def start_drag(self, event):
@@ -9632,7 +8251,7 @@ class CalendarWidget:
                 self.frame.place(x=x, y=y)
                 self.x = x
                 self.y = y
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def stop_drag(self, event):
@@ -9646,7 +8265,7 @@ class CalendarWidget:
                 self.title_label.config(bg=theme_colors['taskbar_bg'], fg=theme_colors['widget_fg'])
                 self.month_label.config(bg=theme_colors['widget_bg'], fg=theme_colors['widget_fg'])
                 self.update_calendar()
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def show(self):
@@ -9654,7 +8273,7 @@ class CalendarWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.place(x=self.x, y=self.y, width=200, height=220)
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def hide(self):
@@ -9662,14 +8281,14 @@ class CalendarWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.place_forget()
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def destroy(self):
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.destroy()
-        except qt.TclError:
+        except tk.TclError:
             pass
         
         try:
@@ -9684,7 +8303,7 @@ class CalendarWidget:
             try:
                 if self.frame and self.frame.winfo_exists():
                     self.frame.place(x=self.x, y=self.y)
-            except qt.TclError:
+            except tk.TclError:
                 pass
     
     def get_config(self):
@@ -9707,17 +8326,17 @@ class StickerWidget:
         self.create_widget()
     
     def create_widget(self):
-        self.frame = qt.Frame(self.canvas, bg='#FFF9C4', relief=qt.RAISED, bd=2)
+        self.frame = tk.Frame(self.canvas, bg='#FFF9C4', relief=tk.RAISED, bd=2)
         self.frame.place(x=self.x, y=self.y, width=200, height=180)
         
-        title_bar = qt.Frame(self.frame, bg='#F9A825', height=25)
-        title_bar.pack(fill=qt.X)
+        title_bar = tk.Frame(self.frame, bg='#F9A825', height=25)
+        title_bar.pack(fill=tk.X)
         
-        qt.Label(title_bar, text="📝 Заметка", bg='#F9A825', fg='white',
-                font=('Segoe UI', 9, 'bold')).pack(side=qt.LEFT, padx=5)
+        tk.Label(title_bar, text="📝 Заметка", bg='#F9A825', fg='white',
+                font=('Segoe UI', 9, 'bold')).pack(side=tk.LEFT, padx=5)
         
-        close_btn = qt.Label(title_bar, text="✕", bg='#F9A825', fg='white', cursor='hand2')
-        close_btn.pack(side=qt.RIGHT, padx=5)
+        close_btn = tk.Label(title_bar, text="✕", bg='#F9A825', fg='white', cursor='hand2')
+        close_btn.pack(side=tk.RIGHT, padx=5)
         close_btn.bind('<Button-1>', lambda e: self.destroy())
         
         title_bar.bind('<Button-1>', self.start_drag)
@@ -9725,10 +8344,10 @@ class StickerWidget:
         title_bar.bind('<ButtonRelease-1>', self.stop_drag)
         
         # Текстовое поле с сохранением
-        self.text_widget = qt.Text(self.frame, bg='#FFF9C4', fg='#333333',
-                                    font=('Segoe UI', 10), wrap=qt.WORD,
-                                    relief=qt.FLAT, bd=0)
-        self.text_widget.pack(fill=qt.BOTH, expand=True, padx=5, pady=5)
+        self.text_widget = tk.Text(self.frame, bg='#FFF9C4', fg='#333333',
+                                    font=('Segoe UI', 10), wrap=tk.WORD,
+                                    relief=tk.FLAT, bd=0)
+        self.text_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         if self.text:
             self.text_widget.insert('1.0', self.text)
@@ -9745,7 +8364,7 @@ class StickerWidget:
                 # Сохраняем в конфигурацию виджетов
                 if hasattr(self.canvas, 'master') and hasattr(self.canvas.master, 'save_widgets'):
                     self.canvas.master.save_widgets()
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def start_drag(self, event):
@@ -9760,7 +8379,7 @@ class StickerWidget:
                 self.frame.place(x=x, y=y)
                 self.x = x
                 self.y = y
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def stop_drag(self, event):
@@ -9776,7 +8395,7 @@ class StickerWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.place(x=self.x, y=self.y, width=200, height=180)
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def hide(self):
@@ -9784,7 +8403,7 @@ class StickerWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.place_forget()
-        except qt.TclError:
+        except tk.TclError:
             pass
     
     def destroy(self):
@@ -9797,7 +8416,7 @@ class StickerWidget:
         try:
             if self.frame and self.frame.winfo_exists():
                 self.frame.destroy()
-        except qt.TclError:
+        except tk.TclError:
             pass
         
         try:
@@ -9813,7 +8432,7 @@ class StickerWidget:
             try:
                 if self.frame and self.frame.winfo_exists():
                     self.frame.place(x=self.x, y=self.y)
-            except qt.TclError:
+            except tk.TclError:
                 pass
     
     def get_config(self):
@@ -10030,48 +8649,76 @@ class ErrorManager:
     
     def _patch_everything(self):
         """Патчинг всех компонентов для перехвата ошибок"""
-        self._patch_qt_runtime()
+        self._patch_tkinter()
         self._patch_threading()
         self._patch_functions()
     
-    def _patch_qt_runtime(self):
-        """Подключение обработки исключений обработчиков Qt."""
+    def _patch_tkinter(self):
+        """Патчинг tkinter для перехвата ошибок"""
         try:
-            self._original_qt_excepthook = sys.excepthook
-            def qt_exception_hook(exc_type, exc_value, exc_tb):
+            import tkinter as tk
+            
+            # Сохраняем оригинальные методы
+            self._original_report_callback = tk.Tk.report_callback_exception
+            self._original_after = tk.Misc.after
+            self._original_destroy = tk.Misc.destroy
+            
+            # Создаём новый обработчик
+            def custom_report_callback(self_widget, exc, val, tb):
+                """Кастомный обработчик ошибок tkinter"""
+                error_msg = f"tkinter error: {exc.__name__}: {val}"
+                self._handle_exception(exc, val, tb, source="tkinter")
+                
+                # Вызываем оригинальный обработчик если есть
+                if self._original_report_callback:
+                    try:
+                        self._original_report_callback(self_widget, exc, val, tb)
+                    except:
+                        pass
+            
+            # Применяем патч
+            tk.Tk.report_callback_exception = custom_report_callback
+            
+            # Патчим after для безопасности
+            def safe_after(self_widget, ms, func=None, *args):
+                if not self_widget or not self_widget.winfo_exists():
+                    return None
                 try:
-                    self._handle_exception(exc_type, exc_value, exc_tb, source="PyQt6 callback")
-                except Exception:
-                    pass
+                    return self._original_after(self_widget, ms, func, *args)
+                except tk.TclError as e:
+                    self._log_error("TclError", str(e), traceback.format_exc(), source="after")
+                    return None
+            
+            tk.Misc.after = safe_after
+            
+            # Патчим destroy
+            def safe_destroy(self_widget):
                 try:
-                    self._original_qt_excepthook(exc_type, exc_value, exc_tb)
-                except Exception:
-                    pass
-            sys.excepthook = qt_exception_hook
-            app = QApplication.instance()
-            if app is None:
-                raise RuntimeError("QApplication не инициализирован")
+                    if not self_widget or not self_widget.winfo_exists():
+                        return
+                    self._original_destroy(self_widget)
+                except tk.TclError:
+                    pass  # Игнорируем ошибки удаления уже удалённых виджетов
+            
+            tk.Misc.destroy = safe_destroy
+            
         except Exception as e:
-            print(f"[ErrorManager] ⚠️ Не удалось подключить обработчик Qt: {e}")
+            print(f"[ErrorManager] ⚠️ Не удалось пропатчить tkinter: {e}")
     
     def _patch_threading(self):
         """Патчинг threading для перехвата ошибок в потоках"""
         try:
             original_thread_run = threading.Thread.run
-            manager = self
-
-            def safe_thread_run(thread):
+            
+            def safe_thread_run(self):
                 try:
-                    original_thread_run(thread)
-                except Exception as exc:
-                    try:
-                        manager._handle_exception(
-                            type(exc), exc, exc.__traceback__,
-                            source=f"thread:{thread.name}"
-                        )
-                    except Exception:
-                        traceback.print_exc()
-
+                    original_thread_run(self)
+                except Exception as e:
+                    self._handle_exception(
+                        type(e), e, traceback.extract_tb(e.__traceback__),
+                        source=f"thread:{self.name}"
+                    )
+            
             threading.Thread.run = safe_thread_run
             
         except Exception as e:
@@ -10115,7 +8762,8 @@ class ErrorManager:
     def _check_windows(self):
         """Проверка состояния окон"""
         try:
-            root = qt._default_root
+            import tkinter as tk
+            root = tk._default_root
             if root:
                 # Проверяем дочерние окна
                 for child in root.winfo_children():
@@ -10361,13 +9009,13 @@ class ErrorManager:
     def show_logs_dialog(self, parent=None):
         """Показать диалог с логами"""
         if not parent:
-            parent = qt._default_root
+            parent = tk._default_root
         
         if not parent:
-            parent = qt.Tk()
+            parent = tk.Tk()
             parent.withdraw()
         
-        dialog = qt.Toplevel(parent)
+        dialog = tk.Toplevel(parent)
         dialog.title("📋 Журналы BITOS")
         dialog.geometry("900x600")
         dialog.transient(parent)
@@ -10379,18 +9027,18 @@ class ErrorManager:
         dialog.geometry(f'+{x}+{y}')
         
         # Заголовок
-        header = qt.Frame(dialog, bg='#2C3E50', height=50)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="📋 Журналы BITOS", bg='#2C3E50', fg='white',
+        header = tk.Frame(dialog, bg='#2C3E50', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="📋 Журналы BITOS", bg='#2C3E50', fg='white',
                 font=('Segoe UI', 14, 'bold')).pack(pady=10)
         
         # Вкладки
-        notebook = qtu.Notebook(dialog)
-        notebook.pack(fill=qt.BOTH, expand=True, padx=10, pady=10)
+        notebook = ttk.Notebook(dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Статистика
         stats = self.get_statistics()
-        stats_frame = qtu.Frame(notebook)
+        stats_frame = ttk.Frame(notebook)
         notebook.add(stats_frame, text="📊 Статистика")
         
         stats_text = f"""
@@ -10411,7 +9059,7 @@ class ErrorManager:
 ║ events.log:       {stats['log_files']['events'] / 1024:.1f} KB
 ╚══════════════════════════════════════════════════════════════════╝
 """
-        qt.Label(stats_frame, text=stats_text, bg='white', fg='#2C3E50',
+        tk.Label(stats_frame, text=stats_text, bg='white', fg='#2C3E50',
                 font=('Consolas', 11), justify='left').pack(padx=20, pady=20)
         
         # Вкладки для логов
@@ -10427,13 +9075,13 @@ class ErrorManager:
         
         for name, path in log_files.items():
             if os.path.exists(path):
-                frame = qtu.Frame(notebook)
+                frame = ttk.Frame(notebook)
                 notebook.add(frame, text=name)
                 
                 text_area = scrolledtext.ScrolledText(frame, font=('Consolas', 9),
                                                       bg='#1E1E1E', fg='#00FF00',
-                                                      wrap=qt.WORD)
-                text_area.pack(fill=qt.BOTH, expand=True, padx=5, pady=5)
+                                                      wrap=tk.WORD)
+                text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
                 
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
@@ -10448,20 +9096,20 @@ class ErrorManager:
                 text_area.config(state='disabled')
         
         # Кнопка закрытия
-        btn_frame = qt.Frame(dialog, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X, padx=10, pady=10)
+        btn_frame = tk.Frame(dialog, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        qt.Button(btn_frame, text="🔄 Обновить", bg='#3498DB', fg='white',
+        tk.Button(btn_frame, text="🔄 Обновить", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 command=lambda: self._refresh_logs_dialog(dialog, notebook)).pack(side=qt.LEFT, padx=5)
+                 command=lambda: self._refresh_logs_dialog(dialog, notebook)).pack(side=tk.LEFT, padx=5)
         
-        qt.Button(btn_frame, text="🗑 Очистить логи", bg='#E74C3C', fg='white',
+        tk.Button(btn_frame, text="🗑 Очистить логи", bg='#E74C3C', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 command=lambda: self._clear_all_logs()).pack(side=qt.LEFT, padx=5)
+                 command=lambda: self._clear_all_logs()).pack(side=tk.LEFT, padx=5)
         
-        qt.Button(btn_frame, text="Закрыть", bg='#95A5A6', fg='white',
+        tk.Button(btn_frame, text="Закрыть", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
-                 command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
     
     def _refresh_logs_dialog(self, dialog, notebook):
         """Обновление диалога с логами"""
@@ -10512,10 +9160,11 @@ class ErrorManager:
         sys.stdout = self._original_stdout
         sys.stderr = self._original_stderr
         
-        # Восстанавливаем Qt
+        # Восстанавливаем tkinter
         try:
+            import tkinter as tk
             if hasattr(self, '_original_report_callback'):
-                qt.Tk.report_callback_exception = self._original_report_callback
+                tk.Tk.report_callback_exception = self._original_report_callback
         except:
             pass
         
@@ -10900,7 +9549,7 @@ class SettingsWindow:
     
     def create_window(self):
         """Создание окна настроек"""
-        self.window = qt.Toplevel(self.parent)
+        self.window = tk.Toplevel(self.parent)
         self.window.title("⚙ Настройки BITOS")
         self.window.geometry("950x780")
         self.window.transient(self.parent)
@@ -10913,72 +9562,71 @@ class SettingsWindow:
         self.window.geometry(f'+{x}+{y}')
         
         # Создаём вкладки
-        self.notebook = qtu.Notebook(self.window)
-        self.notebook.pack(fill=qt.BOTH, expand=True, padx=10, pady=10)
+        self.notebook = ttk.Notebook(self.window)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Вкладки
         self._create_theme_tab()
         self._create_sound_tab()
         self._create_security_tab()
         self._create_account_tab()
-        self._create_updates_tab()
-        self._create_optimization_tab()
+        self._create_updates_tab()  # <--- ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВКЛАДКА
         self._create_system_tab()
         
         # Нижняя панель
-        bottom_frame = qt.Frame(self.window, bg='#F5F7FA', height=50)
-        bottom_frame.pack(fill=qt.X, padx=10, pady=(0, 10))
+        bottom_frame = tk.Frame(self.window, bg='#F5F7FA', height=50)
+        bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        qt.Button(bottom_frame, text="Закрыть", bg='#95A5A6', fg='white',
+        tk.Button(bottom_frame, text="Закрыть", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=30, pady=8,
-                 cursor='hand2', command=self.window.destroy).pack(side=qt.RIGHT, padx=5)
+                 cursor='hand2', command=self.window.destroy).pack(side=tk.RIGHT, padx=5)
 
     # ==================== ВКЛАДКА 1: ТЕМЫ (БЕЗ ИЗМЕНЕНИЙ) ====================
     
     def _create_theme_tab(self):
         """Вкладка тем оформления"""
-        theme_frame = qtu.Frame(self.notebook)
+        theme_frame = ttk.Frame(self.notebook)
         self.notebook.add(theme_frame, text="🎨 Темы")
         
-        main_frame = qt.Frame(theme_frame, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(theme_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # Заголовок
-        header_frame = qt.Frame(main_frame, bg='white')
-        header_frame.pack(fill=qt.X, pady=(0, 15))
+        header_frame = tk.Frame(main_frame, bg='white')
+        header_frame.pack(fill=tk.X, pady=(0, 15))
         
-        qt.Label(header_frame, text="🎨 Управление темами оформления", 
-                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(side=qt.LEFT)
+        tk.Label(header_frame, text="🎨 Управление темами оформления", 
+                font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(side=tk.LEFT)
         
-        qt.Label(header_frame, text="Обои меняются автоматически вместе с темой", 
-                font=('Segoe UI', 10), bg='white', fg='#27AE60').pack(side=qt.RIGHT)
+        tk.Label(header_frame, text="Обои меняются автоматически вместе с темой", 
+                font=('Segoe UI', 10), bg='white', fg='#27AE60').pack(side=tk.RIGHT)
         
         # Контейнер с темами
-        themes_container = qt.Frame(main_frame, bg='white')
-        themes_container.pack(fill=qt.BOTH, expand=True)
+        themes_container = tk.Frame(main_frame, bg='white')
+        themes_container.pack(fill=tk.BOTH, expand=True)
         
-        canvas = qt.Canvas(themes_container, bg='white', highlightthickness=0)
-        scrollbar = qt.Scrollbar(themes_container, orient=qt.VERTICAL, command=canvas.yview)
-        scrollable_frame = qt.Frame(canvas, bg='white')
+        canvas = tk.Canvas(themes_container, bg='white', highlightthickness=0)
+        scrollbar = tk.Scrollbar(themes_container, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='white')
         
         scrollable_frame.bind("<Configure>", 
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        canvas.pack(side=qt.LEFT, fill=qt.BOTH, expand=True)
-        scrollbar.pack(side=qt.RIGHT, fill=qt.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.theme_var = qt.StringVar(value=self.desktop.current_theme)
+        self.theme_var = tk.StringVar(value=self.desktop.current_theme)
         
         all_themes = self.desktop.get_all_themes()
         
         # Встроенные темы
-        qt.Label(scrollable_frame, text="📦 Встроенные темы:", 
+        tk.Label(scrollable_frame, text="📦 Встроенные темы:", 
                 font=('Segoe UI', 13, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(10, 10))
         
-        themes_grid = qt.Frame(scrollable_frame, bg='white')
-        themes_grid.pack(fill=qt.X, pady=5)
+        themes_grid = tk.Frame(scrollable_frame, bg='white')
+        themes_grid.pack(fill=tk.X, pady=5)
         
         builtin_themes = ["Базовая", "Техно", "Эко", "Космо"]
         
@@ -10990,21 +9638,21 @@ class SettingsWindow:
         # Пользовательские темы
         user_themes = [name for name in all_themes if name not in builtin_themes]
         if user_themes:
-            qt.Label(scrollable_frame, text="👤 Пользовательские темы:", 
+            tk.Label(scrollable_frame, text="👤 Пользовательские темы:", 
                     font=('Segoe UI', 13, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(20, 10))
             
-            user_grid = qt.Frame(scrollable_frame, bg='white')
-            user_grid.pack(fill=qt.X, pady=5)
+            user_grid = tk.Frame(scrollable_frame, bg='white')
+            user_grid.pack(fill=tk.X, pady=5)
             
             for i, theme_name in enumerate(user_themes):
                 theme = all_themes[theme_name]
                 self._create_theme_card(user_grid, i, theme_name, theme, is_user=True)
         
         # Кнопка создания темы
-        create_frame = qt.Frame(main_frame, bg='white')
-        create_frame.pack(fill=qt.X, pady=10)
+        create_frame = tk.Frame(main_frame, bg='white')
+        create_frame.pack(fill=tk.X, pady=10)
         
-        qt.Button(create_frame, text="➕ Создать свою тему", bg='#27AE60', fg='white',
+        tk.Button(create_frame, text="➕ Создать свою тему", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
                  cursor='hand2', command=self._show_create_theme_dialog).pack()
     
@@ -11013,13 +9661,13 @@ class SettingsWindow:
         row = index // 3
         col = index % 3
         
-        card = qt.Frame(parent, bg='#F0F3F4', relief=qt.RAISED, bd=1)
+        card = tk.Frame(parent, bg='#F0F3F4', relief=tk.RAISED, bd=1)
         card.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
         card.configure(width=250, height=200)
         card.grid_propagate(False)
         
         # Превью темы
-        preview = qt.Canvas(card, bg=theme['bg'], width=230, height=120, 
+        preview = tk.Canvas(card, bg=theme['bg'], width=230, height=120, 
                             highlightthickness=1, highlightcolor='#BDC3C7')
         preview.pack(pady=(10, 5))
         preview.pack_propagate(False)
@@ -11036,7 +9684,7 @@ class SettingsWindow:
             try:
                 img = Image.open(wallpaper_path)
                 img.thumbnail((230, 120), Image.Resampling.LANCZOS)
-                photo = QtPhotoImage(img)
+                photo = ImageTk.PhotoImage(img)
                 preview.create_image(115, 60, image=photo, anchor='center')
                 preview.image_ref = photo
             except Exception:
@@ -11059,7 +9707,7 @@ class SettingsWindow:
                             font=('Segoe UI', 8), fill=theme['fg'])
         
         # Радиокнопка выбора темы
-        rb = qt.Radiobutton(card, text=theme_name, variable=self.theme_var, 
+        rb = tk.Radiobutton(card, text=theme_name, variable=self.theme_var, 
                            value=theme_name, bg='#F0F3F4', fg='#2C3E50', 
                            font=('Segoe UI', 10, 'bold'), activebackground='#F0F3F4',
                            command=lambda t=theme_name: self._apply_theme_with_wallpaper(t))
@@ -11067,7 +9715,7 @@ class SettingsWindow:
         
         # Кнопка предпросмотра обоев
         if wallpaper_path and os.path.exists(wallpaper_path):
-            preview_btn = qt.Button(card, text="🖼 Показать обои", bg='#3498DB', fg='white',
+            preview_btn = tk.Button(card, text="🖼 Показать обои", bg='#3498DB', fg='white',
                                    font=('Segoe UI', 8), bd=0, padx=10, pady=2,
                                    cursor='hand2',
                                    command=lambda p=wallpaper_path: self._show_wallpaper_preview(p))
@@ -11075,7 +9723,7 @@ class SettingsWindow:
         
         # Кнопка удаления для пользовательских тем
         if is_user:
-            del_btn = qt.Button(card, text="🗑 Удалить тему", bg='#E74C3C', fg='white',
+            del_btn = tk.Button(card, text="🗑 Удалить тему", bg='#E74C3C', fg='white',
                                font=('Segoe UI', 8), bd=0, padx=10, pady=2,
                                cursor='hand2',
                                command=lambda t=theme_name: self._delete_user_theme(t))
@@ -11177,7 +9825,7 @@ class SettingsWindow:
             return
         
         try:
-            preview_window = qt.Toplevel(self.window)
+            preview_window = tk.Toplevel(self.window)
             preview_window.title("🖼 Предпросмотр обоев")
             preview_window.geometry("800x600")
             preview_window.transient(self.window)
@@ -11189,21 +9837,21 @@ class SettingsWindow:
             
             img = Image.open(wallpaper_path)
             img.thumbnail((750, 500), Image.Resampling.LANCZOS)
-            photo = QtPhotoImage(img)
+            photo = ImageTk.PhotoImage(img)
             
-            label = qt.Label(preview_window, image=photo, bg='#2C3E50')
+            label = tk.Label(preview_window, image=photo, bg='#2C3E50')
             label.image = photo
             label.pack(expand=True, padx=20, pady=20)
             
-            info_frame = qt.Frame(preview_window, bg='#2C3E50')
-            info_frame.pack(fill=qt.X, padx=20, pady=(0, 20))
+            info_frame = tk.Frame(preview_window, bg='#2C3E50')
+            info_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
             
             file_name = os.path.basename(wallpaper_path)
             file_size = os.path.getsize(wallpaper_path) / 1024
-            qt.Label(info_frame, text=f"📄 {file_name}  •  {file_size:.1f} KB", 
+            tk.Label(info_frame, text=f"📄 {file_name}  •  {file_size:.1f} KB", 
                     font=('Segoe UI', 10), bg='#2C3E50', fg='#BDC3C7').pack()
             
-            qt.Button(info_frame, text="Закрыть", bg='#E74C3C', fg='white',
+            tk.Button(info_frame, text="Закрыть", bg='#E74C3C', fg='white',
                      font=('Segoe UI', 10), bd=0, padx=20, pady=5,
                      command=preview_window.destroy).pack(pady=10)
             
@@ -11231,7 +9879,7 @@ class SettingsWindow:
     
     def _show_create_theme_dialog(self):
         """Диалог создания пользовательской темы с обоями"""
-        dialog = qt.Toplevel(self.window)
+        dialog = tk.Toplevel(self.window)
         dialog.title("➕ Создание темы")
         dialog.geometry("720x650")
         dialog.transient(self.window)
@@ -11243,57 +9891,57 @@ class SettingsWindow:
         y = (dialog.winfo_screenheight() - 650) // 2
         dialog.geometry(f'+{x}+{y}')
         
-        header = qt.Frame(dialog, bg='#3498DB', height=50)
-        header.pack(fill=qt.X)
-        qt.Label(header, text="➕ Создание пользовательской темы с обоями", 
+        header = tk.Frame(dialog, bg='#3498DB', height=50)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="➕ Создание пользовательской темы с обоями", 
                 bg='#3498DB', fg='white', font=('Segoe UI', 14, 'bold')).pack(pady=12)
         
-        main_container = qt.Frame(dialog, bg='#F5F7FA')
-        main_container.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_container = tk.Frame(dialog, bg='#F5F7FA')
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        canvas = qt.Canvas(main_container, bg='#F5F7FA', highlightthickness=0)
-        scrollbar = qt.Scrollbar(main_container, orient=qt.VERTICAL, command=canvas.yview)
-        scrollable_frame = qt.Frame(canvas, bg='#F5F7FA')
+        canvas = tk.Canvas(main_container, bg='#F5F7FA', highlightthickness=0)
+        scrollbar = tk.Scrollbar(main_container, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='#F5F7FA')
         
         scrollable_frame.bind("<Configure>", 
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        canvas.pack(side=qt.LEFT, fill=qt.BOTH, expand=True)
-        scrollbar.pack(side=qt.RIGHT, fill=qt.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         fields = {}
         
         def add_color_field(label, default_value):
-            frame = qt.Frame(scrollable_frame, bg='#F5F7FA')
-            frame.pack(fill=qt.X, pady=5)
+            frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+            frame.pack(fill=tk.X, pady=5)
             
-            qt.Label(frame, text=label, font=('Segoe UI', 10),
-                    bg='#F5F7FA', fg='#2C3E50', width=22, anchor='w').pack(side=qt.LEFT)
+            tk.Label(frame, text=label, font=('Segoe UI', 10),
+                    bg='#F5F7FA', fg='#2C3E50', width=22, anchor='w').pack(side=tk.LEFT)
             
-            entry = qt.Entry(frame, font=('Segoe UI', 10), bg='white', fg='#2C3E50',
+            entry = tk.Entry(frame, font=('Segoe UI', 10), bg='white', fg='#2C3E50',
                             bd=0, highlightthickness=2, highlightcolor='#3498DB',
                             highlightbackground='#BDC3C7', width=12)
-            entry.pack(side=qt.LEFT, padx=5)
+            entry.pack(side=tk.LEFT, padx=5)
             entry.insert(0, default_value)
             
             def pick_color():
-                colorchooser = qt.colorchooser
+                from tkinter import colorchooser
                 color = colorchooser.askcolor(title=f"Выберите цвет для {label}")[1]
                 if color:
-                    entry.delete(0, qt.END)
+                    entry.delete(0, tk.END)
                     entry.insert(0, color)
                     update_preview()
             
-            qt.Button(frame, text="🎨", bg='#F5F7FA', fg='#2C3E50',
+            tk.Button(frame, text="🎨", bg='#F5F7FA', fg='#2C3E50',
                      font=('Segoe UI', 10), bd=0, cursor='hand2',
-                     command=pick_color).pack(side=qt.LEFT, padx=2)
+                     command=pick_color).pack(side=tk.LEFT, padx=2)
             
             return entry
         
         # Основные цвета
-        qt.Label(scrollable_frame, text="🎨 Основные цвета темы:", 
+        tk.Label(scrollable_frame, text="🎨 Основные цвета темы:", 
                 font=('Segoe UI', 12, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(10, 5))
         
         fields['bg'] = add_color_field("Фон рабочего стола:", "#2980B9")
@@ -11306,61 +9954,61 @@ class SettingsWindow:
         fields['widget_fg'] = add_color_field("Цвет виджетов:", "#FFFFFF")
         
         # Обои
-        qt.Label(scrollable_frame, text="🖼 Обои для темы:", 
+        tk.Label(scrollable_frame, text="🖼 Обои для темы:", 
                 font=('Segoe UI', 12, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(15, 5))
         
-        wallpaper_frame = qt.Frame(scrollable_frame, bg='#F5F7FA')
-        wallpaper_frame.pack(fill=qt.X, pady=5)
+        wallpaper_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        wallpaper_frame.pack(fill=tk.X, pady=5)
         
-        wallpaper_path_var = qt.StringVar()
-        wallpaper_entry = qt.Entry(wallpaper_frame, textvariable=wallpaper_path_var,
+        wallpaper_path_var = tk.StringVar()
+        wallpaper_entry = tk.Entry(wallpaper_frame, textvariable=wallpaper_path_var,
                                   font=('Segoe UI', 10), bg='white', fg='#7F8C8D',
                                   bd=0, highlightthickness=2, highlightcolor='#3498DB',
                                   highlightbackground='#BDC3C7', state='readonly')
-        wallpaper_entry.pack(side=qt.LEFT, fill=qt.X, expand=True, ipady=5)
+        wallpaper_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
         wallpaper_entry.insert(0, "Файл не выбран (будет градиент)")
         
         def browse_wallpaper():
-            filedialog = qt.filedialog
+            from tkinter import filedialog
             file_path = filedialog.askopenfilename(
                 title="Выберите обои для темы",
                 filetypes=[("Изображения", "*.png *.jpg *.jpeg *.gif *.bmp"), ("Все файлы", "*.*")]
             )
             if file_path:
                 wallpaper_entry.config(state='normal')
-                wallpaper_entry.delete(0, qt.END)
+                wallpaper_entry.delete(0, tk.END)
                 wallpaper_entry.insert(0, file_path)
                 wallpaper_entry.config(state='readonly')
                 fields['wallpaper_path'] = file_path
                 update_preview()
         
-        qt.Button(wallpaper_frame, text="📂 Обзор", bg='#3498DB', fg='white',
+        tk.Button(wallpaper_frame, text="📂 Обзор", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=15, pady=5,
-                 cursor='hand2', command=browse_wallpaper).pack(side=qt.RIGHT, padx=(5, 0))
+                 cursor='hand2', command=browse_wallpaper).pack(side=tk.RIGHT, padx=(5, 0))
         
-        qt.Label(scrollable_frame, text="Название темы:", 
+        tk.Label(scrollable_frame, text="Название темы:", 
                 font=('Segoe UI', 12, 'bold'), bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(15, 5))
         
-        name_frame = qt.Frame(scrollable_frame, bg='#F5F7FA')
-        name_frame.pack(fill=qt.X, pady=5)
+        name_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        name_frame.pack(fill=tk.X, pady=5)
         
-        name_entry = qt.Entry(name_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
+        name_entry = tk.Entry(name_frame, font=('Segoe UI', 12), bg='white', fg='#2C3E50',
                              bd=0, highlightthickness=2, highlightcolor='#3498DB',
                              highlightbackground='#BDC3C7')
-        name_entry.pack(fill=qt.X, ipady=8)
+        name_entry.pack(fill=tk.X, ipady=8)
         name_entry.insert(0, "Моя тема")
         fields['name'] = name_entry
         
         # Превью
-        preview_frame = qt.Frame(scrollable_frame, bg='#F5F7FA')
-        preview_frame.pack(fill=qt.X, pady=15)
+        preview_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        preview_frame.pack(fill=tk.X, pady=15)
         
-        qt.Label(preview_frame, text="🖼 Превью темы:", font=('Segoe UI', 12, 'bold'),
+        tk.Label(preview_frame, text="🖼 Превью темы:", font=('Segoe UI', 12, 'bold'),
                 bg='#F5F7FA', fg='#2C3E50').pack(anchor='w', pady=(0, 5))
         
-        preview_canvas = qt.Canvas(preview_frame, bg='#2980B9', width=660, height=100,
+        preview_canvas = tk.Canvas(preview_frame, bg='#2980B9', width=660, height=100,
                                    highlightthickness=2, highlightcolor='#3498DB')
-        preview_canvas.pack(fill=qt.X, pady=5)
+        preview_canvas.pack(fill=tk.X, pady=5)
         
         preview_text = preview_canvas.create_text(330, 30, text="Тема: Моя тема",
                                                    font=('Segoe UI', 14, 'bold'), fill='white')
@@ -11393,8 +10041,8 @@ class SettingsWindow:
         
         name_entry.bind('<KeyRelease>', lambda e: update_preview())
         
-        btn_frame = qt.Frame(scrollable_frame, bg='#F5F7FA')
-        btn_frame.pack(fill=qt.X, pady=15)
+        btn_frame = tk.Frame(scrollable_frame, bg='#F5F7FA')
+        btn_frame.pack(fill=tk.X, pady=15)
         
         def create_theme():
             name = name_entry.get().strip()
@@ -11433,13 +10081,13 @@ class SettingsWindow:
             else:
                 messagebox.showerror("Ошибка", msg, parent=dialog)
         
-        qt.Button(btn_frame, text="✅ Создать и применить тему", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="✅ Создать и применить тему", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=create_theme).pack(side=qt.RIGHT, padx=5)
+                 cursor='hand2', command=create_theme).pack(side=tk.RIGHT, padx=5)
         
-        qt.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
+        tk.Button(btn_frame, text="Отмена", bg='#95A5A6', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=dialog.destroy).pack(side=qt.RIGHT, padx=5)
+                 cursor='hand2', command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
         
         dialog.after(100, update_preview)
         name_entry.focus_set()
@@ -11448,32 +10096,32 @@ class SettingsWindow:
     
     def _create_sound_tab(self):
         """Вкладка настроек системных звуков"""
-        sound_frame = qtu.Frame(self.notebook)
+        sound_frame = ttk.Frame(self.notebook)
         self.notebook.add(sound_frame, text="🔊 Звук")
         
-        main_frame = qt.Frame(sound_frame, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(sound_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="🔊 Системные звуки BITOS", 
+        tk.Label(main_frame, text="🔊 Системные звуки BITOS", 
                 font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
-        system_frame = qt.Frame(main_frame, bg='#F0F3F4', relief=qt.RIDGE, bd=1)
-        system_frame.pack(fill=qt.X, pady=10)
+        system_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        system_frame.pack(fill=tk.X, pady=10)
         
-        qt.Label(system_frame, text="🔊 Системные звуки", 
+        tk.Label(system_frame, text="🔊 Системные звуки", 
                 font=('Segoe UI', 14, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
         
-        qt.Label(system_frame, text="Включить/выключить все системные звуки BITOS",
+        tk.Label(system_frame, text="Включить/выключить все системные звуки BITOS",
                 font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D').pack(anchor='w', padx=15, pady=(0, 5))
         
-        system_switch_frame = qt.Frame(system_frame, bg='#F0F3F4')
-        system_switch_frame.pack(fill=qt.X, padx=15, pady=10)
+        system_switch_frame = tk.Frame(system_frame, bg='#F0F3F4')
+        system_switch_frame.pack(fill=tk.X, padx=15, pady=10)
         
-        self.system_sound_var = qt.BooleanVar(value=self.bitos.sound_enabled if self.bitos else True)
+        self.system_sound_var = tk.BooleanVar(value=self.bitos.sound_enabled if self.bitos else True)
         
-        self.system_switch_canvas = qt.Canvas(system_switch_frame, width=60, height=30,
+        self.system_switch_canvas = tk.Canvas(system_switch_frame, width=60, height=30,
                                               bg='#F0F3F4', highlightthickness=0)
-        self.system_switch_canvas.pack(side=qt.LEFT)
+        self.system_switch_canvas.pack(side=tk.LEFT)
         
         self.system_switch_bg = self.system_switch_canvas.create_rectangle(
             5, 5, 55, 25,
@@ -11489,24 +10137,24 @@ class SettingsWindow:
             outline='#7F8C8D'
         )
         
-        self.system_switch_label = qt.Label(system_switch_frame,
+        self.system_switch_label = tk.Label(system_switch_frame,
                                             text="Включены" if self.system_sound_var.get() else "Выключены",
                                             font=('Segoe UI', 11, 'bold'),
                                             bg='#F0F3F4',
                                             fg='#27AE60' if self.system_sound_var.get() else '#7F8C8D')
-        self.system_switch_label.pack(side=qt.LEFT, padx=(10, 0))
+        self.system_switch_label.pack(side=tk.LEFT, padx=(10, 0))
         
         self.system_switch_canvas.bind('<Button-1>', self._toggle_system_sound)
         self.system_switch_canvas.bind('<Enter>', lambda e: self.system_switch_canvas.config(cursor='hand2'))
         
-        sounds_list_frame = qt.Frame(system_frame, bg='#F0F3F4')
-        sounds_list_frame.pack(fill=qt.X, padx=15, pady=(0, 10))
+        sounds_list_frame = tk.Frame(system_frame, bg='#F0F3F4')
+        sounds_list_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
         
-        qt.Label(sounds_list_frame, text="Доступные системные звуки:", 
+        tk.Label(sounds_list_frame, text="Доступные системные звуки:", 
                 font=('Segoe UI', 9, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', pady=(5, 5))
         
-        sounds_grid = qt.Frame(sounds_list_frame, bg='#F0F3F4')
-        sounds_grid.pack(fill=qt.X)
+        sounds_grid = tk.Frame(sounds_list_frame, bg='#F0F3F4')
+        sounds_grid.pack(fill=tk.X)
         
         sound_names = [
             ("🚀", "startup", "Запуск системы"),
@@ -11524,7 +10172,7 @@ class SettingsWindow:
         for i, (icon, name, label) in enumerate(sound_names):
             row = i // 5
             col = i % 5
-            btn = qt.Button(sounds_grid, text=f"{icon} {label}", bg='#34495E', fg='white',
+            btn = tk.Button(sounds_grid, text=f"{icon} {label}", bg='#34495E', fg='white',
                            font=('Segoe UI', 8), bd=0, padx=8, pady=3,
                            cursor='hand2',
                            command=lambda n=name: self._test_system_sound(n))
@@ -11532,12 +10180,12 @@ class SettingsWindow:
             btn.bind('<Enter>', lambda e, b=btn: b.config(bg='#3498DB'))
             btn.bind('<Leave>', lambda e, b=btn: b.config(bg='#34495E'))
         
-        save_frame = qt.Frame(main_frame, bg='white')
-        save_frame.pack(fill=qt.X, pady=20)
+        save_frame = tk.Frame(main_frame, bg='white')
+        save_frame.pack(fill=tk.X, pady=20)
         
-        qt.Button(save_frame, text="✅ Применить настройки", bg='#27AE60', fg='white',
+        tk.Button(save_frame, text="✅ Применить настройки", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=self._save_sound_settings).pack(side=qt.RIGHT, padx=5)
+                 cursor='hand2', command=self._save_sound_settings).pack(side=tk.RIGHT, padx=5)
     
     def _toggle_system_sound(self, event=None):
         """Переключение системных звуков"""
@@ -11592,52 +10240,52 @@ class SettingsWindow:
     
     def _create_security_tab(self):
         """Вкладка безопасности"""
-        security_frame = qtu.Frame(self.notebook)
+        security_frame = ttk.Frame(self.notebook)
         self.notebook.add(security_frame, text="🔒 Безопасность")
         
-        main_frame = qt.Frame(security_frame, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(security_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="🔐 Изменение PIN-кода входа", 
+        tk.Label(main_frame, text="🔐 Изменение PIN-кода входа", 
                 font=('Segoe UI', 14, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
-        info_frame = qt.Frame(main_frame, bg='#F0F3F4', relief=qt.RIDGE, bd=1)
-        info_frame.pack(fill=qt.X, pady=(0, 20))
-        qt.Label(info_frame, text="💡 PIN-код используется для входа в систему. Должен содержать 4-8 цифр.",
+        info_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        info_frame.pack(fill=tk.X, pady=(0, 20))
+        tk.Label(info_frame, text="💡 PIN-код используется для входа в систему. Должен содержать 4-8 цифр.",
                 font=('Segoe UI', 10), bg='#F0F3F4', fg='#7F8C8D').pack(padx=10, pady=10)
         
-        fields_frame = qt.Frame(main_frame, bg='white')
-        fields_frame.pack(fill=qt.X, pady=10)
+        fields_frame = tk.Frame(main_frame, bg='white')
+        fields_frame.pack(fill=tk.X, pady=10)
         
         labels = ["Текущий PIN-код:", "Новый PIN-код (4-8 цифр):", "Подтвердите новый PIN-код:"]
         self.pin_entries = []
         
         for i, label in enumerate(labels):
-            qt.Label(fields_frame, text=label, font=('Segoe UI', 11), 
+            tk.Label(fields_frame, text=label, font=('Segoe UI', 11), 
                     bg='white', fg='#2C3E50').pack(anchor='w', pady=(10, 5))
             
-            entry = qt.Entry(fields_frame, font=('Segoe UI', 12), 
+            entry = tk.Entry(fields_frame, font=('Segoe UI', 12), 
                            bg='#F5F7FA', fg='#2C3E50',
                            bd=0, highlightthickness=2, 
                            highlightcolor='#3498DB', highlightbackground='#BDC3C7',
                            show='•' if i > 0 else '')
-            entry.pack(fill=qt.X, ipady=8, pady=(0, 5))
+            entry.pack(fill=tk.X, ipady=8, pady=(0, 5))
             self.pin_entries.append(entry)
         
-        self.pin_status = qt.Label(main_frame, text="", bg='white', fg='#E74C3C', 
+        self.pin_status = tk.Label(main_frame, text="", bg='white', fg='#E74C3C', 
                                   font=('Segoe UI', 10))
         self.pin_status.pack(anchor='w', pady=5)
         
-        btn_frame = qt.Frame(main_frame, bg='white')
-        btn_frame.pack(fill=qt.X, pady=20)
+        btn_frame = tk.Frame(main_frame, bg='white')
+        btn_frame.pack(fill=tk.X, pady=20)
         
-        qt.Button(btn_frame, text="🔑 Изменить PIN-код", bg='#3498DB', fg='white',
+        tk.Button(btn_frame, text="🔑 Изменить PIN-код", bg='#3498DB', fg='white',
                  font=('Segoe UI', 11, 'bold'), bd=0, padx=30, pady=10,
-                 cursor='hand2', command=self._change_pin).pack(side=qt.LEFT, padx=5)
+                 cursor='hand2', command=self._change_pin).pack(side=tk.LEFT, padx=5)
         
-        qt.Button(btn_frame, text="🔄 Сбросить PIN (1234)", bg='#E67E22', fg='white',
+        tk.Button(btn_frame, text="🔄 Сбросить PIN (1234)", bg='#E67E22', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=10,
-                 cursor='hand2', command=self._reset_pin).pack(side=qt.LEFT, padx=5)
+                 cursor='hand2', command=self._reset_pin).pack(side=tk.LEFT, padx=5)
     
     def _change_pin(self):
         """Изменение PIN-кода"""
@@ -11671,7 +10319,7 @@ class SettingsWindow:
         self.pin_status.config(text="✅ PIN-код успешно изменён!", fg='#27AE60')
         
         for entry in self.pin_entries:
-            entry.delete(0, qt.END)
+            entry.delete(0, tk.END)
         
         if hasattr(self.bitos, 'security'):
             self.bitos.security.log_pin_change(self.desktop.username)
@@ -11686,19 +10334,19 @@ class SettingsWindow:
             
             self.pin_status.config(text="✅ PIN-код сброшен до 1234", fg='#27AE60')
             for entry in self.pin_entries:
-                entry.delete(0, qt.END)
+                entry.delete(0, tk.END)
 
     # ==================== ВКЛАДКА 4: АККАУНТ (УПРОЩЁННАЯ) ====================
     
     def _create_account_tab(self):
         """Вкладка аккаунта"""
-        account_frame = qtu.Frame(self.notebook)
+        account_frame = ttk.Frame(self.notebook)
         self.notebook.add(account_frame, text="👤 Аккаунт")
         
-        main_frame = qt.Frame(account_frame, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(account_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="👤 Информация об аккаунте", 
+        tk.Label(main_frame, text="👤 Информация об аккаунте", 
                 font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
         info_data = [
@@ -11709,24 +10357,24 @@ class SettingsWindow:
         ]
         
         for label, value in info_data:
-            frame = qt.Frame(main_frame, bg='white')
-            frame.pack(fill=qt.X, pady=4)
+            frame = tk.Frame(main_frame, bg='white')
+            frame.pack(fill=tk.X, pady=4)
             
-            qt.Label(frame, text=label, font=('Segoe UI', 10, 'bold'), 
-                    bg='white', fg='#2C3E50', width=22, anchor='w').pack(side=qt.LEFT)
-            qt.Label(frame, text=value, font=('Segoe UI', 10), 
-                    bg='white', fg='#7F8C8D', anchor='w').pack(side=qt.LEFT, padx=(10, 0))
+            tk.Label(frame, text=label, font=('Segoe UI', 10, 'bold'), 
+                    bg='white', fg='#2C3E50', width=22, anchor='w').pack(side=tk.LEFT)
+            tk.Label(frame, text=value, font=('Segoe UI', 10), 
+                    bg='white', fg='#7F8C8D', anchor='w').pack(side=tk.LEFT, padx=(10, 0))
         
-        btn_frame = qt.Frame(main_frame, bg='white')
-        btn_frame.pack(fill=qt.X, pady=20)
+        btn_frame = tk.Frame(main_frame, bg='white')
+        btn_frame.pack(fill=tk.X, pady=20)
         
-        qt.Button(btn_frame, text="🔑 Сменить пароль", bg='#3498DB', fg='white',
+        tk.Button(btn_frame, text="🔑 Сменить пароль", bg='#3498DB', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._show_coming_soon).pack(side=qt.LEFT, padx=5)
+                 cursor='hand2', command=self._show_coming_soon).pack(side=tk.LEFT, padx=5)
         
-        qt.Button(btn_frame, text="🌐 Открыть Global ID", bg='#27AE60', fg='white',
+        tk.Button(btn_frame, text="🌐 Открыть Global ID", bg='#27AE60', fg='white',
                  font=('Segoe UI', 11), bd=0, padx=20, pady=8,
-                 cursor='hand2', command=self._open_global_id).pack(side=qt.LEFT, padx=5)
+                 cursor='hand2', command=self._open_global_id).pack(side=tk.LEFT, padx=5)
     
     def _open_global_id(self):
         """Открыть сайт Global ID"""
@@ -11737,44 +10385,44 @@ class SettingsWindow:
     
     def _create_updates_tab(self):
         """Вкладка обновлений - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ с системой автообновления"""
-        updates_frame = qtu.Frame(self.notebook)
+        updates_frame = ttk.Frame(self.notebook)
         self.notebook.add(updates_frame, text="📦 Обновления")
         
-        main_frame = qt.Frame(updates_frame, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(updates_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # ===== ЗАГОЛОВОК =====
-        header_frame = qt.Frame(main_frame, bg='white')
-        header_frame.pack(fill=qt.X, pady=(0, 10))
+        header_frame = tk.Frame(main_frame, bg='white')
+        header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        qt.Label(header_frame, text="📦 Система обновлений BITOS", 
-                font=('Segoe UI', 18, 'bold'), bg='white', fg='#2C3E50').pack(side=qt.LEFT)
+        tk.Label(header_frame, text="📦 Система обновлений BITOS", 
+                font=('Segoe UI', 18, 'bold'), bg='white', fg='#2C3E50').pack(side=tk.LEFT)
         
-        version_badge = qt.Label(header_frame, text=f"v{self.bitos.version}", 
+        version_badge = tk.Label(header_frame, text=f"v{self.bitos.version}", 
                                  font=('Segoe UI', 12, 'bold'), bg='#3498DB', fg='white',
                                  padx=12, pady=4)
-        version_badge.pack(side=qt.LEFT, padx=(15, 0))
+        version_badge.pack(side=tk.LEFT, padx=(15, 0))
         
         # ===== СТАТУСНАЯ ПАНЕЛЬ =====
-        status_frame = qt.Frame(main_frame, bg='#F0F3F4', relief=qt.RIDGE, bd=1)
-        status_frame.pack(fill=qt.X, pady=(0, 15))
+        status_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        status_frame.pack(fill=tk.X, pady=(0, 15))
         
         # Текущая версия
-        version_frame = qt.Frame(status_frame, bg='#F0F3F4')
-        version_frame.pack(fill=qt.X, padx=15, pady=8)
+        version_frame = tk.Frame(status_frame, bg='#F0F3F4')
+        version_frame.pack(fill=tk.X, padx=15, pady=8)
         
-        qt.Label(version_frame, text="📌 Текущая версия:", 
-                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(side=qt.LEFT)
+        tk.Label(version_frame, text="📌 Текущая версия:", 
+                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(side=tk.LEFT)
         
-        qt.Label(version_frame, text=f"{self.bitos.version} ({self.bitos.build})", 
-                font=('Segoe UI', 11, 'bold'), bg='#F0F3F4', fg='#3498DB').pack(side=qt.LEFT, padx=(10, 0))
+        tk.Label(version_frame, text=f"{self.bitos.version} ({self.bitos.build})", 
+                font=('Segoe UI', 11, 'bold'), bg='#F0F3F4', fg='#3498DB').pack(side=tk.LEFT, padx=(10, 0))
         
         # Статус обновления
-        status_line = qt.Frame(status_frame, bg='#F0F3F4')
-        status_line.pack(fill=qt.X, padx=15, pady=(0, 8))
+        status_line = tk.Frame(status_frame, bg='#F0F3F4')
+        status_line.pack(fill=tk.X, padx=15, pady=(0, 8))
         
-        qt.Label(status_line, text="🔍 Статус:", 
-                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(side=qt.LEFT)
+        tk.Label(status_line, text="🔍 Статус:", 
+                font=('Segoe UI', 11), bg='#F0F3F4', fg='#2C3E50').pack(side=tk.LEFT)
         
         # Проверяем сохранённый статус
         saved_status = self.update_manager.status
@@ -11788,91 +10436,91 @@ class SettingsWindow:
             status_text = "⏳ Ожидание проверки"
             status_color = '#7F8C8D'
         
-        self.update_status_label = qt.Label(status_line, text=status_text, 
+        self.update_status_label = tk.Label(status_line, text=status_text, 
                                            font=('Segoe UI', 11, 'bold'),
                                            bg='#F0F3F4', fg=status_color)
-        self.update_status_label.pack(side=qt.LEFT, padx=(10, 0))
+        self.update_status_label.pack(side=tk.LEFT, padx=(10, 0))
         
         # Время последней проверки
         if saved_status.get('checked_at'):
             try:
                 check_time = datetime.fromisoformat(saved_status['checked_at'])
                 time_str = check_time.strftime('%H:%M:%S %d.%m.%Y')
-                qt.Label(status_line, text=f"(Проверено: {time_str})", 
-                        font=('Segoe UI', 9), bg='#F0F3F4', fg='#95A5A6').pack(side=qt.LEFT, padx=(15, 0))
+                tk.Label(status_line, text=f"(Проверено: {time_str})", 
+                        font=('Segoe UI', 9), bg='#F0F3F4', fg='#95A5A6').pack(side=tk.LEFT, padx=(15, 0))
             except:
                 pass
         
         # ===== КНОПКИ УПРАВЛЕНИЯ =====
-        btn_frame = qt.Frame(main_frame, bg='white')
-        btn_frame.pack(fill=qt.X, pady=5)
+        btn_frame = tk.Frame(main_frame, bg='white')
+        btn_frame.pack(fill=tk.X, pady=5)
         
         # Кнопка проверки
-        self.check_btn = qt.Button(btn_frame, text="🔍 Проверить обновления", 
+        self.check_btn = tk.Button(btn_frame, text="🔍 Проверить обновления", 
                                   bg='#3498DB', fg='white',
                                   font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
                                   cursor='hand2', command=self._check_updates)
-        self.check_btn.pack(side=qt.LEFT, padx=5)
+        self.check_btn.pack(side=tk.LEFT, padx=5)
         
         # Кнопка скачивания (изначально неактивна)
-        self.download_btn = qt.Button(btn_frame, text="⬇️ Скачать обновление", 
+        self.download_btn = tk.Button(btn_frame, text="⬇️ Скачать обновление", 
                                      bg='#95A5A6', fg='white',
                                      font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
                                      cursor='hand2', state='disabled',
                                      command=self._download_update)
-        self.download_btn.pack(side=qt.LEFT, padx=5)
+        self.download_btn.pack(side=tk.LEFT, padx=5)
         
         # Кнопка установки (изначально неактивна)
-        self.install_btn = qt.Button(btn_frame, text="🔄 Установить и перезагрузить", 
+        self.install_btn = tk.Button(btn_frame, text="🔄 Установить и перезагрузить", 
                                     bg='#95A5A6', fg='white',
                                     font=('Segoe UI', 10, 'bold'), bd=0, padx=20, pady=10,
                                     cursor='hand2', state='disabled',
                                     command=self._install_update)
-        self.install_btn.pack(side=qt.LEFT, padx=5)
+        self.install_btn.pack(side=tk.LEFT, padx=5)
         
         # ===== ПРОГРЕСС-БАР =====
-        progress_frame = qt.Frame(main_frame, bg='white')
-        progress_frame.pack(fill=qt.X, pady=(10, 5))
+        progress_frame = tk.Frame(main_frame, bg='white')
+        progress_frame.pack(fill=tk.X, pady=(10, 5))
         
-        self.update_progress_bar = qtu.Progressbar(progress_frame, mode='determinate', length=700)
-        self.update_progress_bar.pack(fill=qt.X)
+        self.update_progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=700)
+        self.update_progress_bar.pack(fill=tk.X)
         
-        self.update_progress_label = qt.Label(progress_frame, text="", 
+        self.update_progress_label = tk.Label(progress_frame, text="", 
                                              bg='white', fg='#7F8C8D', font=('Segoe UI', 9))
         self.update_progress_label.pack(anchor='w', pady=(5, 0))
         
         # ===== ИНФОРМАЦИЯ О РЕЛИЗЕ =====
-        info_frame = qt.Frame(main_frame, bg='white', relief=qt.SUNKEN, bd=1)
-        info_frame.pack(fill=qt.BOTH, expand=True, pady=(10, 5))
+        info_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=1)
+        info_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 5))
         
-        qt.Label(info_frame, text="📋 Информация о версии:", 
+        tk.Label(info_frame, text="📋 Информация о версии:", 
                 font=('Segoe UI', 10, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', padx=10, pady=5)
         
         self.update_info_text = scrolledtext.ScrolledText(info_frame, font=('Consolas', 10), 
                                                           bg='#F5F7FA', fg='#2C3E50',
-                                                          height=4, wrap=qt.WORD)
-        self.update_info_text.pack(fill=qt.BOTH, expand=True, padx=10, pady=(0, 10))
+                                                          height=4, wrap=tk.WORD)
+        self.update_info_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         self.update_info_text.insert('1.0', "🔍 Нажмите 'Проверить обновления' для получения информации\n")
         self.update_info_text.config(state='disabled')
         
         # ===== ЛОГ ОБНОВЛЕНИЙ =====
-        log_frame = qt.Frame(main_frame, bg='white', relief=qt.SUNKEN, bd=1)
-        log_frame.pack(fill=qt.BOTH, expand=True, pady=(5, 0))
+        log_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=1)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
         
-        log_header = qt.Frame(log_frame, bg='white')
-        log_header.pack(fill=qt.X, padx=10, pady=5)
+        log_header = tk.Frame(log_frame, bg='white')
+        log_header.pack(fill=tk.X, padx=10, pady=5)
         
-        qt.Label(log_header, text="📝 Лог обновлений:", 
-                font=('Segoe UI', 10, 'bold'), bg='white', fg='#2C3E50').pack(side=qt.LEFT)
+        tk.Label(log_header, text="📝 Лог обновлений:", 
+                font=('Segoe UI', 10, 'bold'), bg='white', fg='#2C3E50').pack(side=tk.LEFT)
         
-        qt.Button(log_header, text="Очистить", bg='#E74C3C', fg='white',
+        tk.Button(log_header, text="Очистить", bg='#E74C3C', fg='white',
                  font=('Segoe UI', 8), bd=0, padx=10, pady=2,
-                 cursor='hand2', command=self._clear_update_log).pack(side=qt.RIGHT)
+                 cursor='hand2', command=self._clear_update_log).pack(side=tk.RIGHT)
         
         self.update_log_text = scrolledtext.ScrolledText(log_frame, font=('Consolas', 9), 
                                                          bg='#1E1E1E', fg='#00FF00',
-                                                         height=5, wrap=qt.WORD)
-        self.update_log_text.pack(fill=qt.BOTH, expand=True, padx=10, pady=(0, 10))
+                                                         height=5, wrap=tk.WORD)
+        self.update_log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         self.update_log_text.insert('1.0', "[INFO] Система обновлений готова\n")
         self.update_log_text.insert('end', "[INFO] Для проверки нажмите 'Проверить обновления'\n")
         self.update_log_text.config(state='disabled')
@@ -11945,8 +10593,9 @@ class SettingsWindow:
             self.window.after(0, lambda: self._check_callback(success, version, download_url, release_notes, error))
         
         # Запускаем проверку в потоке
-        _start_managed_thread(self.bitos, self.update_manager.check_for_updates,
-                              args=(callback,), name="UpdateCheckUI")
+        thread = threading.Thread(target=self.update_manager.check_for_updates, args=(callback,))
+        thread.daemon = True
+        thread.start()
     
     def _check_callback(self, success, version, download_url, release_notes, error):
         """Callback после проверки обновлений"""
@@ -11972,7 +10621,7 @@ class SettingsWindow:
             
             # Показываем информацию о релизе
             self.update_info_text.config(state='normal')
-            self.update_info_text.delete('1.0', qt.END)
+            self.update_info_text.delete('1.0', tk.END)
             
             info = f"""
 ╔═══════════════════════════════════════════════════════════════
@@ -12006,7 +10655,7 @@ class SettingsWindow:
             self.update_status_label.config(text="✅ Установлена последняя версия", fg='#27AE60')
             
             self.update_info_text.config(state='normal')
-            self.update_info_text.delete('1.0', qt.END)
+            self.update_info_text.delete('1.0', tk.END)
             self.update_info_text.insert('1.0', "✅ Установлена последняя версия BITOS\n\n"
                                                f"Текущая версия: {self.bitos.version}\n"
                                                f"Дата проверки: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
@@ -12016,34 +10665,79 @@ class SettingsWindow:
             self.install_btn.config(state='disabled', bg='#95A5A6')
     
     def _download_update(self):
-        """Скачивание обновления через единый проверяющий менеджер."""
+        """Скачивание обновления"""
         if not self.update_manager.update_available:
             messagebox.showinfo("Информация", "Нет доступных обновлений для скачивания")
             return
+        
         if self.update_manager.is_downloading:
             messagebox.showinfo("Информация", "Скачивание уже выполняется")
             return
-        if not messagebox.askyesno("Скачивание обновления",
-            f"Начать скачивание обновления v{self.update_manager.latest_version}?\n\n"
-            "Архив будет проверен на целостность до появления кнопки установки."):
+        
+        # Спрашиваем пользователя
+        if not messagebox.askyesno("Скачивание обновления", 
+                                  f"Начать скачивание обновления v{self.update_manager.latest_version}?\n\n"
+                                  f"Размер: ~10-50 МБ\n"
+                                  f"Время: зависит от скорости интернета"):
             return
+        
         self._log_update(f"📥 Начинаем скачивание v{self.update_manager.latest_version}...", "DOWNLOAD")
         self.download_btn.config(state='disabled', text="⏳ Скачивание...")
         self.check_btn.config(state='disabled')
         self.update_progress_bar['value'] = 0
         self.update_progress_label.config(text="Подготовка к скачиванию...")
-
+        
         def progress_callback(percent, status_text):
             self.window.after(0, lambda: self._download_progress(percent, status_text))
+        
         def complete_callback(success, file_path, error):
             self.window.after(0, lambda: self._download_complete(success, file_path, error))
-        if not self.update_manager.download_update(progress_callback, complete_callback):
-            self.download_btn.config(state='normal', text="⬇️ Скачать обновление")
-            self.check_btn.config(state='normal')
+        
+        # Запускаем скачивание в потоке
+        thread = threading.Thread(target=self._download_thread, 
+                                 args=(progress_callback, complete_callback))
+        thread.daemon = True
+        thread.start()
     
     def _download_thread(self, progress_callback, complete_callback):
-        """Совместимый вход для старых вызовов; использует общий безопасный загрузчик."""
-        return self.update_manager.download_update(progress_callback, complete_callback)
+        """Поток для скачивания"""
+        try:
+            import requests
+            
+            # Подготавливаем URL
+            url = self.update_manager.download_url
+            
+            # Создаём имя файла
+            filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+            filepath = os.path.join(self.update_manager.temp_dir, filename)
+            
+            # Скачиваем с прогрессом
+            response = requests.get(url, stream=True, timeout=30)
+            total_size = int(response.headers.get('content-length', 0))
+            
+            if total_size == 0:
+                complete_callback(False, None, "Не удалось определить размер файла")
+                return
+            
+            progress_callback(0, "Начинаем загрузку...")
+            
+            with open(filepath, 'wb') as f:
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        percent = int((downloaded / total_size) * 100)
+                        progress_callback(percent, f"Скачивание: {percent}% ({downloaded//1024} KB)")
+            
+            # Проверяем, что файл скачался
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                complete_callback(True, filepath, None)
+            else:
+                complete_callback(False, None, "Файл не скачан")
+                
+        except Exception as e:
+            complete_callback(False, None, str(e))
     
     def _download_progress(self, percent, status_text):
         """Обновление прогресса скачивания"""
@@ -12090,43 +10784,127 @@ class SettingsWindow:
                 "Попробуйте позже или скачайте вручную с GitHub.")
     
     def _install_update(self):
-        """Запускает внешний установщик с резервированием и откатом."""
+        """Установка обновления с перезагрузкой"""
         if self.update_manager.is_installing:
             return
-        if self.update_manager.download_progress != 100:
-            messagebox.showinfo("Информация", "Сначала скачайте и проверьте обновление")
+        
+        if not self.update_manager.download_progress == 100:
+            messagebox.showinfo("Информация", "Сначала скачайте обновление")
             return
-        filepath = self.update_manager.get_download_path()
-        if not filepath or not os.path.isfile(filepath):
-            messagebox.showerror("Ошибка", "Проверенный архив обновления не найден. Скачайте его заново.")
+        
+        # Проверяем, есть ли файл
+        filename = f"bitos_update_{self.update_manager.latest_version}.zip"
+        filepath = os.path.join(self.update_manager.temp_dir, filename)
+        
+        if not os.path.exists(filepath):
+            messagebox.showerror("Ошибка", "Файл обновления не найден.\nПопробуйте скачать заново.")
             return
-        if not messagebox.askyesno("Установка обновления",
-            f"Установить обновление v{self.update_manager.latest_version}?\n\n"
-            "BITOS закроется и автоматически запустится заново. Windows перезагружаться не будет.\n"
-            "Папка System и личные данные сохраняются; старые файлы будут сохранены для отката."):
+        
+        # Спрашиваем пользователя
+        if not messagebox.askyesno("Установка обновления", 
+                                  f"Установить обновление v{self.update_manager.latest_version}?\n\n"
+                                  "⚠️ ВНИМАНИЕ:\n"
+                                  "• Программа будет перезагружена\n"
+                                  "• Все несохранённые данные будут потеряны\n"
+                                  "• Убедитесь, что вы сохранили все важные файлы"):
             return
-        self._log_update(f"🔄 Подготовка установки v{self.update_manager.latest_version}...", "INSTALL")
-        try:
-            if self.desktop:
-                try:
-                    self.desktop.save_desktop_shortcuts()
-                    self.desktop.save_widgets()
-                except Exception as exc:
-                    self._log_update(f"⚠️ Не удалось сохранить состояние рабочего стола: {exc}", "WARNING")
-            self.install_btn.config(state='disabled', text="⏳ Подготовка...")
-            self.download_btn.config(state='disabled')
-            self.check_btn.config(state='disabled')
-            started = self.update_manager.install_update(filepath=filepath, confirmed=True)
-            if not started:
-                self.install_btn.config(state='normal', text="🔄 Установить обновление", bg='#E67E22')
-                self.download_btn.config(state='normal')
-                self.check_btn.config(state='normal')
-        except Exception as exc:
-            self._install_error(str(exc))
+        
+        self._log_update(f"🔄 Начинаем установку v{self.update_manager.latest_version}...", "INSTALL")
+        self.install_btn.config(state='disabled', text="⏳ Установка...")
+        self.download_btn.config(state='disabled')
+        self.check_btn.config(state='disabled')
+        self.update_progress_label.config(text="⏳ Установка обновления...")
+        self.update_progress_bar['value'] = 50
+        
+        # Запускаем установку в потоке
+        thread = threading.Thread(target=self._install_thread, args=(filepath,))
+        thread.daemon = True
+        thread.start()
     
     def _install_thread(self, filepath):
-        """Совместимый вход для старых вызовов; ручная перезапись файлов запрещена."""
-        return self.update_manager.install_update(filepath=filepath, confirmed=True)
+        """Поток для установки обновления"""
+        try:
+            self.update_manager.is_installing = True
+            
+            # Создаём резервную копию текущей версии
+            backup_path = os.path.join(self.update_manager.backup_dir, 
+                                      f"bitos_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            os.makedirs(backup_path, exist_ok=True)
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Создание резервной копии..."))
+            self._log_update("📦 Создание резервной копии текущей версии...", "INSTALL")
+            
+            # Копируем текущие файлы в резерв
+            base_path = self.bitos.base_path
+            for item in os.listdir(base_path):
+                if item in ['System', 'venv', '__pycache__', '.git']:
+                    continue
+                src = os.path.join(base_path, item)
+                dst = os.path.join(backup_path, item)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, ignore_dangling_symlinks=True)
+                else:
+                    shutil.copy2(src, dst)
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Распаковка обновления..."))
+            self.window.after(0, lambda: self.update_progress_bar.config(value=70))
+            self._log_update("📦 Распаковка обновления...", "INSTALL")
+            
+            # Распаковываем архив
+            import zipfile
+            extract_path = os.path.join(self.update_manager.temp_dir, "extracted")
+            os.makedirs(extract_path, exist_ok=True)
+            
+            with zipfile.ZipFile(filepath, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            
+            # Находим папку с кодом (обычно она имеет имя вида Saryanich-BITOS-xxxxxxx)
+            extracted_items = os.listdir(extract_path)
+            extracted_dir = None
+            for item in extracted_items:
+                if os.path.isdir(os.path.join(extract_path, item)):
+                    extracted_dir = os.path.join(extract_path, item)
+                    break
+            
+            if not extracted_dir:
+                self.window.after(0, lambda: self._install_error("Не удалось найти распакованные файлы"))
+                return
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="📦 Замена файлов..."))
+            self.window.after(0, lambda: self.update_progress_bar.config(value=85))
+            self._log_update("📦 Замена файлов...", "INSTALL")
+            
+            # Копируем новые файлы поверх старых (кроме System)
+            for item in os.listdir(extracted_dir):
+                if item == 'System':
+                    continue
+                src = os.path.join(extracted_dir, item)
+                dst = os.path.join(base_path, item)
+                if os.path.exists(dst):
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    else:
+                        os.remove(dst)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+            
+            self.window.after(0, lambda: self.update_progress_label.config(text="✅ Установка завершена!"))
+            self.window.after(0, lambda: self.update_progress_bar.config(value=100))
+            self._log_update("✅ Установка завершена!", "SUCCESS")
+            
+            # Сохраняем статус
+            self.update_manager.status['install_complete'] = True
+            self.update_manager.status['installed_version'] = self.update_manager.latest_version
+            self.update_manager.status['installed_at'] = datetime.now().isoformat()
+            self.update_manager._save_status()
+            
+            # Показываем сообщение и перезагружаемся
+            self.window.after(1000, self._restart_after_update)
+            
+        except Exception as e:
+            self.window.after(0, lambda: self._install_error(str(e)))
     
     def _install_error(self, error):
         """Ошибка установки"""
@@ -12143,9 +10921,32 @@ class SettingsWindow:
             "Попробуйте скачать обновление вручную с GitHub.")
     
     def _restart_after_update(self):
-        """Перезапуск выполняется внешним транзакционным установщиком."""
-        filepath = self.update_manager.get_download_path()
-        return self.update_manager.install_update(filepath=filepath, confirmed=True)
+        """Перезагрузка после установки обновления"""
+        self._log_update("🔄 Перезагрузка системы...", "INSTALL")
+        
+        if self.desktop and hasattr(self.desktop, 'notification_center'):
+            self.desktop.notification_center.add_notification(
+                "🔄 Перезагрузка",
+                "Система перезагружается для применения обновления",
+                icon="🔄",
+                duration=5000
+            )
+        
+        # Сохраняем состояние
+        try:
+            self.desktop.save_desktop_shortcuts()
+            self.desktop.save_widgets()
+        except:
+            pass
+        
+        # Закрываем окна
+        try:
+            self.window.destroy()
+        except:
+            pass
+        
+        # Перезапускаем приложение
+        self._restart_application()
     
     def _restart_application(self):
         """Перезапуск приложения"""
@@ -12187,7 +10988,7 @@ if os.path.exists(script_path):
     def _clear_update_log(self):
         """Очистка лога обновлений"""
         self.update_log_text.config(state='normal')
-        self.update_log_text.delete('1.0', qt.END)
+        self.update_log_text.delete('1.0', tk.END)
         self.update_log_text.insert('1.0', "[INFO] Лог очищен\n")
         self.update_log_text.insert('end', "[INFO] Система обновлений готова\n")
         self.update_log_text.config(state='disabled')
@@ -12200,96 +11001,15 @@ if os.path.exists(script_path):
 
     # ==================== ВКЛАДКА 6: СИСТЕМА (БЕЗ ИЗМЕНЕНИЙ) ====================
     
-    def _create_optimization_tab(self):
-        """Настройка уровня оптимизации с пятью фиксированными профилями."""
-        tab = qtu.Frame(self.notebook)
-        self.notebook.add(tab, text="⚡ Оптимизация")
-        manager = getattr(self.bitos, "performance_manager", None)
-        current = manager.level if manager else 0
-
-        root = qt.Frame(tab, bg="#F5F7FA")
-        root.pack(fill=qt.BOTH, expand=True, padx=24, pady=22)
-
-        qt.Label(root, text="⚡ Оптимизация BITOS", font=("Segoe UI", 17, "bold"),
-                 bg="#F5F7FA", fg="#2C3E50").pack(anchor="w", pady=(0, 8))
-        qt.Label(root, text="Выберите баланс между отзывчивостью системы и экономией ресурсов.",
-                 font=("Segoe UI", 10), bg="#F5F7FA", fg="#566573").pack(anchor="w", pady=(0, 22))
-
-        card = qt.Frame(root, bg="white", relief=qt.RIDGE, bd=1)
-        card.pack(fill=qt.X, pady=5)
-        title_row = qt.Frame(card, bg="white")
-        title_row.pack(fill=qt.X, padx=20, pady=(18, 4))
-        qt.Label(title_row, text="Уровень оптимизации", font=("Segoe UI", 12, "bold"),
-                 bg="white", fg="#2C3E50").pack(side=qt.LEFT)
-        self.optimization_value_label = qt.Label(title_row, text=f"{current}%", font=("Segoe UI", 14, "bold"),
-                                                 bg="white", fg="#2980B9")
-        self.optimization_value_label.pack(side=qt.RIGHT)
-
-        self.optimization_slider = qt.Scale(card, from_=0, to=100, orient=qt.HORIZONTAL,
-                                            showvalue=False, length=620, command=self._on_optimization_changed)
-        self.optimization_slider.set(current)
-        self.optimization_slider.setSingleStep(25)
-        self.optimization_slider.setPageStep(25)
-        self.optimization_slider.setTickInterval(25)
-        self.optimization_slider.setTickPosition(qt.QSlider.TickPosition.TicksBelow)
-        self.optimization_slider.pack(fill=qt.X, padx=22, pady=(12, 0))
-
-        scale_labels = qt.Frame(card, bg="white")
-        scale_labels.pack(fill=qt.X, padx=22, pady=(3, 14))
-        for value, text_value in ((0, "0%"), (25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")):
-            label = qt.Label(scale_labels, text=text_value, font=("Segoe UI", 9), bg="white", fg="#7F8C8D")
-            label.pack(side=qt.LEFT, expand=True)
-
-        self.optimization_profile_label = qt.Label(card, text="", font=("Segoe UI", 11, "bold"),
-                                                    bg="white", fg="#2C3E50")
-        self.optimization_profile_label.pack(anchor="w", padx=22, pady=(0, 5))
-        self.optimization_description_label = qt.Label(card, text="", font=("Segoe UI", 9),
-                                                       bg="white", fg="#566573", wraplength=700, justify="left")
-        self.optimization_description_label.pack(anchor="w", fill=qt.X, padx=22, pady=(0, 20))
-
-        note = qt.Frame(root, bg="#EAF2F8")
-        note.pack(fill=qt.X, pady=(18, 0))
-        qt.Label(note, text="ℹ️ 0% сохраняет исходное поведение 07.24. На 100% увеличивается интервал фоновых обновлений и автосохранения, а приоритет процесса снижается. Настройка сохраняется в System/Config/performance.json.",
-                 font=("Segoe UI", 9), bg="#EAF2F8", fg="#34495E", justify="left", wraplength=760).pack(fill=qt.X, padx=16, pady=14)
-        self._refresh_optimization_labels(current)
-
-    def _refresh_optimization_labels(self, value):
-        levels = {
-            0: ("Без ограничений", "Исходная частота анимаций и автосохранения. Приоритет процесса не изменяется."),
-            25: ("Лёгкая оптимизация", "Небольшое снижение фоновой активности без заметного влияния на работу интерфейса."),
-            50: ("Сбалансированный режим", "Увеличенный интервал автосохранения и умеренное снижение приоритета фоновой работы."),
-            75: ("Энергосбережение", "Более редкие фоновые обновления и анимации; меньше одновременных фоновых задач."),
-            100: ("Максимальная экономия", "Минимальная частота фоновых обновлений, редкое автосохранение и минимальный приоритет процесса."),
-        }
-        value = min((0, 25, 50, 75, 100), key=lambda item: abs(item - int(value)))
-        name, description = levels[value]
-        if getattr(self, "optimization_profile_label", None):
-            self.optimization_profile_label.config(text=name)
-        if getattr(self, "optimization_description_label", None):
-            self.optimization_description_label.config(text=description)
-        if getattr(self, "optimization_value_label", None):
-            self.optimization_value_label.config(text=f"{value}%")
-
-    def _on_optimization_changed(self, raw_value):
-        value = min((0, 25, 50, 75, 100), key=lambda item: abs(item - int(raw_value)))
-        if self.optimization_slider.get() != value:
-            self.optimization_slider.blockSignals(True)
-            self.optimization_slider.setValue(value)
-            self.optimization_slider.blockSignals(False)
-        self._refresh_optimization_labels(value)
-        manager = getattr(self.bitos, "performance_manager", None)
-        if manager:
-            manager.set_level(value, persist=True)
-
     def _create_system_tab(self):
         """Вкладка системной информации"""
-        system_frame = qtu.Frame(self.notebook)
+        system_frame = ttk.Frame(self.notebook)
         self.notebook.add(system_frame, text="💻 Система")
         
-        main_frame = qt.Frame(system_frame, bg='white')
-        main_frame.pack(fill=qt.BOTH, expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(system_frame, bg='white')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        qt.Label(main_frame, text="💻 Системная информация", 
+        tk.Label(main_frame, text="💻 Системная информация", 
                 font=('Segoe UI', 16, 'bold'), bg='white', fg='#2C3E50').pack(anchor='w', pady=(0, 20))
         
         info_data = [
@@ -12304,18 +11024,18 @@ if os.path.exists(script_path):
         ]
         
         for label, value in info_data:
-            frame = qt.Frame(main_frame, bg='white')
-            frame.pack(fill=qt.X, pady=4)
+            frame = tk.Frame(main_frame, bg='white')
+            frame.pack(fill=tk.X, pady=4)
             
-            qt.Label(frame, text=label, font=('Segoe UI', 10, 'bold'), 
-                    bg='white', fg='#2C3E50', width=18, anchor='w').pack(side=qt.LEFT)
-            qt.Label(frame, text=value, font=('Segoe UI', 10), 
-                    bg='white', fg='#7F8C8D', anchor='w').pack(side=qt.LEFT, padx=(10, 0))
+            tk.Label(frame, text=label, font=('Segoe UI', 10, 'bold'), 
+                    bg='white', fg='#2C3E50', width=18, anchor='w').pack(side=tk.LEFT)
+            tk.Label(frame, text=value, font=('Segoe UI', 10), 
+                    bg='white', fg='#7F8C8D', anchor='w').pack(side=tk.LEFT, padx=(10, 0))
         
-        stats_frame = qt.Frame(main_frame, bg='#F0F3F4', relief=qt.RIDGE, bd=1)
-        stats_frame.pack(fill=qt.X, pady=20)
+        stats_frame = tk.Frame(main_frame, bg='#F0F3F4', relief=tk.RIDGE, bd=1)
+        stats_frame.pack(fill=tk.X, pady=20)
         
-        qt.Label(stats_frame, text="📊 Статистика сессии", 
+        tk.Label(stats_frame, text="📊 Статистика сессии", 
                 font=('Segoe UI', 12, 'bold'), bg='#F0F3F4', fg='#2C3E50').pack(anchor='w', padx=15, pady=10)
         
         if hasattr(self.bitos, 'security'):
@@ -12330,14 +11050,14 @@ if os.path.exists(script_path):
             ]
             
             for label, value in stat_items:
-                frame = qt.Frame(stats_frame, bg='#F0F3F4')
-                frame.pack(fill=qt.X, padx=15, pady=2)
-                qt.Label(frame, text=label, font=('Segoe UI', 10), 
-                        bg='#F0F3F4', fg='#2C3E50', width=20, anchor='w').pack(side=qt.LEFT)
-                qt.Label(frame, text=str(value), font=('Segoe UI', 10, 'bold'), 
-                        bg='#F0F3F4', fg='#3498DB').pack(side=qt.LEFT)
+                frame = tk.Frame(stats_frame, bg='#F0F3F4')
+                frame.pack(fill=tk.X, padx=15, pady=2)
+                tk.Label(frame, text=label, font=('Segoe UI', 10), 
+                        bg='#F0F3F4', fg='#2C3E50', width=20, anchor='w').pack(side=tk.LEFT)
+                tk.Label(frame, text=str(value), font=('Segoe UI', 10, 'bold'), 
+                        bg='#F0F3F4', fg='#3498DB').pack(side=tk.LEFT)
         
-        qt.Button(main_frame, text="🔄 Обновить информацию", bg='#3498DB', fg='white',
+        tk.Button(main_frame, text="🔄 Обновить информацию", bg='#3498DB', fg='white',
                  font=('Segoe UI', 10), bd=0, padx=20, pady=8,
                  cursor='hand2', command=self._refresh_system_tab).pack(pady=10)
     
@@ -12411,10 +11131,7 @@ class AutoSafe:
         # Установка автономных триггеров
         self._setup_autonomous_triggers()
         
-        interval = self.SAVE_INTERVAL
-        if self.bitos and hasattr(self.bitos, "performance_manager"):
-            interval = self.bitos.performance_manager.autosave_interval
-        print(f"[AutoSafe] ✅ Инициализирован. Интервал сохранения: {interval} сек.")
+        print("[AutoSafe] ✅ Инициализирован. Сохранение каждые 10 секунд")
         print(f"[AutoSafe] 📁 Путь: {self.config_path}")
     
     def _init_paths(self):
@@ -12574,10 +11291,7 @@ class AutoSafe:
         def saver():
             while self._is_running:
                 try:
-                    interval = self.SAVE_INTERVAL
-                    if self.bitos and hasattr(self.bitos, "performance_manager"):
-                        interval = self.bitos.performance_manager.autosave_interval
-                    time.sleep(max(1, interval))
+                    time.sleep(self.SAVE_INTERVAL)
                     if not self._save_in_progress:
                         if self._has_changes():
                             self.save_all()
@@ -12857,7 +11571,6 @@ import os
 import sys
 import json
 import threading
-import queue
 import subprocess
 import platform
 import random
@@ -13065,7 +11778,10 @@ class MultiMonitorManager:
             if monitor.get('is_primary', False):
                 continue
             
-            self._create_pyqt_desktop(i)
+            if PYQT_AVAILABLE:
+                self._create_pyqt_desktop(i)
+            else:
+                self._create_tkinter_desktop(i)
     
     def _create_pyqt_desktop(self, monitor_index):
         if monitor_index >= len(self.monitors):
@@ -13098,9 +11814,42 @@ class MultiMonitorManager:
         except:
             return False
     
-    def _create_Qt_desktop(self, monitor_index):
-        """Обратная совместимость имени метода: дополнительный экран создаётся только на Qt."""
-        return self._create_pyqt_desktop(monitor_index)
+    def _create_tkinter_desktop(self, monitor_index):
+        if monitor_index >= len(self.monitors):
+            return False
+        monitor = self.monitors[monitor_index]
+        
+        script_code = f'''# -*- coding: utf-8 -*-
+import sys, json, tkinter as tk
+from datetime import datetime
+with open(r"{self.monitor_config_path}", 'r', encoding='utf-8') as f:
+    config = json.load(f)
+monitor = config['monitors'][{monitor_index}]
+root = tk.Tk()
+root.overrideredirect(True)
+root.geometry(f"{{monitor['width']}}x{{monitor['height']}}+{{monitor['x']}}+{{monitor['y']}}")
+root.configure(bg='#1e1e2e')
+time_label = tk.Label(root, text="", font=('Segoe UI', 64, 'bold'), fg='#cdd6f4', bg='#1e1e2e')
+time_label.pack(expand=True)
+def update_time():
+    time_label.config(text=datetime.now().strftime("%H:%M:%S"))
+    root.after(1000, update_time)
+update_time()
+root.mainloop()
+'''
+        script_path = os.path.join(self.temp_dir, f"monitor_tk_{monitor_index}.py")
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(script_code)
+        
+        try:
+            process = subprocess.Popen(
+                [sys.executable, script_path],
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+            self.processes[monitor_index] = process
+            return True
+        except:
+            return False
     
     def _generate_accurate_script(self, monitor_index):
         theme_cfg_path = os.path.join(self.config_path, "theme.cfg")
@@ -13341,10 +12090,10 @@ import sys
 import json
 import time
 import threading
-import queue
 import subprocess
 import platform
 from datetime import datetime
+from tkinter import messagebox
 
 try:
     import requests
@@ -13407,7 +12156,7 @@ class UpdateManager:
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
     
     def _find_root(self):
-        """Поиск главного окна Qt."""
+        """Поиск главного окна tkinter"""
         # Пробуем разные варианты
         for attr in ['root', 'window', 'master', 'main_window', 'app', 'gui', 'tk_root']:
             if hasattr(self.bitos, attr):
@@ -13416,11 +12165,12 @@ class UpdateManager:
                     print(f"[UpdateManager] ✅ Найдено главное окно: {attr}")
                     return obj
         
-        # Если не нашли - пробуем найти через Qt
+        # Если не нашли - пробуем найти через tkinter
         try:
-            if qt._default_root:
-                print("[UpdateManager] ✅ Используем qt._default_root")
-                return qt._default_root
+            import tkinter as tk
+            if tk._default_root:
+                print("[UpdateManager] ✅ Используем tk._default_root")
+                return tk._default_root
         except:
             pass
         
@@ -13485,24 +12235,12 @@ class UpdateManager:
         return {}
     
     def _save_status(self):
-        """Атомарное сохранение состояния обновлений."""
-        temp_path = self.update_status_file + ".tmp"
+        """Сохранение статуса обновлений"""
         try:
-            os.makedirs(os.path.dirname(self.update_status_file), exist_ok=True)
-            with open(temp_path, "w", encoding="utf-8") as stream:
-                json.dump(self.status, stream, indent=2, ensure_ascii=False)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temp_path, self.update_status_file)
-            return True
-        except Exception as exc:
-            print(f"[UpdateManager] ⚠️ Не удалось сохранить статус: {exc}")
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except OSError:
-                pass
-            return False
+            with open(self.update_status_file, 'w', encoding='utf-8') as f:
+                json.dump(self.status, f, indent=4, ensure_ascii=False)
+        except:
+            pass
     
     def _safe_callback(self, callback, *args):
         """Безопасный вызов callback"""
@@ -13522,294 +12260,136 @@ class UpdateManager:
                 pass
     
     def _create_restart_script(self):
-        """Создаёт автономный установщик с проверкой архива, транзакцией и откатом."""
-        script = r'''# -*- coding: utf-8 -*-
-import os
-import sys
-import time
-import json
-import shutil
-import zipfile
-import subprocess
-import traceback
-from pathlib import PurePosixPath
+        """Создание скрипта для установки обновления после перезапуска"""
+        script = '''# -*- coding: utf-8 -*-
+import os, sys, time, shutil, zipfile, subprocess, platform
 
 BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SYSTEM_PATH = os.path.join(BASE_PATH, "System")
-TEMP_DIR = os.path.join(SYSTEM_PATH, "Temp", "updates")
-BACKUP_ROOT = os.path.join(SYSTEM_PATH, "Temp", "update_backups")
-JOURNAL_PATH = os.path.join(TEMP_DIR, "update_install_journal.json")
-LOG_PATH = os.path.join(SYSTEM_PATH, "Logs", "update_install.log")
-
-
-def log(message):
-    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
-    print(line, flush=True)
-    try:
-        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-        with open(LOG_PATH, "a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
-    except OSError:
-        pass
-
-
-def atomic_json(path, payload):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    temp = path + ".tmp"
-    with open(temp, "w", encoding="utf-8") as stream:
-        json.dump(payload, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temp, path)
-
-
-def remove_path(path):
-    if os.path.islink(path) or os.path.isfile(path):
-        os.remove(path)
-    elif os.path.isdir(path):
-        shutil.rmtree(path)
-
-
-def validate_zip(zip_path, extract_path):
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        broken = archive.testzip()
-        if broken:
-            raise RuntimeError(f"Архив повреждён: {broken}")
-        found_entry = False
-        root = os.path.abspath(extract_path)
-        for info in archive.infolist():
-            name = info.filename.replace("\\", "/")
-            posix = PurePosixPath(name)
-            if posix.is_absolute() or any(part in ("..", "") for part in posix.parts):
-                raise RuntimeError(f"Небезопасный путь в архиве: {info.filename}")
-            if posix.parts and ":" in posix.parts[0]:
-                raise RuntimeError(f"Абсолютный путь в архиве: {info.filename}")
-            mode = (info.external_attr >> 16) & 0o170000
-            if mode == 0o120000:
-                raise RuntimeError(f"Символические ссылки в архиве запрещены: {info.filename}")
-            destination = os.path.abspath(os.path.join(root, *posix.parts))
-            if os.path.commonpath((root, destination)) != root:
-                raise RuntimeError(f"Путь выходит за пределы каталога распаковки: {info.filename}")
-            if posix.name.casefold() in ("beta 06v6.py", "beta 06v6.pyw"):
-                found_entry = True
-        if not found_entry:
-            raise RuntimeError("В архиве не найден главный файл BITOS (BETA 06V6.py)")
-        archive.extractall(extract_path)
-
-
-def find_code_root(extract_path):
-    candidates = [extract_path]
-    try:
-        candidates.extend(
-            os.path.join(extract_path, item)
-            for item in os.listdir(extract_path)
-            if os.path.isdir(os.path.join(extract_path, item))
-        )
-    except OSError:
-        pass
-    for candidate in candidates:
-        for filename in os.listdir(candidate):
-            if filename.casefold() in ("beta 06v6.py", "beta 06v6.pyw"):
-                return candidate
-    raise RuntimeError("Не удалось определить корневую папку BITOS в архиве")
-
-
-def wait_for_parent(pid):
-    if not pid:
-        return
-    deadline = time.monotonic() + 35
-    if os.name == "nt":
-        import ctypes
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        handle = kernel32.OpenProcess(0x00100000, False, int(pid))
-        if not handle:
-            return
-        try:
-            while time.monotonic() < deadline:
-                result = kernel32.WaitForSingleObject(handle, 250)
-                if result == 0:
-                    return
-                if result != 0x00000102:
-                    raise OSError(ctypes.get_last_error(), "WaitForSingleObject failed")
-            raise TimeoutError("Основное приложение BITOS не завершилось за 35 секунд")
-        finally:
-            kernel32.CloseHandle(handle)
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return
-        time.sleep(0.25)
-    raise TimeoutError("Основное приложение BITOS не завершилось за 35 секунд")
-
-
-def rollback(entries):
-    errors = []
-    for entry in reversed(entries):
-        target = entry["target"]
-        backup = entry["backup"]
-        try:
-            if entry.get("installed") and os.path.lexists(target):
-                remove_path(target)
-            if entry.get("had_original") and os.path.lexists(backup):
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                os.replace(backup, target)
-        except Exception as exc:
-            errors.append(f"{target}: {exc}")
-    return errors
-
-
-def prune_backups(keep=3):
-    try:
-        folders = [os.path.join(BACKUP_ROOT, name) for name in os.listdir(BACKUP_ROOT)]
-        folders = [folder for folder in folders if os.path.isdir(folder)]
-        folders.sort(key=os.path.getmtime, reverse=True)
-        for folder in folders[keep:]:
-            shutil.rmtree(folder, ignore_errors=True)
-    except OSError:
-        pass
-
+TEMP_DIR = os.path.join(BASE_PATH, "System", "Temp", "updates")
 
 def main():
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    os.makedirs(BACKUP_ROOT, exist_ok=True)
-    archive_path = sys.argv[1] if len(sys.argv) > 1 else ""
-    parent_pid = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    if not archive_path:
-        candidates = [os.path.join(TEMP_DIR, name) for name in os.listdir(TEMP_DIR) if name.lower().endswith(".zip")]
-        if not candidates:
-            raise FileNotFoundError("Архив обновления не найден")
-        archive_path = max(candidates, key=os.path.getmtime)
-    archive_path = os.path.abspath(archive_path)
-    if os.path.commonpath((os.path.abspath(TEMP_DIR), archive_path)) != os.path.abspath(TEMP_DIR):
-        raise RuntimeError("Файл обновления находится вне временной папки BITOS")
-    if not os.path.isfile(archive_path) or os.path.getsize(archive_path) < 100:
-        raise RuntimeError("Архив обновления пуст или отсутствует")
-
-    log("Ожидание завершения основного процесса BITOS")
-    wait_for_parent(parent_pid)
-
-    transaction_id = time.strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}"
-    work_dir = os.path.join(TEMP_DIR, "transaction_" + transaction_id)
-    extract_dir = os.path.join(work_dir, "extracted")
-    staged_dir = os.path.join(work_dir, "staged")
-    backup_dir = os.path.join(BACKUP_ROOT, transaction_id)
-    os.makedirs(extract_dir, exist_ok=True)
-    os.makedirs(staged_dir, exist_ok=True)
-    os.makedirs(backup_dir, exist_ok=True)
-
-    entries = []
-    try:
-        log("Проверка целостности ZIP и безопасная распаковка")
-        validate_zip(archive_path, extract_dir)
-        code_root = find_code_root(extract_dir)
-        excluded = {"system", ".git", ".github", "__pycache__", "venv", ".venv"}
-        items = [name for name in os.listdir(code_root) if name.casefold() not in excluded]
-        if not any(name.casefold() in ("beta 06v6.py", "beta 06v6.pyw") for name in items):
-            raise RuntimeError("В обновлении отсутствует главный файл BITOS")
-
-        log(f"Подготовка {len(items)} компонентов обновления")
-        for name in items:
-            src = os.path.join(code_root, name)
-            stage = os.path.join(staged_dir, name)
-            if os.path.islink(src):
-                raise RuntimeError(f"Символические ссылки запрещены: {name}")
+    print("=" * 50)
+    print("УСТАНОВКА ОБНОВЛЕНИЯ BITOS")
+    print("=" * 50)
+    
+    # Ждем чтобы основная программа закрылась
+    print("\\nОжидание 10 секунд...")
+    for i in range(10, 0, -1):
+        print(f"Осталось {i} сек...", end='\\r')
+        time.sleep(1)
+    print("\\n")
+    
+    # Ищем zip файл обновления (берём самый свежий по времени изменения,
+    # а не по алфавитной сортировке имён — иначе можно взять не тот файл)
+    zip_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.zip')]
+    if not zip_files:
+        print("❌ Файл обновления не найден!")
+        input("Нажмите Enter для выхода...")
+        sys.exit(1)
+    
+    zip_candidates = [os.path.join(TEMP_DIR, f) for f in zip_files]
+    zip_path = max(zip_candidates, key=os.path.getmtime)
+    print(f"📦 Найден файл: {os.path.basename(zip_path)}")
+    
+    # Извлекаем архив
+    extract_path = os.path.join(TEMP_DIR, "extracted")
+    if os.path.exists(extract_path):
+        shutil.rmtree(extract_path)
+    os.makedirs(extract_path)
+    
+    print("📦 Извлечение обновления...")
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(extract_path)
+    
+    # Находим корневую папку с кодом
+    code_path = extract_path
+    for item in os.listdir(extract_path):
+        full_path = os.path.join(extract_path, item)
+        if os.path.isdir(full_path) and ('BITOS' in item or '06V' in item or 'bitos' in item.lower()):
+            code_path = full_path
+            break
+    
+    print(f"📁 Папка с кодом: {os.path.basename(code_path)}")
+    
+    # Копируем файлы (пропускаем System для сохранения настроек)
+    print("\\n⚙️ Установка файлов...")
+    updated = 0
+    errors = 0
+    
+    for item in os.listdir(code_path):
+        if item == 'System':
+            print(f"  ⏭ Пропущено: {item}/ (настройки сохранены)")
+            continue
+        
+        src = os.path.join(code_path, item)
+        dst = os.path.join(BASE_PATH, item)
+        
+        try:
+            # Удаляем старый файл/папку
+            if os.path.exists(dst):
+                if os.path.isdir(dst):
+                    shutil.rmtree(dst)
+                else:
+                    os.remove(dst)
+            
+            # Копируем новый
             if os.path.isdir(src):
-                shutil.copytree(src, stage)
-            elif os.path.isfile(src):
-                shutil.copy2(src, stage)
+                shutil.copytree(src, dst)
             else:
-                raise RuntimeError(f"Неизвестный тип элемента обновления: {name}")
-
-        journal = {"transaction": transaction_id, "phase": "prepared", "items": [], "started_at": time.time()}
-        atomic_json(JOURNAL_PATH, journal)
-        log("Установка файлов; папка System и пользовательские настройки сохраняются")
-
-        for name in items:
-            target = os.path.join(BASE_PATH, name)
-            stage = os.path.join(staged_dir, name)
-            backup = os.path.join(backup_dir, name)
-            had_original = os.path.lexists(target)
-            entry = {"name": name, "target": target, "backup": backup, "had_original": had_original, "installed": False}
-            entries.append(entry)
-            if had_original:
-                os.replace(target, backup)
-            journal["items"] = entries
-            journal["phase"] = "installing"
-            atomic_json(JOURNAL_PATH, journal)
-            os.replace(stage, target)
-            entry["installed"] = True
-            journal["items"] = entries
-            atomic_json(JOURNAL_PATH, journal)
-            log("Установлено: " + name)
-
-        journal["phase"] = "completed"
-        journal["completed_at"] = time.time()
-        atomic_json(JOURNAL_PATH, journal)
-        log("Файлы обновлены успешно; выполняется запуск новой версии BITOS")
-
-        entry_candidates = [
-            os.path.join(BASE_PATH, "BETA 06V6.py"),
-            os.path.join(BASE_PATH, "BETA 06V6.pyw"),
-        ]
-        entrypoint = next((p for p in entry_candidates if os.path.isfile(p)), None)
-        if not entrypoint:
-            raise RuntimeError("Обновление установлено, но главный файл BITOS не найден для запуска")
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        subprocess.Popen([sys.executable, entrypoint], cwd=BASE_PATH, creationflags=creationflags, close_fds=True)
-        log("BITOS запущена")
-        prune_backups()
-        shutil.rmtree(work_dir, ignore_errors=True)
-        try:
-            os.remove(archive_path)
-        except OSError:
-            pass
-    except Exception:
-        log("Ошибка установки; выполняется автоматический откат")
-        errors = rollback(entries)
-        journal = {"transaction": transaction_id, "phase": "rolled_back" if not errors else "rollback_failed",
-                   "errors": errors, "items": entries, "failed_at": time.time()}
-        try:
-            atomic_json(JOURNAL_PATH, journal)
-        except Exception:
-            pass
-        if errors:
-            log("Откат завершён с ошибками: " + "; ".join(errors))
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise
-
+                shutil.copy2(src, dst)
+            
+            print(f"  ✅ {item}")
+            updated += 1
+        except Exception as e:
+            print(f"  ❌ {item}: {e}")
+            errors += 1
+    
+    print(f"\\n{'=' * 50}")
+    print(f"✅ Установлено: {updated} файлов")
+    if errors > 0:
+        print(f"❌ Ошибок: {errors}")
+    print(f"{'=' * 50}")
+    
+    # Удаляем архив и временные файлы
+    try:
+        os.remove(zip_path)
+        if os.path.exists(extract_path):
+            shutil.rmtree(extract_path)
+    except:
+        pass
+    
+    # Перезагрузка
+    print("\\n🔄 Перезагрузка через 5 секунд...")
+    time.sleep(5)
+    
+    try:
+        if platform.system() == "Windows":
+            subprocess.Popen(["shutdown", "/r", "/t", "3", "/f"], shell=True)
+        else:
+            subprocess.Popen(["reboot"])
+    except Exception as e:
+        print(f"❌ Не удалось перезагрузить: {e}")
+        print("Пожалуйста, перезагрузите систему вручную.")
+        input("Нажмите Enter для выхода...")
+    
+    sys.exit(0)
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:
-        log("КРИТИЧЕСКАЯ ОШИБКА: " + str(exc))
-        log(traceback.format_exc())
-        try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(0, str(exc), "BITOS — ошибка обновления", 0x10)
-        except Exception:
-            pass
+    except Exception as e:
+        print(f"\\n❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        import traceback
+        traceback.print_exc()
+        input("\\nНажмите Enter для выхода...")
         sys.exit(1)
 '''
-        temp_path = self.restart_script + ".tmp"
         try:
-            os.makedirs(os.path.dirname(self.restart_script), exist_ok=True)
-            with open(temp_path, "w", encoding="utf-8", newline="\n") as stream:
-                stream.write(script)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temp_path, self.restart_script)
-            print(f"[UpdateManager] ✅ Надёжный установщик обновления подготовлен: {self.restart_script}")
-        except Exception as exc:
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except OSError:
-                pass
-            print(f"[UpdateManager] ❌ Не удалось создать установщик: {exc}")
-            raise
+            with open(self.restart_script, 'w', encoding='utf-8') as f:
+                f.write(script)
+            print(f"[UpdateManager] ✅ Скрипт перезапуска создан: {self.restart_script}")
+        except Exception as e:
+            print(f"[UpdateManager] ❌ Ошибка создания скрипта: {e}")
     
     # ==================== ОСНОВНЫЕ МЕТОДЫ ====================
     
@@ -13846,18 +12426,10 @@ if __name__ == "__main__":
                     data = response.json()
                     
                     latest_tag_raw = data.get("tag_name", "").replace("v", "").strip()
-                    if not latest_tag_raw:
-                        raise ValueError("GitHub API не вернул номер последнего релиза")
                     self.latest_version_raw = latest_tag_raw
                     self.latest_version = self._normalize_version(latest_tag_raw)
                     self.download_url = data.get("zipball_url")
                     self.release_notes = data.get("body", "Нет описания")
-                    if not self.download_url:
-                        raise ValueError("GitHub API не вернул ссылку на архив исходного кода")
-                    if self.status.get("downloaded_version") != latest_tag_raw:
-                        self.download_progress = 0
-                        self.status.pop("download_path", None)
-                        self.status.pop("downloaded_version", None)
                     
                     print(f"[UpdateManager] Текущая: {self.current_version_raw}")
                     print(f"[UpdateManager] Последняя: {latest_tag_raw}")
@@ -13903,164 +12475,171 @@ if __name__ == "__main__":
                 if callback:
                     self._safe_callback(callback, False, None, None, None, self.error_message)
         
-        _start_managed_thread(self.bitos, check_thread, name="UpdateCheck")
+        thread = threading.Thread(target=check_thread, daemon=True)
+        thread.start()
         return True
     
     def download_update(self, progress_callback=None, complete_callback=None):
-        """Скачивает архив во временный файл, проверяет ZIP и только затем публикует его."""
+        """
+        Скачивание обновления
+        progress_callback(percent, status_text)
+        complete_callback(success, filepath, error)
+        """
         if not self.download_url:
             if complete_callback:
                 complete_callback(False, None, "Нет URL для скачивания")
-            return False
+            return
+        
         if self.is_downloading:
             if complete_callback:
                 complete_callback(False, None, "Скачивание уже выполняется")
-            return False
-        if not REQUESTS_AVAILABLE:
-            if complete_callback:
-                complete_callback(False, None, "Библиотека requests не установлена")
-            return False
-
+            return
+        
         self.is_downloading = True
         self.download_progress = 0
-
+        
+        if progress_callback:
+            progress_callback(0, "Начинаем скачивание...")
+        
         def download_thread():
-            import zipfile
-            partial_path = None
-            filepath = None
             try:
-                safe_version = "".join(ch for ch in str(self.latest_version_raw or self.latest_version or "latest") if ch.isalnum() or ch in "._-")
-                filename = f"bitos_update_{safe_version or 'latest'}.zip"
+                filename = f"bitos_update_{self.latest_version_raw}.zip"
                 filepath = os.path.join(self.temp_dir, filename)
-                partial_path = filepath + ".part"
-                os.makedirs(self.temp_dir, exist_ok=True)
-                try:
-                    if os.path.exists(partial_path):
-                        os.remove(partial_path)
-                except OSError:
-                    pass
-
-                headers = {"User-Agent": "BITOS-UpdateManager", "Accept": "application/vnd.github+json"}
+                
+                print(f"[UpdateManager] 📥 Скачивание: {filename}")
+                
+                headers = {"User-Agent": "BITOS-UpdateManager"}
+                response = requests.get(self.download_url, stream=True, timeout=30,
+                                         headers=headers, allow_redirects=True)
+                response.raise_for_status()
+                
+                # ВАЖНО: GitHub формирует zip-архив релиза "на лету" и не всегда
+                # присылает заголовок Content-Length. Раньше при total_size == 0
+                # скачивание сразу считалось ошибкой — обновления никогда не
+                # скачивались. Теперь при неизвестном размере просто показываем
+                # объём уже скачанных данных вместо процента.
+                total_size = int(response.headers.get('content-length', 0) or 0)
+                
                 downloaded = 0
-                last_percent = -1
-                with requests.get(self.download_url, stream=True, timeout=(10, 45), headers=headers, allow_redirects=True) as response:
-                    response.raise_for_status()
-                    total_size = int(response.headers.get("content-length", 0) or 0)
-                    content_encoding = response.headers.get("content-encoding", "identity").lower()
-                    with open(partial_path, "wb") as stream:
-                        for chunk in response.iter_content(chunk_size=64 * 1024):
-                            if not chunk:
-                                continue
-                            downloaded += len(chunk)
-                            if downloaded > 512 * 1024 * 1024:
-                                raise RuntimeError("Архив обновления превышает допустимый размер 512 МБ")
-                            stream.write(chunk)
-                            if total_size > 0 and content_encoding in ("", "identity"):
-                                percent = min(99, int(downloaded * 100 / total_size))
-                                if percent != last_percent:
-                                    last_percent = percent
-                                    self.download_progress = percent
-                                    if progress_callback:
-                                        self._safe_callback(progress_callback, percent, f"Скачивание: {percent}%")
-                            elif progress_callback:
-                                self.download_progress = min(99, self.download_progress + 1)
-                                self._safe_callback(progress_callback, self.download_progress,
-                                                    f"Скачано: {downloaded / (1024 * 1024):.1f} МБ")
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    if total_size > 0 and content_encoding in ("", "identity") and downloaded != total_size:
-                        raise IOError(f"Размер загрузки не совпадает с Content-Length: {downloaded}/{total_size}")
-
-                if not os.path.isfile(partial_path) or os.path.getsize(partial_path) < 100:
-                    raise RuntimeError("Скачанный архив пуст или неполон")
-                with zipfile.ZipFile(partial_path, "r") as archive:
-                    broken = archive.testzip()
-                    if broken:
-                        raise RuntimeError(f"Архив повреждён: {broken}")
-                    names = [item.filename.replace("\\", "/") for item in archive.infolist()]
-                    for name in names:
-                        parts = name.split("/")
-                        if name.startswith("/") or any(part == ".." for part in parts) or (parts and ":" in parts[0]):
-                            raise RuntimeError(f"Небезопасный путь в архиве: {name}")
-                    if not any(name.rstrip("/").split("/")[-1].casefold() in ("beta 06v6.py", "beta 06v6.pyw") for name in names):
-                        raise RuntimeError("В архиве не найден главный файл BITOS")
-
-                os.replace(partial_path, filepath)
-                partial_path = None
-                self.download_progress = 100
-                self.status["download_path"] = filepath
-                self.status["downloaded_version"] = self.latest_version_raw or self.latest_version
-                self.status["downloaded_at"] = datetime.now().isoformat()
-                self._save_status()
-                if progress_callback:
-                    self._safe_callback(progress_callback, 100, "Архив проверен, скачивание завершено")
-                if complete_callback:
-                    self._safe_callback(complete_callback, True, filepath, None)
-                print(f"[UpdateManager] ✅ Проверенный архив обновления: {filepath}")
-            except Exception as exc:
-                self.error_message = f"Ошибка скачивания/проверки: {exc}"
-                print(f"[UpdateManager] ❌ {self.error_message}")
-                if partial_path and os.path.exists(partial_path):
-                    try:
-                        os.remove(partial_path)
-                    except OSError:
-                        pass
-                if complete_callback:
-                    self._safe_callback(complete_callback, False, None, self.error_message)
-            finally:
+                last_reported_percent = -1
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        if total_size > 0:
+                            percent = int((downloaded / total_size) * 100)
+                            self.download_progress = percent
+                            if percent != last_reported_percent and progress_callback:
+                                last_reported_percent = percent
+                                self._safe_callback(progress_callback, percent, f"Скачивание: {percent}%")
+                        else:
+                            mb_downloaded = downloaded / (1024 * 1024)
+                            # прогресс неизвестен заранее — плавно ползём к 99%,
+                            # чтобы UI не выглядел зависшим
+                            self.download_progress = min(99, self.download_progress + 1)
+                            if progress_callback:
+                                self._safe_callback(
+                                    progress_callback, self.download_progress,
+                                    f"Скачано: {mb_downloaded:.1f} МБ"
+                                )
+                
                 self.is_downloading = False
-
-        _start_managed_thread(self.bitos, download_thread, name="UpdateDownload")
-        return True
+                
+                # Проверяем файл
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                    self.download_progress = 100
+                    print(f"[UpdateManager] ✅ Скачано: {filepath}")
+                    
+                    self.status['download_path'] = filepath
+                    self._save_status()
+                    
+                    if progress_callback:
+                        self._safe_callback(progress_callback, 100, "Скачивание завершено")
+                    if complete_callback:
+                        self._safe_callback(complete_callback, True, filepath, None)
+                else:
+                    print(f"[UpdateManager] ❌ Файл не создан")
+                    if complete_callback:
+                        self._safe_callback(complete_callback, False, None, "Файл не был создан")
+                    
+            except Exception as e:
+                self.is_downloading = False
+                print(f"[UpdateManager] ❌ Ошибка скачивания: {e}")
+                if complete_callback:
+                    self._safe_callback(complete_callback, False, None, str(e))
+        
+        thread = threading.Thread(target=download_thread, daemon=True)
+        thread.start()
     
-    def install_update(self, filepath=None, confirmed=False):
-        """Запускает внешний транзакционный установщик; приложение закрывается после старта."""
+    def install_update(self):
+        """
+        Установка обновления
+        Возвращает True если установка запущена
+        """
         if self.is_installing:
             messagebox.showinfo("Информация", "Установка уже выполняется")
             return False
-        filepath = filepath or self.get_download_path()
-        if not filepath or not os.path.isfile(filepath):
-            messagebox.showerror("Ошибка", "Проверенный файл обновления не найден. Скачайте обновление заново.")
+        
+        # Ищем файл обновления
+        filepath = None
+        if self.latest_version_raw:
+            candidate = os.path.join(self.temp_dir, f"bitos_update_{self.latest_version_raw}.zip")
+            if os.path.exists(candidate):
+                filepath = candidate
+        
+        if not filepath:
+            # Берём самый свежий по времени изменения, а не по алфавитной
+            # сортировке имён — иначе можно случайно подхватить старый файл
+            zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
+            if zip_files:
+                zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
+                filepath = max(zip_candidates, key=os.path.getmtime)
+            else:
+                messagebox.showerror("Ошибка", "Файл обновления не найден\nСначала скачайте обновление")
+                return False
+        
+        # Запрашиваем подтверждение
+        if not messagebox.askyesno(
+            "Установка обновления",
+            f"Установить обновление v{self.latest_version_raw}?\n\n"
+            "⚠️ ВНИМАНИЕ:\n"
+            "• Система будет перезагружена\n"
+            "• Ваши настройки будут сохранены\n"
+            "• Личные файлы не будут затронуты\n\n"
+            "Продолжить?"
+        ):
             return False
+        
+        self.is_installing = True
+        
         try:
-            temp_root = os.path.abspath(self.temp_dir)
-            candidate = os.path.abspath(filepath)
-            if os.path.commonpath((temp_root, candidate)) != temp_root:
-                raise ValueError("Файл обновления находится вне временной папки BITOS")
-            import zipfile
-            with zipfile.ZipFile(candidate, "r") as archive:
-                broken = archive.testzip()
-                if broken:
-                    raise ValueError(f"Архив повреждён: {broken}")
-                names = [item.filename.replace("\\", "/") for item in archive.infolist()]
-                if not any(name.rstrip("/").split("/")[-1].casefold() in ("beta 06v6.py", "beta 06v6.pyw") for name in names):
-                    raise ValueError("В архиве нет главного файла BITOS")
-            if not confirmed:
-                if not messagebox.askyesno("Установка обновления",
-                    f"Установить обновление v{self.latest_version_raw or self.latest_version}?\n\n"
-                    "BITOS будет закрыта и запущена заново. Перезагрузка Windows не требуется.\n"
-                    "Папка System и пользовательские настройки сохраняются; перед заменой файлов создаётся резервная копия."):
-                    return False
-            self.is_installing = True
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
-            subprocess.Popen([sys.executable, self.restart_script, candidate, str(os.getpid())],
-                             cwd=self.base_path, creationflags=creationflags, close_fds=True)
-            self.status["install_started"] = datetime.now().isoformat()
-            self.status["install_archive"] = candidate
-            self._save_status()
+            # Запускаем скрипт обновления
+            if platform.system() == "Windows":
+                subprocess.Popen(
+                    [sys.executable, self.restart_script],
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
+            else:
+                subprocess.Popen([sys.executable, self.restart_script])
+            
+            # Закрываем приложение
             self._close_application()
             return True
-        except Exception as exc:
+            
+        except Exception as e:
             self.is_installing = False
-            print(f"[UpdateManager] ❌ Не удалось запустить установщик: {exc}")
-            messagebox.showerror("Ошибка установки", f"Не удалось запустить установщик:\n{exc}")
+            messagebox.showerror("Ошибка", f"Не удалось запустить установку:\n{e}")
             return False
     
     def _close_application(self):
         """Корректное закрытие приложения"""
         try:
-            if qt._default_root:
-                qt._default_root.destroy()
+            import tkinter as tk
+            if tk._default_root:
+                tk._default_root.destroy()
         except:
             pass
         
@@ -14098,17 +12677,15 @@ if __name__ == "__main__":
         return self.update_available
     
     def get_download_path(self):
-        """Возвращает только архив, скачанный для текущей версии."""
-        expected = str(self.latest_version_raw or self.latest_version or "")
-        saved_version = str(self.status.get("downloaded_version", ""))
-        saved_path = self.status.get("download_path")
-        if saved_path and os.path.isfile(saved_path) and expected and saved_version == expected:
-            return saved_path
-        if expected:
-            safe_version = "".join(ch for ch in expected if ch.isalnum() or ch in "._-")
-            candidate = os.path.join(self.temp_dir, f"bitos_update_{safe_version}.zip")
-            if os.path.isfile(candidate):
-                return candidate
+        """Получение пути к скачанному файлу"""
+        if self.status.get('download_path') and os.path.exists(self.status.get('download_path')):
+            return self.status.get('download_path')
+        
+        zip_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.zip')]
+        if zip_files:
+            zip_candidates = [os.path.join(self.temp_dir, f) for f in zip_files]
+            return max(zip_candidates, key=os.path.getmtime)
+        
         return None
     
     def clear_download(self):
