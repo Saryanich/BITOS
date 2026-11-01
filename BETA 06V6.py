@@ -919,10 +919,15 @@ class Tk(Misc, QMainWindow):
                 self.move(int(match.group(3)), int(match.group(4)))
 
     def state(self, value=None):
-        if value is None: return "zoomed" if self.isMaximized() else "normal"
-        if value == "zoomed": self.showMaximized()
-        elif value == "normal": self.showNormal()
-        elif value == "iconic": self.showMinimized()
+        if value is None:
+            return "zoomed" if (self.isFullScreen() or self.isMaximized()) else "normal"
+        if value == "zoomed":
+            # BITOS splash/login/desktop must cover the taskbar.
+            self.showFullScreen()
+        elif value == "normal":
+            self.showNormal()
+        elif value == "iconic":
+            self.showMinimized()
 
     def overrideredirect(self, value=True):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, bool(value))
@@ -1014,10 +1019,15 @@ class Toplevel(Misc, QDialog):
                 self.move(int(match.group(3)), int(match.group(4)))
 
     def state(self, value=None):
-        if value is None: return "zoomed" if self.isMaximized() else "normal"
-        if value == "zoomed": self.showMaximized()
-        elif value == "normal": self.showNormal()
-        elif value == "iconic": self.showMinimized()
+        if value is None:
+            return "zoomed" if (self.isFullScreen() or self.isMaximized()) else "normal"
+        if value == "zoomed":
+            # BITOS splash/login/desktop must cover the taskbar.
+            self.showFullScreen()
+        elif value == "normal":
+            self.showNormal()
+        elif value == "iconic":
+            self.showMinimized()
 
     def overrideredirect(self, value=True):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, bool(value))
@@ -1806,6 +1816,28 @@ class Progressbar(Misc, QProgressBar):
 
     def stop(self):
         if hasattr(self, "_timer"): self._timer.stop()
+
+    # Compatibility with the option syntax used by notification animations.
+    def __getitem__(self, key):
+        if str(key) == "value":
+            return self.value()
+        if str(key) == "maximum":
+            return self.maximum()
+        if str(key) == "minimum":
+            return self.minimum()
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        if str(key) == "value":
+            self.setValue(int(float(value)))
+            return
+        if str(key) == "maximum":
+            self.setMaximum(int(value))
+            return
+        if str(key) == "minimum":
+            self.setMinimum(int(value))
+            return
+        raise KeyError(key)
 
 
 class Combobox(Misc, QComboBox):
