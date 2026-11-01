@@ -639,7 +639,9 @@ class Misc:
             return
         x, y = int(options.get("x", 0)), int(options.get("y", 0))
         w, h = options.get("width"), options.get("height")
-        self.move(x, y)
+        # QWidget.move вызывается явно: Canvas.move имеет другую сигнатуру
+        # для перемещения графических элементов Canvas.
+        QWidget.move(self, x, y)
         if w is not None or h is not None:
             self.resize(int(w or self.width()), int(h or self.height()))
         self.show()
