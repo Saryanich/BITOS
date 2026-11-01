@@ -896,7 +896,10 @@ class _QtCanvas(Misc,QGraphicsView):
         keys=list(self._items) if target in ('all','ALL') else self._find_ids(target)
         for key in keys:
             item=self._items.pop(key,None); self._tags.pop(key,None)
-            if item: self.scene.removeItem(item)
+            # Prevent Qt warnings when a stale canvas id refers to an item
+            # already removed or moved to another QGraphicsScene.
+            if item is not None and item.scene() is self.scene:
+                self.scene.removeItem(item)
         self.viewport().update()
     def _find_ids(self,target):
         try:
