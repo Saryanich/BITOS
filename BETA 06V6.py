@@ -13419,20 +13419,26 @@ class SettingsWindow:
         self.update_progress_label.config(text="⏳ Установка обновления...")
         self.update_progress_bar['value'] = 50
         
-        # Запускаем установку в потоке
-        if hasattr(self.bitos, "submit_background"):
-            self.bitos.submit_background(self._install_thread, filepath)
-        else:
-            thread = threading.Thread(target=self._install_thread, args=(filepath,), daemon=True)
-            thread.start()
+        # Ставим флаг до передачи задачи в пул: повторное нажатие не сможет
+        # поставить второй установщик в очередь до старта первого потока.
+        self.update_manager.is_installing = True
+        try:
+            if hasattr(self.bitos, "submit_background"):
+                self.bitos.submit_background(self._install_thread, filepath)
+            else:
+                thread = threading.Thread(target=self._install_thread, args=(filepath,), daemon=True)
+                thread.start()
+        except Exception as exc:
+            self.update_manager.is_installing = False
+            self._install_error(f"Не удалось запустить установщик: {exc}")
     
     def _install_thread(self, filepath):
         """Транзакционная установка: проверка → staging → backup → replace → rollback при ошибке."""
         self.update_manager.is_installing = True
         base_path = os.path.abspath(self.bitos.base_path)
         temp_dir = self.update_manager.temp_dir
-        extract_path = tempfile.mkdtemp(prefix="bitos_extract_", dir=temp_dir)
-        stage_path = tempfile.mkdtemp(prefix="bitos_stage_", dir=temp_dir)
+        extract_path = None
+        stage_path = None
         journal_path = os.path.join(temp_dir, "update_transaction.json")
         backup_path = os.path.join(
             temp_dir, "backups",
@@ -13441,6 +13447,11 @@ class SettingsWindow:
         changed = []
         successful = False
         try:
+            # Создание временных каталогов тоже находится внутри try:
+            # ошибка диска/прав доступа должна пройти через общий обработчик
+            # и обязательно сбросить is_installing в finally.
+            extract_path = tempfile.mkdtemp(prefix="bitos_extract_", dir=temp_dir)
+            stage_path = tempfile.mkdtemp(prefix="bitos_stage_", dir=temp_dir)
             if os.path.exists(journal_path):
                 raise RuntimeError("Обнаружен незавершённый журнал обновления. Сначала перезапустите BITOS для автоматического восстановления.")
             if not os.path.isfile(filepath):
@@ -13598,8 +13609,10 @@ class SettingsWindow:
             self.window.after(0, lambda message=error_text: self._install_error(message))
         finally:
             self.update_manager.is_installing = False
-            shutil.rmtree(extract_path, ignore_errors=True)
-            shutil.rmtree(stage_path, ignore_errors=True)
+            if extract_path:
+                shutil.rmtree(extract_path, ignore_errors=True)
+            if stage_path:
+                shutil.rmtree(stage_path, ignore_errors=True)
             # Backup не удаляется: он нужен для ручного восстановления после успешного обновления.
             if not successful and not changed:
                 shutil.rmtree(backup_path, ignore_errors=True)
@@ -14880,8 +14893,18 @@ class UpdateManager:
     def __init__(self, bitos_instance):
         self.bitos = bitos_instance
         
-        # Версии
-        self.current_version_raw = bitos_instance.version if hasattr(bitos_instance, 'version') else "06V6"
+        # Версии: UI показывает короткую версию 06V6, а updater сравнивает
+        # полный идентификатор сборки (например, 06V6_11.01), как и в старых выпусках.
+        base_version = str(getattr(bitos_instance, "version", "06V6") or "06V6").strip()
+        build_label = str(getattr(bitos_instance, "build", "") or "").strip()
+        existing_build = re.search(r"_(\d+(?:\.\d+)+)$", base_version)
+        build_match = re.search(r"(?<!\d)(\d+\.\d+)(?!\d)", build_label)
+        if existing_build:
+            self.current_version_raw = base_version
+        elif build_match:
+            self.current_version_raw = f"{base_version}_{build_match.group(1)}"
+        else:
+            self.current_version_raw = base_version
         self.current_version = self._normalize_version(self.current_version_raw)
         
         # GitHub API
