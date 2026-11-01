@@ -568,6 +568,11 @@ class Misc:
         _global_bindings.pop(sequence, None)
 
     def eventFilter(self, watched, event):
+        # A Tk place() child must track its parent when relative geometry is used.
+        if watched is getattr(self, "_tk_place_parent", None):
+            if event.type() == QEvent.Type.Resize:
+                self._apply_place_geometry()
+            return False
         event_type = event.type()
         data = _event_data(self, event)
         for sequence, callbacks in list(getattr(self, "_tk_bindings", {}).items()):
@@ -633,17 +638,57 @@ class Misc:
         layout.addWidget(self, row, col, rowspan, colspan, alignment)
         self._show_parent()
 
+    def _apply_place_geometry(self):
+        parent = getattr(self, "_tk_place_parent", None)
+        options = getattr(self, "_tk_place_options", None)
+        if parent is None or options is None:
+            return
+        try:
+            area = parent.contentsRect()
+            pw, ph = max(1, area.width()), max(1, area.height())
+            relx = float(options.get("relx", 0) or 0)
+            rely = float(options.get("rely", 0) or 0)
+            relwidth = float(options.get("relwidth", 0) or 0)
+            relheight = float(options.get("relheight", 0) or 0)
+            x = area.x() + int(round(pw * relx)) + int(options.get("x", 0) or 0)
+            y = area.y() + int(round(ph * rely)) + int(options.get("y", 0) or 0)
+            if "relwidth" in options:
+                width = int(round(pw * relwidth)) + int(options.get("width", 0) or 0)
+            else:
+                width = int(options.get("width", self.width()) or self.width())
+            if "relheight" in options:
+                height = int(round(ph * relheight)) + int(options.get("height", 0) or 0)
+            else:
+                height = int(options.get("height", self.height()) or self.height())
+            anchor = str(options.get("anchor", "nw")).lower()
+            if "e" in anchor:
+                x -= width
+            elif anchor in ("center",):
+                x -= width // 2
+            if "s" in anchor:
+                y -= height
+            elif anchor in ("center",):
+                y -= height // 2
+            self.setGeometry(x, y, max(1, width), max(1, height))
+        except (TypeError, ValueError, RuntimeError):
+            # Invalid optional geometry must not crash the complete desktop.
+            return
+
     def place(self, **options):
         parent = self.parentWidget()
         if parent is None:
             return
-        x, y = int(options.get("x", 0)), int(options.get("y", 0))
-        w, h = options.get("width"), options.get("height")
-        # QWidget.move вызывается явно: Canvas.move имеет другую сигнатуру
-        # для перемещения графических элементов Canvas.
-        QWidget.move(self, x, y)
-        if w is not None or h is not None:
-            self.resize(int(w or self.width()), int(h or self.height()))
+        old_parent = getattr(self, "_tk_place_parent", None)
+        if old_parent is not parent:
+            try:
+                if old_parent is not None:
+                    old_parent.removeEventFilter(self)
+                parent.installEventFilter(self)
+            except RuntimeError:
+                pass
+            self._tk_place_parent = parent
+        self._tk_place_options = dict(options)
+        self._apply_place_geometry()
         self.show()
         self._show_parent()
 
@@ -745,34 +790,89 @@ class Misc:
                 self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor if cursor == "hand2" else Qt.CursorShape.ArrowCursor))
             except Exception:
                 pass
-        css = []
-        if bg:
-            css.append("background-color: " + str(bg) + ";")
-        if fg:
-            css.append("color: " + str(fg) + ";")
+        # Qt Style Sheets require declarations to be inside selectors.
+        # The previous adapter appended pseudo-selectors to a declaration list,
+        # causing "Could not parse stylesheet" for login entries and buttons.
+        declarations = []
+        extra_rules = []
+
+        def css_color(value):
+            if value is None:
+                return None
+            try:
+                color = QColor(str(value))
+                return color.name(QColor.NameFormat.HexArgb) if color.isValid() else None
+            except Exception:
+                return None
+
+        background_color = css_color(bg)
+        foreground_color = css_color(fg)
+        if background_color:
+            declarations.append("background-color: %s;" % background_color)
+        if foreground_color:
+            declarations.append("color: %s;" % foreground_color)
+
         border_width = options.get("bd", options.get("borderwidth"))
         highlight_width = options.get("highlightthickness")
         if isinstance(self, QFrameQt):
             if border_width is not None:
-                try: self.setLineWidth(max(0, int(border_width)))
-                except Exception: pass
-            if highlight_width is not None and int(highlight_width) == 0:
-                css.append("border: 0px;")
+                try:
+                    self.setLineWidth(max(0, int(border_width)))
+                except Exception:
+                    pass
+            if highlight_width is not None and int(highlight_width or 0) == 0:
+                declarations.append("border: 0px;")
         elif border_width == 0:
-            css.append("border: 0px;")
-        if highlight_width is not None and int(highlight_width or 0) > 0:
-            normal_border = options.get("highlightbackground", options.get("highlightcolor", "#9AA4AE"))
-            focus_border = options.get("highlightcolor", normal_border)
-            css.append("border: %spx solid %s;" % (int(highlight_width), normal_border))
-            if isinstance(self, QLineEdit):
-                css.append("QLineEdit:focus { border: %spx solid %s; }" % (int(highlight_width), focus_border))
+            declarations.append("border: 0px;")
+
+        if highlight_width is not None:
+            try:
+                width_px = max(0, int(highlight_width or 0))
+            except (TypeError, ValueError):
+                width_px = 0
+            if width_px > 0:
+                normal_border = css_color(options.get("highlightbackground", options.get("highlightcolor", "#9AA4AE")))
+                focus_border = css_color(options.get("highlightcolor", options.get("highlightbackground", "#9AA4AE")))
+                if normal_border:
+                    declarations.append("border: %spx solid %s;" % (width_px, normal_border))
+                if isinstance(self, QLineEdit) and focus_border:
+                    extra_rules.append("QLineEdit:focus { border: %spx solid %s; }" % (width_px, focus_border))
+
+        selector = None
+        if isinstance(self, QLineEdit):
+            selector = "QLineEdit"
+        elif isinstance(self, QPushButton):
+            selector = "QPushButton"
+        elif isinstance(self, QLabelQt):
+            selector = "QLabel"
+        elif isinstance(self, QFrameQt):
+            selector = "QFrame"
+        elif isinstance(self, QProgressBar):
+            selector = "QProgressBar"
+        elif isinstance(self, QCheckBox):
+            selector = "QCheckBox"
+        elif isinstance(self, QComboBox):
+            selector = "QComboBox"
+        else:
+            selector = "QWidget"
+
         if isinstance(self, QPushButton):
-            css.append("padding: %spx %spx;" % (int(options.get("pady", 5)), int(options.get("padx", 8))))
-            if options.get("activebackground"):
-                css.append("QPushButton:hover { background-color: %s; }" % options["activebackground"])
-        if css:
-            try: self.setStyleSheet(" ".join(css))
-            except Exception: pass
+            declarations.append("padding: %spx %spx;" % (
+                int(options.get("pady", 5) or 0), int(options.get("padx", 8) or 0)
+            ))
+            hover_color = css_color(options.get("activebackground"))
+            if hover_color:
+                extra_rules.append("QPushButton:hover { background-color: %s; }" % hover_color)
+
+        rules = []
+        if declarations:
+            rules.append("%s { %s }" % (selector, " ".join(declarations)))
+        rules.extend(extra_rules)
+        if rules:
+            try:
+                self.setStyleSheet("\n".join(rules))
+            except Exception:
+                pass
         if isinstance(self, QProgressBar):
             if "maximum" in options:
                 self.setMaximum(int(options["maximum"]))
@@ -922,8 +1022,11 @@ class Tk(Misc, QMainWindow):
         if value is None:
             return "zoomed" if (self.isFullScreen() or self.isMaximized()) else "normal"
         if value == "zoomed":
-            # BITOS splash/login/desktop must cover the taskbar.
+            # BITOS shell windows must cover the Windows taskbar.
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             self.showFullScreen()
+            self.raise_()
+            self.activateWindow()
         elif value == "normal":
             self.showNormal()
         elif value == "iconic":
@@ -1084,6 +1187,14 @@ class Label(Misc, QLabelQt):
         host = _parent_widget(parent)
         text = str(options.pop("text", ""))
         image = options.pop("image", None)
+        if any((0x1F000 <= ord(ch) <= 0x1FAFF) or (0x2600 <= ord(ch) <= 0x27BF) for ch in text):
+            font_option = options.get("font")
+            if isinstance(font_option, (tuple, list)) and font_option:
+                options["font"] = ("Segoe UI Emoji", *font_option[1:])
+            elif isinstance(font_option, str):
+                options["font"] = ("Segoe UI Emoji", 10)
+            else:
+                options["font"] = ("Segoe UI Emoji", 10)
         QLabelQt.__init__(self, text, host)
         self._init_misc(parent)
         self._deleted = False
@@ -1665,9 +1776,12 @@ class Canvas(Misc, QWidget):
                 pts = [QPointF(float(c[i]), float(c[i+1])-self._scroll_y) for i in range(0, len(c)-1, 2)]
                 painter.drawPolygon(QPolygonF(pts))
             elif kind == "text" and len(c) >= 2:
-                painter.setFont(_font_from(opt.get("font")))
-                painter.setPen(QPen(QColor(fill or "black")))
                 text = str(opt.get("text", ""))
+                text_font = _font_from(opt.get("font"))
+                if any((0x1F000 <= ord(ch) <= 0x1FAFF) or (0x2600 <= ord(ch) <= 0x27BF) for ch in text):
+                    text_font.setFamily("Segoe UI Emoji")
+                painter.setFont(text_font)
+                painter.setPen(QPen(QColor(fill or "black")))
                 anchor = opt.get("anchor", "center")
                 fm = QFontMetricsF(painter.font())
                 text_width = float(opt.get("width", 0) or 0)
