@@ -14739,30 +14739,30 @@ class MonitorWindow(QMainWindow):
         main_layout.setSpacing(20)
         
         self.time_label = QLabel(self)
-        self.time_label.setStyleSheet("QLabel { color: {text_color}; font-size: 75px; font-family: 'Segoe UI', Arial; font-weight: bold; }")
+        self.time_label.setStyleSheet("QLabel {{ color: {text_color}; font-size: 75px; font-family: 'Segoe UI', Arial; font-weight: bold; }}")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.time_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.date_label = QLabel(self)
-        self.date_label.setStyleSheet("QLabel { color: {text_color}; font-size: 22px; font-family: 'Segoe UI', Arial; }")
+        self.date_label.setStyleSheet("QLabel {{ color: {text_color}; font-size: 22px; font-family: 'Segoe UI', Arial; }}")
         self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.date_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.battery_label = QLabel("СИСТЕМА ПИТАНИЯ: {percent}% [{charging}]", self)
-        self.battery_label.setStyleSheet("QLabel { color: {accent_color}; font-size: 16px; font-family: 'Segoe UI', Arial; font-weight: bold; }")
+        self.battery_label.setStyleSheet("QLabel {{ color: {accent_color}; font-size: 16px; font-family: 'Segoe UI', Arial; font-weight: bold; }}")
         self.battery_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.battery_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.notes_label = QLabel("ЗАМЕТКИ И ЗАДАЧИ", self)
-        self.notes_label.setStyleSheet("QLabel { color: {text_color}; font-size: 14px; font-family: 'Segoe UI', Arial; font-weight: bold; margin-top: 15px; }")
+        self.notes_label.setStyleSheet("QLabel {{ color: {text_color}; font-size: 14px; font-family: 'Segoe UI', Arial; font-weight: bold; margin-top: 15px; }}")
         self.notes_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.notes_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.notes_edit = QTextEdit(self)
         self.notes_edit.setFixedSize(500, 260)
         self.notes_edit.setStyleSheet(
-            "QTextEdit { background-color: {panel_color}; color: {text_color}; border: 2px solid {accent_color}; "
-            "border-radius: 12px; font-size: 15px; font-family: 'Segoe UI', sans-serif; padding: 12px;"
+            "QTextEdit {{ background-color: {panel_color}; color: {text_color}; border: 2px solid {accent_color}; "
+            "border-radius: 12px; font-size: 15px; font-family: 'Segoe UI', sans-serif; padding: 12px; }}"
         )
         self.notes_path = Path(r"{os.path.join(self.config_path, 'desktop_notes.txt')}")
         self.load_notes()
