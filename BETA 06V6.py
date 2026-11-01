@@ -9673,6 +9673,16 @@ class BITOS:
         self.autosave_interval = profile["autosave"]
         self.console_flush_interval = profile["flush"]
 
+        # Если AutoSafe уже запущен, переключаем его интервал без перезапуска BITOS.
+        # Цикл автосохранения перечитает значение на следующей итерации.
+        try:
+            auto_safe_class = globals().get("AutoSafe")
+            auto_safe_instance = getattr(auto_safe_class, "_instance", None) if auto_safe_class else None
+            if auto_safe_instance is not None and getattr(auto_safe_instance, "_initialized", False):
+                auto_safe_instance.SAVE_INTERVAL = profile["autosave"]
+        except Exception:
+            pass
+
         # Ограничиваем именно фоновые задачи. GUI-поток и события Qt не блокируются.
         if hasattr(self, "_worker_executor_lock"):
             with self._worker_executor_lock:
