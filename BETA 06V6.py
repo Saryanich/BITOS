@@ -522,11 +522,13 @@ class Misc:
 
     def winfo_screenwidth(self):
         screen = _ensure_app().primaryScreen()
-        return screen.availableGeometry().width() if screen else 1024
+        # Use physical screen bounds: BITOS runs borderless/fullscreen and
+        # must not reserve the Windows taskbar area.
+        return screen.geometry().width() if screen else 1024
 
     def winfo_screenheight(self):
         screen = _ensure_app().primaryScreen()
-        return screen.availableGeometry().height() if screen else 768
+        return screen.geometry().height() if screen else 768
 
     def winfo_width(self):
         return self.width()
@@ -2417,7 +2419,8 @@ class SplashScreen:
         # Создаем canvas
         self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
                                 highlightthickness=0, bg=self.theme_colors['canvas_bg'])
-        self.canvas.pack()
+        # Full-size canvas: do not leave an unpainted strip around the splash.
+        self.canvas.pack(fill=tk.BOTH, expand=True)
         
         # Рисуем градиентный фон с цветами темы
         self._draw_gradient_background()
@@ -2726,7 +2729,9 @@ class LoginScreen:
         # Фон
         self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
                                highlightthickness=0, bg=self.theme_colors['canvas_bg'])
-        self.canvas.place(x=0, y=0, width=self.width, height=self.height)
+        # Relative geometry follows the actual fullscreen client area (including
+        # the pixels normally occupied by the Windows taskbar).
+        self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
         
         # Градиентный фон с цветами темы
         self._draw_gradient_background()
