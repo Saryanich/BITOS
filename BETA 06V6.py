@@ -993,7 +993,16 @@ class Tk(Misc, QMainWindow):
         global _loop_running
         # Tkinter allows a new Toplevel/root to be shown while another event
         # loop is already running. Show first; only the outer call owns exec().
-        self.show()
+        # Preserve the explicitly requested fullscreen state when entering
+        # the Qt event loop on Windows.
+        if self.isFullScreen():
+            self.showFullScreen()
+            self.raise_()
+            self.activateWindow()
+        elif self.isMaximized():
+            self.showMaximized()
+        else:
+            self.show()
         if _loop_running:
             return
         _loop_running = True
@@ -14730,32 +14739,32 @@ class MonitorWindow(QMainWindow):
         main_layout.setSpacing(20)
         
         self.time_label = QLabel(self)
-        self.time_label.setStyleSheet("color: {text_color}; font-size: 75px; font-family: 'Segoe UI', Arial; font-weight: bold;")
+        self.time_label.setStyleSheet("QLabel { color: {text_color}; font-size: 75px; font-family: 'Segoe UI', Arial; font-weight: bold; }")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.time_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.date_label = QLabel(self)
-        self.date_label.setStyleSheet("color: {text_color}; font-size: 22px; font-family: 'Segoe UI', Arial; opacity: 0.8;")
+        self.date_label.setStyleSheet("QLabel { color: {text_color}; font-size: 22px; font-family: 'Segoe UI', Arial; }")
         self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.date_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.battery_label = QLabel("СИСТЕМА ПИТАНИЯ: {percent}% [{charging}]", self)
-        self.battery_label.setStyleSheet("color: {accent_color}; font-size: 16px; font-family: 'Segoe UI', Arial; font-weight: bold;")
+        self.battery_label.setStyleSheet("QLabel { color: {accent_color}; font-size: 16px; font-family: 'Segoe UI', Arial; font-weight: bold; }")
         self.battery_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.battery_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.notes_label = QLabel("ЗАМЕТКИ И ЗАДАЧИ", self)
-        self.notes_label.setStyleSheet("color: {text_color}; font-size: 14px; font-family: 'Segoe UI', Arial; font-weight: bold; opacity: 0.6; margin-top: 15px;")
+        self.notes_label.setStyleSheet("QLabel { color: {text_color}; font-size: 14px; font-family: 'Segoe UI', Arial; font-weight: bold; margin-top: 15px; }")
         self.notes_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.notes_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.notes_edit = QTextEdit(self)
         self.notes_edit.setFixedSize(500, 260)
         self.notes_edit.setStyleSheet(
-            "background-color: {panel_color}; color: {text_color}; border: 2px solid {accent_color}; "
+            "QTextEdit { background-color: {panel_color}; color: {text_color}; border: 2px solid {accent_color}; "
             "border-radius: 12px; font-size: 15px; font-family: 'Segoe UI', sans-serif; padding: 12px;"
         )
-        self.notes_path = Path("C:/Users/Викторовна/OneDrive/Рабочий стол/System/Config/desktop_notes.txt")
+        self.notes_path = Path(r"{os.path.join(self.config_path, 'desktop_notes.txt')}")
         self.load_notes()
         self.notes_edit.textChanged.connect(self.save_notes)
         main_layout.addWidget(self.notes_edit, alignment=Qt.AlignmentFlag.AlignCenter)
